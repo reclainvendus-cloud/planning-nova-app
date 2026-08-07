@@ -1782,7 +1782,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.62.0';
+const APP_VERSION = '1.62.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1799,6 +1799,7 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.62.1', items: ['Correction d\'un affichage en double du nom de l\'admin connecté (barre latérale et Paramètres > présence) lorsque plusieurs onglets étaient ouverts avec la même session — chaque nom n\'apparaît désormais qu\'une seule fois'] },
   { v: '1.62.0', items: ['Récap paie : suppression du bouton "Envoyer" en double dans la barre de filtre (il faisait exactement la même chose que le bouton "Envoyer le récap" en haut à droite)', 'Récap paie : le champ email du destinataire propose maintenant les emails renseignés dans la fiche des employés (auto-complétion), au lieu d\'avoir à les saisir entièrement à la main'] },
   { v: '1.61.0', items: ['Correctif d\'un vrai bug de synchronisation : un congé déjà validé par un admin pouvait rester affiché "en attente" chez un autre poste resté longtemps ouvert (connexion temps réel silencieusement figée) — ajout d\'une resynchronisation forcée au retour sur l\'onglet et toutes les 5 minutes, plus un garde-fou qui empêche définitivement qu\'un congé confirmé puisse être réécrasé vers "non confirmé"'] },
   { v: '1.60.0', items: ['Verrouillage des semaines entièrement passées dans le Planning (Édition, Graphique, Lecture, Individuel) : cadenas vert/rouge visible dans la navigation, blocage des modifications (glisser-déposer, redimensionnement, suppression, édition précise), déverrouillage possible avec confirmation et traçabilité dans l\'Historique — se reverrouille automatiquement en quittant la vue Planning'] },
@@ -9666,7 +9667,7 @@ function setupPresence() {
 }
 
 function renderPresenceWidgets(list) {
-  const noms = list.map(p => p.nom).filter(Boolean);
+  const noms = [...new Set(list.map(p => p.nom).filter(Boolean))];
   const sidebar = document.getElementById('sidebar-presence');
   if (sidebar) {
     sidebar.innerHTML = noms.length
