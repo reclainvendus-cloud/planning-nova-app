@@ -432,6 +432,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
     <div class="nav-item" onclick="showView('equipes')"><span class="ico">🫂</span> Équipes</div>
     <div class="nav-item" onclick="showView('conges')"><span class="ico">🏖️</span> Congés</div>
     <div class="nav-item" onclick="showView('recap')"><span class="ico">💶</span> Récap paie</div>
+    <div class="nav-item" onclick="showView('compteur')"><span class="ico">⚖️</span> Compteur & modulation</div>
     <div class="nav-item" onclick="showView('rapports')"><span class="ico">📊</span> Rapports</div>
     <div class="nav-item" onclick="showView('historique')"><span class="ico">📜</span> Historique</div>
     <div class="nav-item" onclick="showView('distribution')"><span class="ico">📦</span> Distribution</div>
@@ -688,6 +689,15 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
             <button class="btn btn-secondary" onclick="closeModal('modal-rp-emp')">Annuler</button>
           </div>
         </div>
+      </div>
+
+      <!-- ===== VUE COMPTEUR & MODULATION ===== -->
+      <div class="view" id="view-compteur">
+        <div class="hint" style="margin-bottom:16px;">
+          Cumul des heures réellement pointées par rapport au contrat de travail de chaque employé, semaine complète par semaine complète — indépendant des écarts par rapport au planning (voir Récap paie). La semaine en cours n'est jamais comptée tant qu'elle n'est pas terminée.
+        </div>
+        <div id="cpt-loading" class="hint">Calcul en cours…</div>
+        <div id="cpt-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;"></div>
       </div>
 
       <!-- ===== VUE RAPPORTS ===== -->
@@ -1705,6 +1715,11 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
         </div>
       </div>
     </div>
+    <div class="form-group">
+      <label>Solde initial du compteur & modulation</label>
+      <input type="number" id="em-solde-initial" step="0.25" value="0" style="max-width:160px;">
+      <div class="hint">Heures déjà accumulées (+) ou dues (−) avant l'utilisation de l'appli — ex: 12.5 pour +12h30. Ce solde s'ajoute au cumul calculé automatiquement dans Compteur & modulation.</div>
+    </div>
 
     <div class="section-label">Production chaud / froid <span style="font-weight:400;text-transform:none;color:var(--text-dim);">(utilisé par le calcul de capacité Distribution)</span></div>
     <div class="form-row">
@@ -1782,7 +1797,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.63.0';
+const APP_VERSION = '1.64.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1799,6 +1814,7 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.64.0', items: ['Nouveau menu "Compteur & modulation" : une carte par employé (triées par ordre alphabétique de nom), affichant le cumul des heures réellement pointées au-dessus ou en dessous de son contrat de travail — calculé semaine complète par semaine complète (jamais en cours de semaine, jamais comparé au planning) pour rester juste et fiable', 'Fiche employé : nouveau champ "Solde initial du compteur & modulation" pour intégrer les heures déjà accumulées avant l\'utilisation de l\'appli', 'Récap paie : le calcul du "pointé" (heures réellement travaillées) est désormais partagé avec le nouveau Compteur & modulation, garantissant que les deux écrans donnent toujours des chiffres cohérents entre eux'] },
   { v: '1.63.0', items: ['Récap paie : nouvelle colonne "Écart contrat" (sur les lignes de total semaine + badge par employé) qui compare les heures réellement pointées au contrat de travail (ex: 35h), au lieu du planning prévu — évite de croire à tort qu\'un employé doit des heures alors qu\'il a fait plus que son contrat, simplement moins que ce que prévoyait le planning', 'Renommage de "Écart total" en "Écart planning" (colonne, badge employé, résumé global) pour bien distinguer les deux comparaisons : planning prévu vs contrat de travail'] },
   { v: '1.62.1', items: ['Correction d\'un affichage en double du nom de l\'admin connecté (barre latérale et Paramètres > présence) lorsque plusieurs onglets étaient ouverts avec la même session — chaque nom n\'apparaît désormais qu\'une seule fois'] },
   { v: '1.62.0', items: ['Récap paie : suppression du bouton "Envoyer" en double dans la barre de filtre (il faisait exactement la même chose que le bouton "Envoyer le récap" en haut à droite)', 'Récap paie : le champ email du destinataire propose maintenant les emails renseignés dans la fiche des employés (auto-complétion), au lieu d\'avoir à les saisir entièrement à la main'] },
@@ -2308,7 +2324,7 @@ function notify(msg, type = 'success') {
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
-const viewTitles = { planning: 'Planning', taches: 'Bibliothèque de tâches', employes: 'Employés', equipes: 'Équipes', tournees: 'Tournées', conges: 'Congés', recap: 'Récap paie', rapports: 'Rapports', dashboard: 'Tableau de bord', parametres: 'Paramètres', pointages: 'Pointages', validation: 'Validation', historique: 'Historique', distribution: 'Distribution', competences: 'Compétences' };
+const viewTitles = { planning: 'Planning', taches: 'Bibliothèque de tâches', employes: 'Employés', equipes: 'Équipes', tournees: 'Tournées', conges: 'Congés', recap: 'Récap paie', compteur: 'Compteur & modulation', rapports: 'Rapports', dashboard: 'Tableau de bord', parametres: 'Paramètres', pointages: 'Pointages', validation: 'Validation', historique: 'Historique', distribution: 'Distribution', competences: 'Compétences' };
 const viewActions = {
   planning: '<button class="btn btn-secondary btn-sm" onclick="openEmailModal()">✉️ Envoyer</button>',
   taches: '<button class="btn btn-primary btn-sm" onclick="openTaskModal()">+ Nouvelle tâche</button>',
@@ -2346,6 +2362,7 @@ function showView(name) {
   if (name === 'tournees') renderTournees();
   if (name === 'conges') renderConges();
   if (name === 'recap') initRecapPaie();
+  if (name === 'compteur') initCompteurModulation();
   if (name === 'rapports') initRapports();
   if (name === 'dashboard') renderDashboard();
   if (name === 'parametres') initParametres();
@@ -4473,6 +4490,7 @@ function openEmployeModal() {
   document.getElementById('em-seuil-hs-m').value = 0;
   document.getElementById('em-prod-chaud').value = 1000;
   document.getElementById('em-prod-froid').value = 1000;
+  document.getElementById('em-solde-initial').value = 0;
   document.getElementById('btn-delete-employe').style.display = 'none';
   openModal('modal-employe');
 }
@@ -4499,6 +4517,7 @@ function editEmploye(id) {
   document.getElementById('em-seuil-hs-m').value = Math.round((seuilVal - Math.floor(seuilVal)) * 60);
   document.getElementById('em-prod-chaud').value = e.prodChaud || 0;
   document.getElementById('em-prod-froid').value = e.prodFroid || 0;
+  document.getElementById('em-solde-initial').value = e.soldeInitial ?? 0;
   document.getElementById('btn-delete-employe').style.display = 'inline-flex';
   openModal('modal-employe');
 }
@@ -4520,6 +4539,7 @@ function saveEmploye() {
     seuilHS: (parseFloat(document.getElementById('em-seuil-hs-h').value) || 0) + (parseFloat(document.getElementById('em-seuil-hs-m').value) || 0) / 60,
     prodChaud: parseFloat(document.getElementById('em-prod-chaud').value) || 0,
     prodFroid: parseFloat(document.getElementById('em-prod-froid').value) || 0,
+    soldeInitial: parseFloat(document.getElementById('em-solde-initial').value) || 0,
   };
   const idx = db.employes.findIndex(x => x.id === id);
   if (idx >= 0) db.employes[idx] = employe; else db.employes.push(employe);
@@ -5907,6 +5927,248 @@ function renderRecapColsBar() {
   ).join('');
 }
 
+// Calcule la durée pointée (nette, après pause) d'un employé pour un jour donné, à partir des
+// événements de pointage Firebase — moteur central partagé entre le Récap paie (colonnes
+// détaillées jour par jour) et le Compteur & modulation (cumul semaine par semaine vs contrat).
+// Gère les services à cheval sur minuit (fusion avec hier/demain), les pauses, et le hors planning
+// (dépannage). Extrait tel quel du calcul historique du Récap paie — ne pas dupliquer ailleurs.
+function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
+  const d = isoToDate(dk);
+  const insts = (db.planning[empId]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge).sort((a,b) => a.debut - b.debut);
+  const evts = Object.values(pointagesParAnnee[dk.slice(0,4)]?.[dk]?.[empId]?.evenements || {});
+
+  const dkHier = dateKey(addDays(d, -1));
+  const instsHierCross = buildChaineHierCross(empId, dkHier, splitSeuil);
+
+  let instsAujProprement = insts.slice();
+  let instsFusionnees = [];
+  if (instsHierCross.length && instsAujProprement.length) {
+    const derniereHier = instsHierCross[instsHierCross.length - 1];
+    let cursorFin = derniereHier.fin;
+    while (instsAujProprement.length && instsAujProprement[0].debut - cursorFin <= splitSeuil) {
+      instsFusionnees.push(instsAujProprement[0]);
+      cursorFin = instsAujProprement[0].fin;
+      instsAujProprement = instsAujProprement.slice(1);
+    }
+  }
+
+  let pointeMin = 0;
+
+  if (instsHierCross.length) {
+    const evtsHier = Object.values(pointagesParAnnee[dkHier.slice(0, 4)]?.[dkHier]?.[empId]?.evenements || {});
+    const premiereService = instsHierCross[0];
+    const derniereService = instsFusionnees.length ? instsFusionnees[instsFusionnees.length - 1] : instsHierCross[instsHierCross.length - 1];
+    const embEvt = evtsHier.find(e => e.type === 'embauche' && e.instId === premiereService.id && e.heureRetenue);
+    const debEvt = [...evts].reverse().find(e => e.type === 'debauche' && e.instId === derniereService.id && e.heureRetenue);
+    if (embEvt && debEvt) {
+      let dMin = timeToMin(embEvt.heureRetenue), fMin = timeToMin(debEvt.heureRetenue);
+      if (fMin <= dMin) fMin += 1440;
+      const pauseApres = instsHierCross.reduce((s, i) => s + postPauseMinutes(i), 0)
+        + instsFusionnees.reduce((s, i) => s + (i.pauseDuree || 0), 0);
+      const apresMinuitBrut = Math.max(0, fMin - 1440);
+      const pointeApresMinuit = Math.max(0, apresMinuitBrut - pauseApres);
+      pointeMin += pointeApresMinuit;
+    }
+  }
+
+  if (instsAujProprement.length && evts.length) {
+    const services = [[instsAujProprement[0]]];
+    for (let i = 1; i < instsAujProprement.length; i++) {
+      const gap = instsAujProprement[i].debut - services[services.length-1].at(-1).fin;
+      if (gap > splitSeuil) services.push([instsAujProprement[i]]);
+      else services[services.length-1].push(instsAujProprement[i]);
+    }
+    services.forEach(srv => {
+      const prem = srv[0], dern = srv[srv.length-1];
+
+      if (dern.crosseMinuit) {
+        const splitSeuilLocal = splitSeuil;
+        let curInst = dern, curDk = dk, chaine = [...srv], guard = 0;
+        while (curInst.crosseMinuit && guard++ < 5) {
+          const dkSuiv = dateKey(addDays(isoToDate(curDk), 1));
+          const instsSuiv = (db.planning[empId]?.[dkSuiv] || [])
+            .filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge)
+            .sort((a, b) => a.debut - b.debut);
+          if (!instsSuiv.length || instsSuiv[0].debut - curInst.fin > splitSeuilLocal) {
+            curDk = dkSuiv;
+            break;
+          }
+          let derniereSuiv = instsSuiv[0];
+          chaine.push(derniereSuiv);
+          for (let i = 1; i < instsSuiv.length; i++) {
+            const gap = instsSuiv[i].debut - derniereSuiv.fin;
+            if (gap > splitSeuilLocal) break;
+            derniereSuiv = instsSuiv[i];
+            chaine.push(derniereSuiv);
+          }
+          curInst = derniereSuiv;
+          curDk = dkSuiv;
+        }
+        const embEvt2 = evts.find(e => e.instId === prem.id && e.type === 'embauche' && e.heureRetenue);
+        const evtsFinales = curDk === dk ? evts : Object.values(pointagesParAnnee[curDk.slice(0, 4)]?.[curDk]?.[empId]?.evenements || {});
+        const debEvt2 = [...evtsFinales].reverse().find(e => e.instId === curInst.id && e.type === 'debauche' && e.heureRetenue);
+        if (embEvt2 && debEvt2) {
+          let dMin2 = timeToMin(embEvt2.heureRetenue), fMin2 = timeToMin(debEvt2.heureRetenue);
+          if (fMin2 <= dMin2) fMin2 += 1440;
+          if (curDk === dk) {
+            const pauseTotaleChaine = chaine.reduce((s, i) => s + (i.pauseDuree || 0), 0);
+            pointeMin += Math.max(0, fMin2 - dMin2 - pauseTotaleChaine);
+          } else {
+            const pauseAvant = srv.reduce((s, i) => s + prePauseMinutes(i), 0);
+            const avantMinuitBrut = Math.max(0, Math.min(fMin2, 1440) - dMin2);
+            pointeMin += Math.max(0, avantMinuitBrut - pauseAvant);
+          }
+        }
+        return;
+      }
+
+      const embEvt = evts.find(e => e.instId === prem.id && e.type === 'embauche' && e.heureRetenue);
+      const debEvt = [...evts].reverse().find(e => e.instId === dern.id && e.type === 'debauche' && e.heureRetenue);
+      if (embEvt && debEvt) {
+        let dMin = timeToMin(embEvt.heureRetenue), fMin = timeToMin(debEvt.heureRetenue);
+        if (fMin <= dMin) fMin += 1440;
+        const pauseTotal = srv.reduce((s, i) => s + (i.pauseDuree || 0), 0);
+        pointeMin += Math.max(0, fMin - dMin - pauseTotal);
+      }
+    });
+  }
+
+  let pointeHorsPlanning = 0;
+  const evtsHP = evts.filter(e => e.horsPlanning);
+  if (evtsHP.length) {
+    const sessions = {};
+    evtsHP.forEach(e => { if (!sessions[e.instId]) sessions[e.instId] = []; sessions[e.instId].push(e); });
+    Object.values(sessions).forEach(grp => {
+      const embHP = grp.find(e => e.type === 'embauche' && e.heureRetenue);
+      const debHP = grp.find(e => e.type === 'debauche' && e.heureRetenue);
+      if (embHP && debHP) {
+        const dMin = timeToMin(embHP.heureRetenue);
+        let fMin = timeToMin(debHP.heureRetenue);
+        if (fMin <= dMin) fMin += 1440;
+        pointeHorsPlanning += fMin - dMin;
+      }
+    });
+    pointeMin += pointeHorsPlanning;
+  }
+
+  return { pointeMin, pointeHorsPlanning };
+}
+
+// ===================================================
+// COMPTEUR & MODULATION
+// ===================================================
+// Cumul des heures pointées vs contrat de travail, semaine complète par semaine complète — jamais
+// comparé au planning (voir Récap paie pour ça, qui répond à une autre question). Une semaine ne
+// compte que si elle est totalement terminée (dimanche ≤ hier) ET qu'elle contient au moins une
+// minute pointée (sinon une semaine de congé total serait comptée à tort comme un déficit plein
+// contrat). Réutilise calculerPointeMinJour — même moteur que le Récap paie, pas de logique dupliquée.
+function getCompteurDepuis() {
+  return db.params.compteurDepuis || `${new Date().getFullYear()}-01-01`;
+}
+
+function initCompteurModulation() {
+  const wrap = document.getElementById('view-compteur');
+  if (!document.getElementById('cpt-depuis')) {
+    const bar = document.createElement('div');
+    bar.className = 'filter-bar';
+    bar.style.cssText = 'align-items:flex-end;flex-wrap:wrap;gap:8px;margin-bottom:16px;';
+    bar.innerHTML = `
+      <div class="form-group" style="margin:0;">
+        <label>Calculer depuis le</label>
+        <input type="date" id="cpt-depuis" value="${getCompteurDepuis()}">
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label style="visibility:hidden;">_</label>
+        <button class="btn btn-primary btn-sm" onclick="calculerCompteurModulation()">⚖️ Recalculer</button>
+      </div>
+    `;
+    wrap.insertBefore(bar, wrap.firstChild);
+  }
+  calculerCompteurModulation();
+}
+
+function calculerCompteurModulation() {
+  const depuisInput = document.getElementById('cpt-depuis');
+  const depuisStr = depuisInput ? depuisInput.value : getCompteurDepuis();
+  if (!depuisStr) { notify('Date de départ invalide', 'warning'); return; }
+  db.params.compteurDepuis = depuisStr;
+  saveDB();
+
+  const loadingEl = document.getElementById('cpt-loading');
+  const cardsEl = document.getElementById('cpt-cards');
+  loadingEl.style.display = '';
+  loadingEl.textContent = 'Calcul en cours…';
+  cardsEl.innerHTML = '';
+
+  const debut = getMonday(isoToDate(depuisStr));
+  const hier = addDays(new Date(), -1);
+  hier.setHours(0, 0, 0, 0);
+  if (hier < debut) { loadingEl.textContent = 'Aucune semaine complète écoulée depuis cette date.'; return; }
+
+  const jours = [];
+  let cur = new Date(debut);
+  while (cur <= hier) { jours.push(dateKey(cur)); cur = addDays(cur, 1); }
+
+  const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
+  const annees = [...new Set(jours.map(dk => dk.slice(0, 4)))];
+
+  Promise.all(annees.map(an =>
+    fbDb ? fbDb.ref(`pointages/${an}`).once('value').then(snap => ({ an, data: snap.val() || {} })).catch(() => ({ an, data: {} })) : Promise.resolve({ an, data: {} })
+  )).then(results => {
+    const pointagesParAnnee = {};
+    results.forEach(r => { pointagesParAnnee[r.an] = r.data; });
+
+    // Tri alphabétique par NOM (puis prénom en cas d'égalité), comme demandé — distinct de
+    // getEmployesTries() qui trie par prénom pour le reste de l'appli.
+    const emps = [...db.employes].sort((a, b) => `${a.nom} ${a.prenom}`.localeCompare(`${b.nom} ${b.prenom}`, 'fr'));
+
+    const cartes = emps.map(emp => {
+      const contratMin = Math.round((emp.contratH || 35) * 60);
+      let weekKey = null, weekPt = 0;
+      let total = Math.round((emp.soldeInitial || 0) * 60);
+      let semainesComptees = 0;
+
+      jours.forEach(dk => {
+        const d = isoToDate(dk);
+        const dayWeekKey = dateKey(getMonday(d));
+        if (weekKey !== null && dayWeekKey !== weekKey) {
+          if (weekPt > 0) { total += weekPt - contratMin; semainesComptees++; }
+          weekPt = 0;
+        }
+        weekKey = dayWeekKey;
+        const { pointeMin } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
+        weekPt += pointeMin;
+      });
+      // Dernière semaine du segment : ne la compte que si elle est réellement terminée (son
+      // dimanche est ≤ hier) — sinon on compterait à tort une semaine en cours comme un déficit.
+      const dernierJour = isoToDate(jours[jours.length - 1]);
+      const dernierDimancheSemaine = addDays(getMonday(dernierJour), 6);
+      if (dernierDimancheSemaine <= hier && weekPt > 0) { total += weekPt - contratMin; semainesComptees++; }
+
+      return { emp, total, semainesComptees, contratMin };
+    });
+
+    loadingEl.style.display = 'none';
+    if (!cartes.length) { cardsEl.innerHTML = '<div class="hint">Aucun employé.</div>'; return; }
+
+    cardsEl.innerHTML = cartes.map(c => {
+      const positif = c.total >= 0;
+      const couleur = positif ? 'var(--success)' : 'var(--danger)';
+      const fond = positif ? 'rgba(46,204,113,.08)' : 'rgba(255,77,106,.08)';
+      return `<div class="task-card" style="cursor:default;padding:16px;border-left:3px solid ${couleur};background:${fond};">
+        <div style="font-weight:800;font-size:14px;margin-bottom:8px;">${c.emp.nom} ${c.emp.prenom}</div>
+        <div style="font-size:24px;font-weight:800;color:${couleur};">${positif ? '+' : '-'}${minToHM(Math.abs(c.total))}</div>
+        <div class="hint" style="margin-top:6px;">
+          Contrat ${minToHM(c.contratMin)}/sem · ${c.semainesComptees} semaine${c.semainesComptees > 1 ? 's' : ''} comptée${c.semainesComptees > 1 ? 's' : ''}
+          ${c.emp.soldeInitial ? `<br>dont solde initial ${c.emp.soldeInitial >= 0 ? '+' : ''}${c.emp.soldeInitial}h` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }).catch(() => {
+    loadingEl.textContent = 'Erreur lors du calcul — réessaie.';
+  });
+}
+
 function calculerRecapPaie() {
   const { debut, fin } = rpGetBornes();
   if (!debut || !fin || isNaN(debut) || isNaN(fin)) { notify('Période invalide', 'warning'); return; }
@@ -6006,135 +6268,9 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const primesJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.primeMontant || 0); }, 0);
       const decouchageJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.decouchage || 0); }, 0);
 
-      // Calcule les heures pointées depuis les événements Firebase
-      let pointeMin = 0;
-
-      // Part du service fusionné avec hier — ou simple continuation isolée si aucune tâche
-      // d'aujourd'hui ne s'y ajoute (ex: un service 22h-06h qui reste seul, sans rien après).
-      if (instsHierCross.length) {
-        const evtsHier = Object.values(pointagesParAnnee[dkHier.slice(0, 4)]?.[dkHier]?.[emp.id]?.evenements || {});
-        const premiereService = instsHierCross[0];
-        const derniereService = instsFusionnees.length ? instsFusionnees[instsFusionnees.length - 1] : instsHierCross[instsHierCross.length - 1];
-        const embEvt = evtsHier.find(e => e.type === 'embauche' && e.instId === premiereService.id && e.heureRetenue);
-        const debEvt = [...evts].reverse().find(e => e.type === 'debauche' && e.instId === derniereService.id && e.heureRetenue);
-        if (embEvt && debEvt) {
-          let dMin = timeToMin(embEvt.heureRetenue), fMin = timeToMin(debEvt.heureRetenue);
-          if (fMin <= dMin) fMin += 1440;
-          const serviceComplet = [...instsHierCross, ...instsFusionnees];
-          // Répartition selon minuit, cohérente avec Planifié (qui fait exactement ce partage via
-          // ownDayMinutes/postMinuitWorkMinutes) — jamais 100% attribué au jour de fin, sinon
-          // "Durée retenue" et "Planifié" ne se recoupent plus et l'écart devient trompeur.
-          // Attention : postPauseMinutes suppose que i.debut est ancré sur LE MÊME jour que celui
-          // dont on regarde "après minuit" — vrai pour instsHierCross (ancrées sur hier), mais PAS
-          // pour instsFusionnees (ancrées sur aujourd'hui) : leur pause compte en entier ici, elles
-          // ne traversent pas elles-mêmes ce minuit-là.
-          const pauseApres = instsHierCross.reduce((s, i) => s + postPauseMinutes(i), 0)
-            + instsFusionnees.reduce((s, i) => s + (i.pauseDuree || 0), 0);
-          const apresMinuitBrut = Math.max(0, fMin - 1440);
-          const pointeApresMinuit = Math.max(0, apresMinuitBrut - pauseApres);
-          pointeMin += pointeApresMinuit;
-        }
-      }
-
-      // Services normaux d'aujourd'hui (hors continuation déjà traitée ci-dessus)
-      if (instsAujProprement.length && evts.length) {
-        const services = [[instsAujProprement[0]]];
-        for (let i = 1; i < instsAujProprement.length; i++) {
-          const gap = instsAujProprement[i].debut - services[services.length-1].at(-1).fin;
-          if (gap > splitSeuil) services.push([instsAujProprement[i]]);
-          else services[services.length-1].push(instsAujProprement[i]);
-        }
-        services.forEach(srv => {
-          const prem = srv[0], dern = srv[srv.length-1];
-
-          // Si la dernière tâche traverse minuit, ce service se prolonge peut-être sur un jour
-          // suivant (fusion) : résout la vraie fin pour calculer la part d'AUJOURD'HUI dans le
-          // total pointé du service complet, au lieu de chercher en vain une débauche locale.
-          if (dern.crosseMinuit) {
-            const splitSeuilLocal = splitSeuil;
-            let curInst = dern, curDk = dk, chaine = [...srv], guard = 0;
-            while (curInst.crosseMinuit && guard++ < 5) {
-              const dkSuiv = dateKey(addDays(isoToDate(curDk), 1));
-              const instsSuiv = (db.planning[emp.id]?.[dkSuiv] || [])
-                .filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge)
-                .sort((a, b) => a.debut - b.debut);
-              if (!instsSuiv.length || instsSuiv[0].debut - curInst.fin > splitSeuilLocal) {
-                // Pas de tâche de continuation trouvée — la débauche a quand même lieu le
-                // lendemain puisque cette tâche traverse minuit : avance le jour avant de sortir,
-                // sinon on chercherait (en vain) la débauche sur le mauvais jour.
-                curDk = dkSuiv;
-                break;
-              }
-              let derniereSuiv = instsSuiv[0];
-              chaine.push(derniereSuiv);
-              for (let i = 1; i < instsSuiv.length; i++) {
-                const gap = instsSuiv[i].debut - derniereSuiv.fin;
-                if (gap > splitSeuilLocal) break;
-                derniereSuiv = instsSuiv[i];
-                chaine.push(derniereSuiv);
-              }
-              curInst = derniereSuiv;
-              curDk = dkSuiv;
-            }
-            const embEvt2 = evts.find(e => e.instId === prem.id && e.type === 'embauche' && e.heureRetenue);
-            const evtsFinales = curDk === dk ? evts : Object.values(pointagesParAnnee[curDk.slice(0, 4)]?.[curDk]?.[emp.id]?.evenements || {});
-            const debEvt2 = [...evtsFinales].reverse().find(e => e.instId === curInst.id && e.type === 'debauche' && e.heureRetenue);
-            if (embEvt2 && debEvt2) {
-              let dMin2 = timeToMin(embEvt2.heureRetenue), fMin2 = timeToMin(debEvt2.heureRetenue);
-              if (fMin2 <= dMin2) fMin2 += 1440;
-              if (curDk === dk) {
-                // Le service reste entièrement sur aujourd'hui malgré la traversée de minuit
-                // (résolu mais revenu au même jour) : montant complet, pas de partage nécessaire.
-                const pauseTotaleChaine = chaine.reduce((s, i) => s + (i.pauseDuree || 0), 0);
-                pointeMin += Math.max(0, fMin2 - dMin2 - pauseTotaleChaine);
-              } else {
-                // Service qui se termine un jour plus tard : aujourd'hui (jour de départ) ne
-                // récupère que la portion AVANT minuit — cohérent avec Planifié (ownDayMinutes),
-                // le reste étant capté par le jour de fin via sa propre branche "fusion hier".
-                // Attention : prePauseMinutes suppose i.debut ancré sur AUJOURD'HUI — vrai pour
-                // srv (les tâches de départ), mais pas pour les tâches ajoutées plus loin dans la
-                // chaîne par la résolution vers l'avant (ancrées sur un jour suivant) : leur pause
-                // ne doit jamais être déduite d'aujourd'hui, elle appartient entièrement au jour où
-                // elle a lieu, capté par la branche "fusion hier" de ce jour-là.
-                const pauseAvant = srv.reduce((s, i) => s + prePauseMinutes(i), 0);
-                const avantMinuitBrut = Math.max(0, Math.min(fMin2, 1440) - dMin2);
-                pointeMin += Math.max(0, avantMinuitBrut - pauseAvant);
-              }
-            }
-            return;
-          }
-
-          const embEvt = evts.find(e => e.instId === prem.id && e.type === 'embauche' && e.heureRetenue);
-          const debEvt = [...evts].reverse().find(e => e.instId === dern.id && e.type === 'debauche' && e.heureRetenue);
-          if (embEvt && debEvt) {
-            let dMin = timeToMin(embEvt.heureRetenue), fMin = timeToMin(debEvt.heureRetenue);
-            if (fMin <= dMin) fMin += 1440;
-            const pauseTotal = srv.reduce((s, i) => s + (i.pauseDuree || 0), 0);
-            pointeMin += Math.max(0, fMin - dMin - pauseTotal);
-          }
-        });
-      }
-
-      // Pointages hors planning (dépannage) : sessions groupées par instId (identifiant de
-      // session généré par la pointeuse, sans instance de planning réelle derrière) — ajoutées
-      // au pointé de la journée, sans jamais compter dans le planifié (rien n'était prévu).
-      let pointeHorsPlanning = 0;
-      const evtsHP = evts.filter(e => e.horsPlanning);
-      if (evtsHP.length) {
-        const sessions = {};
-        evtsHP.forEach(e => { if (!sessions[e.instId]) sessions[e.instId] = []; sessions[e.instId].push(e); });
-        Object.values(sessions).forEach(grp => {
-          const embHP = grp.find(e => e.type === 'embauche' && e.heureRetenue);
-          const debHP = grp.find(e => e.type === 'debauche' && e.heureRetenue);
-          if (embHP && debHP) {
-            const dMin = timeToMin(embHP.heureRetenue);
-            let fMin = timeToMin(debHP.heureRetenue);
-            if (fMin <= dMin) fMin += 1440;
-            pointeHorsPlanning += fMin - dMin;
-          }
-        });
-        pointeMin += pointeHorsPlanning;
-      }
+      // Calcule les heures pointées depuis les événements Firebase (moteur partagé avec le
+      // Compteur & modulation — voir calculerPointeMinJour)
+      const { pointeMin, pointeHorsPlanning } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
 
       const ecartMin = pointeMin > 0 ? pointeMin - planMin : null;
       const dayWeekKey = dateKey(getMonday(d));
