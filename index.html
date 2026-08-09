@@ -1782,7 +1782,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.62.1';
+const APP_VERSION = '1.63.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1799,6 +1799,7 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.63.0', items: ['Récap paie : nouvelle colonne "Écart contrat" (sur les lignes de total semaine + badge par employé) qui compare les heures réellement pointées au contrat de travail (ex: 35h), au lieu du planning prévu — évite de croire à tort qu\'un employé doit des heures alors qu\'il a fait plus que son contrat, simplement moins que ce que prévoyait le planning', 'Renommage de "Écart total" en "Écart planning" (colonne, badge employé, résumé global) pour bien distinguer les deux comparaisons : planning prévu vs contrat de travail'] },
   { v: '1.62.1', items: ['Correction d\'un affichage en double du nom de l\'admin connecté (barre latérale et Paramètres > présence) lorsque plusieurs onglets étaient ouverts avec la même session — chaque nom n\'apparaît désormais qu\'une seule fois'] },
   { v: '1.62.0', items: ['Récap paie : suppression du bouton "Envoyer" en double dans la barre de filtre (il faisait exactement la même chose que le bouton "Envoyer le récap" en haut à droite)', 'Récap paie : le champ email du destinataire propose maintenant les emails renseignés dans la fiche des employés (auto-complétion), au lieu d\'avoir à les saisir entièrement à la main'] },
   { v: '1.61.0', items: ['Correctif d\'un vrai bug de synchronisation : un congé déjà validé par un admin pouvait rester affiché "en attente" chez un autre poste resté longtemps ouvert (connexion temps réel silencieusement figée) — ajout d\'une resynchronisation forcée au retour sur l\'onglet et toutes les 5 minutes, plus un garde-fou qui empêche définitivement qu\'un congé confirmé puisse être réécrasé vers "non confirmé"'] },
@@ -5867,7 +5868,8 @@ const RECAP_COLONNES = [
   { id: 'brute', label: 'Durée brute', defaut: true },
   { id: 'pause', label: 'Pause', defaut: true },
   { id: 'retenue', label: 'Durée nette (retenue)', defaut: true },
-  { id: 'ecartTotal', label: 'Écart total', defaut: true },
+  { id: 'ecartTotal', label: 'Écart planning', defaut: true },
+  { id: 'ecartContrat', label: 'Écart contrat', defaut: true },
   { id: 'nuit', label: 'Nuit', defaut: true },
   { id: 'panier', label: 'Panier', defaut: true },
   { id: 'primes', label: 'Primes', defaut: true },
@@ -5957,7 +5959,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
   const tablesHtml = emps.map(emp => {
     const contratMin = Math.round((emp.contratH || 35) * 60);
-    let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPrimes = 0, empDecouchage = 0;
+    let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPrimes = 0, empDecouchage = 0, empEcartContrat = 0, empSemainesComptees = 0;
     let weekKey = null, weekPlan = 0, weekPt = 0, weekNuit = 0, weekPause = 0;
     const badgeBg = { ok: 'rgba(46,204,113,.12)', under: 'rgba(245,166,35,.12)', over: 'rgba(255,77,106,.12)', empty: 'transparent' };
     const badgeCol = { ok: 'var(--success)', under: 'var(--warning)', over: 'var(--danger)', empty: 'var(--text-dim)' };
@@ -6195,6 +6197,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       // Flush total semaine si on change de semaine
       if (weekKey !== null && dayWeekKey !== weekKey) {
         const cls = badgeClass(weekPlan, contratMin);
+        if (weekPt > 0) { empEcartContrat += weekPt - contratMin; empSemainesComptees++; }
         lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol });
         weekPlan = 0; weekPt = 0; weekNuit = 0; weekPause = 0;
       }
@@ -6213,6 +6216,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     // Dernier total semaine
     if (weekKey !== null) {
       const cls = badgeClass(weekPlan, contratMin);
+      if (weekPt > 0) { empEcartContrat += weekPt - contratMin; empSemainesComptees++; }
       lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol });
     }
 
@@ -6256,6 +6260,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         case 'retenue': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.pointeMin > 0 ? minToHM(l.pointeMin) : '—'}</td>`;
         case 'pause': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:var(--text-dim);">${l.pauseJourMin > 0 ? '-' + l.pauseJourMin + 'min' : '—'}</td>`;
         case 'ecartTotal': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:${ecartColor(l.ecartMin)};">${ecartFmt(l.ecartMin)}</td>`;
+        case 'ecartContrat': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:var(--text-dim);" title="Uniquement calculable sur un total semaine">—</td>`;
         case 'nuit': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:#9d8fff;${l.nuitMin > 0 ? 'background:rgba(157,143,255,.08);' : ''}" title="${l.nuitMin > 0 ? 'Heures majorées (nuit)' : ''}">${l.nuitMin > 0 ? minToHM(l.nuitMin) : '—'}</td>`;
         case 'panier': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierJour > 0 ? l.panierJour.toFixed(2) + '€' : '—'}</td>`;
         case 'primes': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.primesJour > 0 ? l.primesJour.toFixed(2) + '€' : '—'}</td>`;
@@ -6276,6 +6281,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
           if (c.id === 'retenue') return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;">${l.weekPt > 0 ? minToHM(l.weekPt) : '—'}</td>`;
           if (c.id === 'pause') return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:var(--text-dim);">${l.weekPause > 0 ? '-' + minToHM(l.weekPause) : '—'}</td>`;
           if (c.id === 'ecartTotal') return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:${ecartColor(ecartW)};">${ecartFmt(ecartW)}</td>`;
+          if (c.id === 'ecartContrat') {
+            const ecartC = l.weekPt > 0 ? l.weekPt - l.contratMin : null;
+            return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:${ecartColor(ecartC)};" title="Par rapport au contrat de ${minToHM(l.contratMin)}/sem">${ecartFmt(ecartC)}</td>`;
+          }
           if (c.id === 'nuit') return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:#9d8fff;">${l.weekNuit > 0 ? minToHM(l.weekNuit) : '—'}</td>`;
           return '<td></td>';
         }).join('');
@@ -6312,7 +6321,8 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <span style="background:rgba(79,124,255,.12);color:var(--accent);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Planifié ${minToHM(empPlannifie)}</span>
           ${empPointe > 0 ? `<span style="background:rgba(46,204,113,.12);color:var(--success);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Retenue ${minToHM(empPointe)}</span>` : ''}
-          ${ecartTotal !== null ? `<span style="background:${ecartTotal >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${ecartTotal >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Écart ${ecartTotal >= 0 ? '+' : ''}${minToHM(Math.abs(ecartTotal))}</span>` : ''}
+          ${ecartTotal !== null ? `<span style="background:${ecartTotal >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${ecartTotal >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au planning prévu">Écart planning ${ecartTotal >= 0 ? '+' : ''}${minToHM(Math.abs(ecartTotal))}</span>` : ''}
+          ${empSemainesComptees > 0 ? `<span style="background:${empEcartContrat >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${empEcartContrat >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au contrat de ${minToHM(contratMin)}/sem (${empSemainesComptees} semaine${empSemainesComptees > 1 ? 's' : ''})">Écart contrat ${empEcartContrat >= 0 ? '+' : ''}${minToHM(Math.abs(empEcartContrat))}</span>` : ''}
           ${empNuit > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Nuit ${minToHM(empNuit)}</span>` : ''}
           ${empPanier > 0 ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Paniers ${empPanier.toFixed(2)}€</span>` : ''}
         </div>
@@ -6340,7 +6350,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       <div class="meta">Pointé</div><div style="font-size:18px;font-weight:800;color:var(--success);">${minToHM(gtPointe)}</div>
     </div>
     <div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
-      <div class="meta">Écart total</div><div style="font-size:18px;font-weight:800;color:${gtPointe >= gtPlannifie ? 'var(--success)' : 'var(--danger)'};">${gtPointe >= gtPlannifie ? '+' : ''}${minToHM(Math.abs(gtPointe - gtPlannifie))}</div>
+      <div class="meta">Écart planning</div><div style="font-size:18px;font-weight:800;color:${gtPointe >= gtPlannifie ? 'var(--success)' : 'var(--danger)'};">${gtPointe >= gtPlannifie ? '+' : ''}${minToHM(Math.abs(gtPointe - gtPlannifie))}</div>
     </div>` : ''}
     ${gtNuit > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
       <div class="meta">Heures de nuit</div><div style="font-size:18px;font-weight:800;color:#9d8fff;">${minToHM(gtNuit)}</div>
