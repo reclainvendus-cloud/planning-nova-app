@@ -697,7 +697,8 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           Cumul des heures réellement pointées par rapport au contrat de travail de chaque employé, semaine complète par semaine complète — indépendant des écarts par rapport au planning (voir Récap paie). La semaine en cours n'est jamais comptée tant qu'elle n'est pas terminée.
         </div>
         <div id="cpt-loading" class="hint">Calcul en cours…</div>
-        <div id="cpt-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;"></div>
+        <div id="cpt-note"></div>
+        <div id="cpt-cards"></div>
       </div>
 
       <!-- ===== VUE RAPPORTS ===== -->
@@ -1797,7 +1798,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.64.0';
+const APP_VERSION = '1.65.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1814,6 +1815,8 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.65.0', items: ['Compteur & modulation : refonte de l\'affichage en liste compacte avec jauge visuelle par employé (plus lisible qu\'avant, surtout avec beaucoup d\'employés)', 'Compteur & modulation : nouveau filtre par équipe (une équipe précise, "Sans équipe", ou toutes) — quand aucun filtre n\'est actif, les employés sont regroupés par équipe (dans l\'ordre défini dans Paramètres > Équipes) avec un total par groupe'] },
+  { v: '1.64.1', items: ['Compteur & modulation : correction d\'un calcul faussé sur la toute première semaine suivant l\'activation de la pointeuse (Paramètres > Pointages) — si l\'activation tombe en cours de semaine, cette semaine partielle (jours d\'avant jamais pointés par construction) n\'est plus comptée comme un déficit ; le calcul démarre désormais à la première semaine calendaire entièrement postérieure à l\'activation, avec un message explicatif si la date choisie a dû être décalée'] },
   { v: '1.64.0', items: ['Nouveau menu "Compteur & modulation" : une carte par employé (triées par ordre alphabétique de nom), affichant le cumul des heures réellement pointées au-dessus ou en dessous de son contrat de travail — calculé semaine complète par semaine complète (jamais en cours de semaine, jamais comparé au planning) pour rester juste et fiable', 'Fiche employé : nouveau champ "Solde initial du compteur & modulation" pour intégrer les heures déjà accumulées avant l\'utilisation de l\'appli', 'Récap paie : le calcul du "pointé" (heures réellement travaillées) est désormais partagé avec le nouveau Compteur & modulation, garantissant que les deux écrans donnent toujours des chiffres cohérents entre eux'] },
   { v: '1.63.0', items: ['Récap paie : nouvelle colonne "Écart contrat" (sur les lignes de total semaine + badge par employé) qui compare les heures réellement pointées au contrat de travail (ex: 35h), au lieu du planning prévu — évite de croire à tort qu\'un employé doit des heures alors qu\'il a fait plus que son contrat, simplement moins que ce que prévoyait le planning', 'Renommage de "Écart total" en "Écart planning" (colonne, badge employé, résumé global) pour bien distinguer les deux comparaisons : planning prévu vs contrat de travail'] },
   { v: '1.62.1', items: ['Correction d\'un affichage en double du nom de l\'admin connecté (barre latérale et Paramètres > présence) lorsque plusieurs onglets étaient ouverts avec la même session — chaque nom n\'apparaît désormais qu\'une seule fois'] },
@@ -6063,16 +6066,41 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
 // minute pointée (sinon une semaine de congé total serait comptée à tort comme un déficit plein
 // contrat). Réutilise calculerPointeMinJour — même moteur que le Récap paie, pas de logique dupliquée.
 function getCompteurDepuis() {
-  return db.params.compteurDepuis || `${new Date().getFullYear()}-01-01`;
+  if (db.params.compteurDepuis) return db.params.compteurDepuis;
+  const jan1 = `${new Date().getFullYear()}-01-01`;
+  const premiereSemExploitable = getPremiereSemaineExploitable();
+  return premiereSemExploitable && premiereSemExploitable > jan1 ? premiereSemExploitable : jan1;
+}
+
+// Première semaine réellement exploitable pour le compteur : si la pointeuse a été activée en
+// cours de semaine, cette semaine-là n'a de données valides que sur quelques jours (les jours
+// d'avant n'ont jamais été pointés par construction, pas par manque de travail) — la comparer au
+// contrat plein la ferait apparaître comme un déficit massif totalement artificiel. On démarre
+// donc toujours à la première semaine calendaire ENTIÈREMENT postérieure à l'activation.
+function getPremiereSemaineExploitable() {
+  if (!db.params.pointageDateDebut) return null;
+  const act = isoToDate(db.params.pointageDateDebut);
+  const lundiAct = getMonday(act);
+  const debutReel = act.getTime() === lundiAct.getTime() ? lundiAct : addDays(lundiAct, 7);
+  return dateKey(debutReel);
 }
 
 function initCompteurModulation() {
   const wrap = document.getElementById('view-compteur');
   if (!document.getElementById('cpt-depuis')) {
+    const equipesTriees = [...db.equipes].sort((a, b) => (a.ordre || 0) - (b.ordre || 0));
     const bar = document.createElement('div');
     bar.className = 'filter-bar';
     bar.style.cssText = 'align-items:flex-end;flex-wrap:wrap;gap:8px;margin-bottom:16px;';
     bar.innerHTML = `
+      <div class="form-group" style="margin:0;">
+        <label>Équipe</label>
+        <select id="cpt-equipe">
+          <option value="">Toutes les équipes</option>
+          ${equipesTriees.map(eq => `<option value="${eq.id}" ${db.params.compteurEquipe === eq.id ? 'selected' : ''}>${eq.nom}</option>`).join('')}
+          <option value="__sans__" ${db.params.compteurEquipe === '__sans__' ? 'selected' : ''}>Sans équipe</option>
+        </select>
+      </div>
       <div class="form-group" style="margin:0;">
         <label>Calculer depuis le</label>
         <input type="date" id="cpt-depuis" value="${getCompteurDepuis()}">
@@ -6092,6 +6120,8 @@ function calculerCompteurModulation() {
   const depuisStr = depuisInput ? depuisInput.value : getCompteurDepuis();
   if (!depuisStr) { notify('Date de départ invalide', 'warning'); return; }
   db.params.compteurDepuis = depuisStr;
+  const equipeFiltre = document.getElementById('cpt-equipe')?.value || '';
+  db.params.compteurEquipe = equipeFiltre;
   saveDB();
 
   const loadingEl = document.getElementById('cpt-loading');
@@ -6101,12 +6131,16 @@ function calculerCompteurModulation() {
   cardsEl.innerHTML = '';
 
   const debut = getMonday(isoToDate(depuisStr));
+  const premiereSemExploitable = getPremiereSemaineExploitable();
+  const debutEffectif = premiereSemExploitable && isoToDate(premiereSemExploitable) > debut
+    ? isoToDate(premiereSemExploitable)
+    : debut;
   const hier = addDays(new Date(), -1);
   hier.setHours(0, 0, 0, 0);
-  if (hier < debut) { loadingEl.textContent = 'Aucune semaine complète écoulée depuis cette date.'; return; }
+  if (hier < debutEffectif) { loadingEl.textContent = 'Aucune semaine complète écoulée depuis cette date.'; return; }
 
   const jours = [];
-  let cur = new Date(debut);
+  let cur = new Date(debutEffectif);
   while (cur <= hier) { jours.push(dateKey(cur)); cur = addDays(cur, 1); }
 
   const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
@@ -6118,9 +6152,12 @@ function calculerCompteurModulation() {
     const pointagesParAnnee = {};
     results.forEach(r => { pointagesParAnnee[r.an] = r.data; });
 
+    let emps = [...db.employes];
+    if (equipeFiltre === '__sans__') emps = emps.filter(e => !e.equipeId);
+    else if (equipeFiltre) emps = emps.filter(e => e.equipeId === equipeFiltre);
     // Tri alphabétique par NOM (puis prénom en cas d'égalité), comme demandé — distinct de
     // getEmployesTries() qui trie par prénom pour le reste de l'appli.
-    const emps = [...db.employes].sort((a, b) => `${a.nom} ${a.prenom}`.localeCompare(`${b.nom} ${b.prenom}`, 'fr'));
+    emps.sort((a, b) => `${a.nom} ${a.prenom}`.localeCompare(`${b.nom} ${b.prenom}`, 'fr'));
 
     const cartes = emps.map(emp => {
       const contratMin = Math.round((emp.contratH || 35) * 60);
@@ -6139,8 +6176,6 @@ function calculerCompteurModulation() {
         const { pointeMin } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
         weekPt += pointeMin;
       });
-      // Dernière semaine du segment : ne la compte que si elle est réellement terminée (son
-      // dimanche est ≤ hier) — sinon on compterait à tort une semaine en cours comme un déficit.
       const dernierJour = isoToDate(jours[jours.length - 1]);
       const dernierDimancheSemaine = addDays(getMonday(dernierJour), 6);
       if (dernierDimancheSemaine <= hier && weekPt > 0) { total += weekPt - contratMin; semainesComptees++; }
@@ -6149,21 +6184,49 @@ function calculerCompteurModulation() {
     });
 
     loadingEl.style.display = 'none';
-    if (!cartes.length) { cardsEl.innerHTML = '<div class="hint">Aucun employé.</div>'; return; }
+    const noteEl = document.getElementById('cpt-note');
+    if (!cartes.length) { cardsEl.innerHTML = '<div class="hint">Aucun employé pour ce filtre.</div>'; noteEl.innerHTML = ''; return; }
 
-    cardsEl.innerHTML = cartes.map(c => {
+    noteEl.innerHTML = premiereSemExploitable && isoToDate(premiereSemExploitable) > debut
+      ? `<div class="hint" style="margin-bottom:12px;color:var(--warning);">⚠️ Le calcul démarre en réalité le ${isoToDate(premiereSemExploitable).toLocaleDateString('fr-FR')} (première semaine complète après l'activation de la pointeuse le ${isoToDate(db.params.pointageDateDebut).toLocaleDateString('fr-FR')}) plutôt qu'à la date choisie, pour ne pas compter les jours d'avant comme un déficit.</div>`
+      : '';
+
+    // Regroupement par équipe (dans l'ordre configuré dans Paramètres > Équipes), puis "Sans
+    // équipe" en dernier — seulement pertinent quand aucun filtre d'équipe unique n'est actif.
+    const equipesTriees = [...db.equipes].sort((a, b) => (a.ordre || 0) - (b.ordre || 0));
+    const groupes = equipeFiltre
+      ? [{ id: equipeFiltre, nom: equipeFiltre === '__sans__' ? 'Sans équipe' : getEquipeById(equipeFiltre)?.nom || '', cartes }]
+      : [
+          ...equipesTriees.map(eq => ({ id: eq.id, nom: eq.nom, cartes: cartes.filter(c => c.emp.equipeId === eq.id) })),
+          { id: '__sans__', nom: 'Sans équipe', cartes: cartes.filter(c => !c.emp.equipeId) },
+        ].filter(g => g.cartes.length);
+
+    // Plafond pour la jauge visuelle : la plus grande valeur absolue rencontrée, au minimum 8h
+    // pour éviter des barres disproportionnées quand tous les écarts sont minimes.
+    const maxAbs = Math.max(8 * 60, ...cartes.map(c => Math.abs(c.total)));
+
+    const carteHTML = c => {
       const positif = c.total >= 0;
       const couleur = positif ? 'var(--success)' : 'var(--danger)';
-      const fond = positif ? 'rgba(46,204,113,.08)' : 'rgba(255,77,106,.08)';
-      return `<div class="task-card" style="cursor:default;padding:16px;border-left:3px solid ${couleur};background:${fond};">
-        <div style="font-weight:800;font-size:14px;margin-bottom:8px;">${c.emp.nom} ${c.emp.prenom}</div>
-        <div style="font-size:24px;font-weight:800;color:${couleur};">${positif ? '+' : '-'}${minToHM(Math.abs(c.total))}</div>
-        <div class="hint" style="margin-top:6px;">
-          Contrat ${minToHM(c.contratMin)}/sem · ${c.semainesComptees} semaine${c.semainesComptees > 1 ? 's' : ''} comptée${c.semainesComptees > 1 ? 's' : ''}
-          ${c.emp.soldeInitial ? `<br>dont solde initial ${c.emp.soldeInitial >= 0 ? '+' : ''}${c.emp.soldeInitial}h` : ''}
+      const largeurBarre = Math.min(100, Math.round((Math.abs(c.total) / maxAbs) * 100));
+      return `<div style="display:flex;align-items:center;gap:14px;padding:10px 14px;background:var(--surface2);border-radius:8px;">
+        <div style="min-width:150px;max-width:150px;font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${c.emp.prenom} ${c.emp.nom}">${c.emp.nom} ${c.emp.prenom}</div>
+        <div style="flex:1;min-width:80px;height:8px;background:var(--surface3,rgba(255,255,255,.06));border-radius:4px;overflow:hidden;display:flex;">
+          <div style="width:${largeurBarre}%;background:${couleur};height:100%;"></div>
         </div>
+        <div style="min-width:78px;text-align:right;font-size:17px;font-weight:800;color:${couleur};font-family:var(--mono);">${positif ? '+' : '-'}${minToHM(Math.abs(c.total))}</div>
+        <div style="min-width:150px;font-size:11px;color:var(--text-dim);white-space:nowrap;" title="${c.emp.soldeInitial ? `dont solde initial ${c.emp.soldeInitial >= 0 ? '+' : ''}${c.emp.soldeInitial}h` : ''}">${minToHM(c.contratMin)}/sem · ${c.semainesComptees} sem.${c.emp.soldeInitial ? ' · solde init.' : ''}</div>
       </div>`;
-    }).join('');
+    };
+
+    cardsEl.innerHTML = groupes.map(g => `
+      <div style="margin-bottom:20px;">
+        ${!equipeFiltre ? `<div style="font-size:13px;font-weight:800;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;padding-left:2px;">${g.nom} <span style="font-weight:400;">· ${g.cartes.length}</span></div>` : ''}
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          ${g.cartes.map(carteHTML).join('')}
+        </div>
+      </div>
+    `).join('');
   }).catch(() => {
     loadingEl.textContent = 'Erreur lors du calcul — réessaie.';
   });
