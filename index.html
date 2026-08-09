@@ -1798,7 +1798,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.65.0';
+const APP_VERSION = '1.65.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1815,6 +1815,7 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.65.1', items: ['Compteur & modulation : message explicatif clair (au lieu de lignes à 0h00 silencieuses) quand aucune semaine complète n\'est encore terminée depuis la date de calcul choisie, avec la date exacte du premier résultat disponible'] },
   { v: '1.65.0', items: ['Compteur & modulation : refonte de l\'affichage en liste compacte avec jauge visuelle par employé (plus lisible qu\'avant, surtout avec beaucoup d\'employés)', 'Compteur & modulation : nouveau filtre par équipe (une équipe précise, "Sans équipe", ou toutes) — quand aucun filtre n\'est actif, les employés sont regroupés par équipe (dans l\'ordre défini dans Paramètres > Équipes) avec un total par groupe'] },
   { v: '1.64.1', items: ['Compteur & modulation : correction d\'un calcul faussé sur la toute première semaine suivant l\'activation de la pointeuse (Paramètres > Pointages) — si l\'activation tombe en cours de semaine, cette semaine partielle (jours d\'avant jamais pointés par construction) n\'est plus comptée comme un déficit ; le calcul démarre désormais à la première semaine calendaire entièrement postérieure à l\'activation, avec un message explicatif si la date choisie a dû être décalée'] },
   { v: '1.64.0', items: ['Nouveau menu "Compteur & modulation" : une carte par employé (triées par ordre alphabétique de nom), affichant le cumul des heures réellement pointées au-dessus ou en dessous de son contrat de travail — calculé semaine complète par semaine complète (jamais en cours de semaine, jamais comparé au planning) pour rester juste et fiable', 'Fiche employé : nouveau champ "Solde initial du compteur & modulation" pour intégrer les heures déjà accumulées avant l\'utilisation de l\'appli', 'Récap paie : le calcul du "pointé" (heures réellement travaillées) est désormais partagé avec le nouveau Compteur & modulation, garantissant que les deux écrans donnent toujours des chiffres cohérents entre eux'] },
@@ -6186,6 +6187,18 @@ function calculerCompteurModulation() {
     loadingEl.style.display = 'none';
     const noteEl = document.getElementById('cpt-note');
     if (!cartes.length) { cardsEl.innerHTML = '<div class="hint">Aucun employé pour ce filtre.</div>'; noteEl.innerHTML = ''; return; }
+
+    const totalSemainesComptees = cartes.reduce((s, c) => s + c.semainesComptees, 0);
+    if (totalSemainesComptees === 0) {
+      const premiereFin = addDays(getMonday(debutEffectif), 6);
+      cardsEl.innerHTML = `<div class="empty-state">
+        <div class="ico">⏳</div>
+        <p>Aucune semaine complète n'est encore terminée depuis le ${debutEffectif.toLocaleDateString('fr-FR')}.<br>
+        Premier résultat disponible à partir du ${addDays(premiereFin, 1).toLocaleDateString('fr-FR')} (lendemain de la fin de la première semaine comptée, le ${premiereFin.toLocaleDateString('fr-FR')}).</p>
+      </div>`;
+      noteEl.innerHTML = '';
+      return;
+    }
 
     noteEl.innerHTML = premiereSemExploitable && isoToDate(premiereSemExploitable) > debut
       ? `<div class="hint" style="margin-bottom:12px;color:var(--warning);">⚠️ Le calcul démarre en réalité le ${isoToDate(premiereSemExploitable).toLocaleDateString('fr-FR')} (première semaine complète après l'activation de la pointeuse le ${isoToDate(db.params.pointageDateDebut).toLocaleDateString('fr-FR')}) plutôt qu'à la date choisie, pour ne pas compter les jours d'avant comme un déficit.</div>`
