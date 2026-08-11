@@ -1552,6 +1552,70 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
   </div>
 </div>
 
+<!-- ===== MODAL RÈGLEMENT HEURES SUP (individuel) ===== -->
+<div class="modal-overlay" id="modal-reglement-hs">
+  <div class="modal" style="width:480px;">
+    <button class="modal-close" onclick="closeModal('modal-reglement-hs')">✕</button>
+    <h2>⚖️ Régler les heures sup</h2>
+    <div class="hint" id="rgl-emp-info" style="margin-bottom:14px;"></div>
+    <input type="hidden" id="rgl-emp-id">
+    <div class="form-group">
+      <label>Mois concerné</label>
+      <input type="month" id="rgl-mois">
+    </div>
+    <div class="form-group">
+      <label>Montant réglé (heures)</label>
+      <input type="number" id="rgl-montant" step="0.25" min="0">
+      <div class="hint" id="rgl-solde-hint"></div>
+    </div>
+    <div class="form-group">
+      <label>Note (optionnel)</label>
+      <input type="text" id="rgl-note" placeholder="ex: réglé avec la paie d'août">
+    </div>
+    <div id="rgl-lock-info" class="hint" style="display:none;margin-bottom:8px;color:var(--warning);"></div>
+    <div style="display:flex;gap:10px;margin-top:4px;align-items:center;flex-wrap:wrap;">
+      <button class="btn btn-primary" onclick="validerReglement()">✅ Enregistrer</button>
+      <button class="btn btn-secondary" id="rgl-btn-deverrouiller" style="display:none;" onclick="deverrouillerReglementUI()">🔓 Déverrouiller pour modifier</button>
+      <button class="btn btn-secondary" onclick="closeModal('modal-reglement-hs')">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MODAL CLÔTURE MENSUELLE (règlements groupés) ===== -->
+<div class="modal-overlay" id="modal-cloture-mensuelle">
+  <div class="modal" style="width:720px;max-width:92vw;">
+    <button class="modal-close" onclick="closeModal('modal-cloture-mensuelle')">✕</button>
+    <h2>📅 Clôture mensuelle des heures sup</h2>
+    <div class="hint" style="margin-bottom:14px;">Montant pré-rempli avec le solde actuel de chaque employé (compteurs positifs uniquement) — ajustable ligne par ligne. Décoche ceux à ne pas régler ce mois-ci.</div>
+    <div class="form-group" style="max-width:220px;">
+      <label>Mois concerné</label>
+      <input type="month" id="clm-mois">
+    </div>
+    <div style="max-height:50vh;overflow-y:auto;margin:10px 0;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="text-align:left;font-size:12px;color:var(--text-dim);border-bottom:1px solid var(--border);">
+            <th style="padding:6px 4px;"><input type="checkbox" id="clm-tout" onchange="clmToggleTout()"></th>
+            <th style="padding:6px 4px;">Employé</th>
+            <th style="padding:6px 4px;">Solde actuel</th>
+            <th style="padding:6px 4px;">Montant à régler (h)</th>
+          </tr>
+        </thead>
+        <tbody id="clm-tbody"></tbody>
+      </table>
+    </div>
+    <div class="form-group">
+      <label>Note commune (optionnel)</label>
+      <input type="text" id="clm-note" placeholder="ex: clôture de fin de mois">
+    </div>
+    <div style="display:flex;gap:10px;margin-top:8px;align-items:center;">
+      <button class="btn btn-primary" onclick="validerClotureMensuelle()">✅ Régler la sélection</button>
+      <button class="btn btn-secondary" onclick="closeModal('modal-cloture-mensuelle')">Annuler</button>
+      <span id="clm-status" style="font-size:12px;color:var(--text-dim);"></span>
+    </div>
+  </div>
+</div>
+
 <!-- ===== MODAL EMAIL CONGÉ ===== -->
 <div class="modal-overlay" id="modal-email-conge">
   <div class="modal" style="width:520px;">
@@ -1798,7 +1862,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.65.1';
+const APP_VERSION = '1.66.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1815,6 +1879,7 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.66.0', items: ['Compteur & modulation : nouveau système de règlement des heures sup — bouton "Régler" par employé (solde positif uniquement) qui enregistre un règlement daté et verrouillé, déduit définitivement du compteur ; les heures non réglées restent dans le compteur pour le mois suivant', 'Nouvel écran "Clôture mensuelle" (bouton dédié) pour régler plusieurs employés d\'un coup, montant pré-rempli avec le solde actuel de chacun et ajustable ligne par ligne', 'Un règlement déjà enregistré est verrouillé contre les modifications accidentelles — un bouton "Déverrouiller" explicite permet de corriger si besoin', 'Fiche employé : le solde initial du compteur reste inchangé par les règlements, qui sont désormais tracés séparément dans un journal dédié'] },
   { v: '1.65.1', items: ['Compteur & modulation : message explicatif clair (au lieu de lignes à 0h00 silencieuses) quand aucune semaine complète n\'est encore terminée depuis la date de calcul choisie, avec la date exacte du premier résultat disponible'] },
   { v: '1.65.0', items: ['Compteur & modulation : refonte de l\'affichage en liste compacte avec jauge visuelle par employé (plus lisible qu\'avant, surtout avec beaucoup d\'employés)', 'Compteur & modulation : nouveau filtre par équipe (une équipe précise, "Sans équipe", ou toutes) — quand aucun filtre n\'est actif, les employés sont regroupés par équipe (dans l\'ordre défini dans Paramètres > Équipes) avec un total par groupe'] },
   { v: '1.64.1', items: ['Compteur & modulation : correction d\'un calcul faussé sur la toute première semaine suivant l\'activation de la pointeuse (Paramètres > Pointages) — si l\'activation tombe en cours de semaine, cette semaine partielle (jours d\'avant jamais pointés par construction) n\'est plus comptée comme un déficit ; le calcul démarre désormais à la première semaine calendaire entièrement postérieure à l\'activation, avec un message explicatif si la date choisie a dû être décalée'] },
@@ -1935,6 +2000,7 @@ function loadDB() {
   if (!db.equipes) db.equipes = [];
   if (!db.tournees) db.tournees = [];
   if (!db.admins) db.admins = [];
+  if (!db.reglements) db.reglements = []; // Journal des règlements d'heures sup (Compteur & modulation) — jamais écrasé, un enregistrement par (employé, mois)
   if (!db.semaineType) db.semaineType = {};
   if (!db.params) db.params = {}; // garde-fou : un navigateur tout neuf n'a rien du tout dans localStorage
   if (db.params.pointageDateDebut === undefined) db.params.pointageDateDebut = null;
@@ -2081,6 +2147,7 @@ function syncToFirebase() {
       syncCollectionToFirebase('tournees', db.tournees || []);
       syncCollectionToFirebase('categories', db.categories || []);
       syncCollectionToFirebase('admins', db.admins || []);
+      syncCollectionToFirebase('reglements', db.reglements || []);
       syncPlanningToFirebase();
       const { brevo: _b, github: _g, ...paramsToSync } = db.params || {};
       fbDb.ref('data/params').set(paramsToSync).catch(e => console.error('Sync params:', e));
@@ -2130,7 +2197,7 @@ function loadFromFirebaseThenListen() {
     // la source commune. C'est exactement ce qui manquait et qui a causé une perte de données.
     if ((!remote || (remoteEmp.length === 0 && remotePlanningVide)) && localHasData) {
       notify('Firebase semblait vide — données locales conservées et republiées', 'warning');
-      _fbSnapshot = { employes: {}, tasks: {}, equipes: {}, tournees: {}, categories: {}, planning: {}, admins: {} };
+      _fbSnapshot = { employes: {}, tasks: {}, equipes: {}, tournees: {}, categories: {}, planning: {}, admins: {}, reglements: {} };
       syncToFirebase();
       listenRemoteChanges();
       return;
@@ -2145,6 +2212,7 @@ function loadFromFirebaseThenListen() {
       if (remote.tournees) db.tournees = Object.values(remote.tournees);
       if (remote.categories) db.categories = Object.values(remote.categories);
       if (remote.admins) db.admins = Object.values(remote.admins);
+      if (remote.reglements) db.reglements = Object.values(remote.reglements);
       if (remote.planning) db.planning = remote.planning;
       if (migrerCrosseMinuitFrontiere(db.planning)) setTimeout(() => saveDB(), 500);
       if (remote.semaineType) db.semaineType = remote.semaineType;
@@ -2158,7 +2226,7 @@ function loadFromFirebaseThenListen() {
       _fbSnapshot = {
         employes: keyById(db.employes), tasks: keyById(db.tasks), equipes: keyById(db.equipes),
         tournees: keyById(db.tournees), categories: keyById(db.categories), planning: flattenPlanning(db.planning),
-        admins: keyById(db.admins || []),
+        admins: keyById(db.admins || []), reglements: keyById(db.reglements || []),
       };
       _applyingRemoteUpdate = false;
       renderCurrentView();
@@ -6086,6 +6154,138 @@ function getPremiereSemaineExploitable() {
   return dateKey(debutReel);
 }
 
+// ===================================================
+// RÈGLEMENTS D'HEURES SUP (journal, jamais écrasé — un enregistrement par employé × mois)
+// ===================================================
+function moisActuelKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+function getReglementsEmploye(empId) {
+  return db.reglements.filter(r => r.empId === empId);
+}
+function getTotalRegleEmploye(empId) {
+  return getReglementsEmploye(empId).reduce((s, r) => s + (r.montantMin || 0), 0);
+}
+function getReglementMois(empId, mois) {
+  return db.reglements.find(r => r.empId === empId && r.mois === mois) || null;
+}
+function upsertReglement(empId, mois, montantMin, note) {
+  const idx = db.reglements.findIndex(r => r.empId === empId && r.mois === mois);
+  const rec = {
+    id: idx >= 0 ? db.reglements[idx].id : 'rgl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+    empId, mois,
+    montantMin: Math.round(montantMin) || 0,
+    dateReglement: new Date().toISOString(),
+    note: note || '',
+    verrouille: true,
+  };
+  if (idx >= 0) db.reglements[idx] = rec; else db.reglements.push(rec);
+  saveDB();
+  return rec;
+}
+function deverrouillerReglement(empId, mois) {
+  const idx = db.reglements.findIndex(r => r.empId === empId && r.mois === mois);
+  if (idx >= 0) { db.reglements[idx].verrouille = false; saveDB(); }
+}
+
+// Ouvre la modale de règlement individuel pour un employé, avec le solde actuellement disponible
+// (après déduction de tous les règlements déjà faits) pré-rempli comme montant proposé.
+function ouvrirReglementModal(empId, soldeDisponibleMin) {
+  const emp = db.employes.find(e => e.id === empId);
+  if (!emp) return;
+  const mois = moisActuelKey();
+  const existant = getReglementMois(empId, mois);
+  // soldeDisponibleMin passé en paramètre est déjà NET de tout règlement, y compris celui du mois
+  // en cours s'il existe — on rajoute son montant pour retrouver le solde tel qu'il était avant ce
+  // règlement précis, seule référence cohérente à afficher/pré-remplir quand on le rouvre.
+  const soldeAvantCeReglement = existant ? soldeDisponibleMin + existant.montantMin : soldeDisponibleMin;
+  document.getElementById('rgl-emp-id').value = empId;
+  document.getElementById('rgl-emp-info').textContent = `${emp.nom} ${emp.prenom}`;
+  document.getElementById('rgl-mois').value = mois;
+  document.getElementById('rgl-montant').value = existant ? (existant.montantMin / 60).toFixed(2) : Math.max(0, soldeAvantCeReglement / 60).toFixed(2);
+  document.getElementById('rgl-note').value = existant?.note || '';
+  document.getElementById('rgl-solde-hint').textContent = `Solde disponible avant ce règlement : ${soldeAvantCeReglement >= 0 ? '+' : ''}${minToHM(soldeAvantCeReglement)}`;
+
+  const lockInfo = document.getElementById('rgl-lock-info');
+  const btnDeverr = document.getElementById('rgl-btn-deverrouiller');
+  const champsAVerrouiller = [document.getElementById('rgl-montant'), document.getElementById('rgl-mois'), document.getElementById('rgl-note')];
+  if (existant?.verrouille) {
+    lockInfo.style.display = '';
+    lockInfo.textContent = `🔒 Déjà réglé et verrouillé le ${new Date(existant.dateReglement).toLocaleDateString('fr-FR')}. Déverrouille pour corriger.`;
+    btnDeverr.style.display = '';
+    champsAVerrouiller.forEach(el => el.disabled = true);
+  } else {
+    lockInfo.style.display = 'none';
+    btnDeverr.style.display = 'none';
+    champsAVerrouiller.forEach(el => el.disabled = false);
+  }
+  openModal('modal-reglement-hs');
+}
+
+function deverrouillerReglementUI() {
+  const empId = document.getElementById('rgl-emp-id').value;
+  const mois = document.getElementById('rgl-mois').value;
+  deverrouillerReglement(empId, mois);
+  [document.getElementById('rgl-montant'), document.getElementById('rgl-mois'), document.getElementById('rgl-note')].forEach(el => el.disabled = false);
+  document.getElementById('rgl-lock-info').textContent = '🔓 Déverrouillé — modifie puis enregistre pour reverrouiller.';
+  document.getElementById('rgl-btn-deverrouiller').style.display = 'none';
+}
+
+function validerReglement() {
+  const empId = document.getElementById('rgl-emp-id').value;
+  const mois = document.getElementById('rgl-mois').value;
+  const montantH = parseFloat(document.getElementById('rgl-montant').value);
+  if (!mois || isNaN(montantH) || montantH < 0) { notify('Vérifie le mois et le montant', 'warning'); return; }
+  const note = document.getElementById('rgl-note').value.trim();
+  upsertReglement(empId, mois, montantH * 60, note);
+  notify('Règlement enregistré et verrouillé');
+  closeModal('modal-reglement-hs');
+  calculerCompteurModulation();
+}
+
+// ----- Clôture mensuelle (règlements groupés) -----
+let _clmCartes = [];
+let _dernieresCartesCompteur = [];
+function ouvrirClotureMensuelle(cartes) {
+  _clmCartes = cartes.filter(c => c.total > 0);
+  if (!_clmCartes.length) { notify('Aucun employé avec un solde positif à régler', 'warning'); return; }
+  document.getElementById('clm-mois').value = moisActuelKey();
+  document.getElementById('clm-note').value = '';
+  const tbody = document.getElementById('clm-tbody');
+  tbody.innerHTML = _clmCartes.map(c => `
+    <tr data-emp="${c.emp.id}" style="border-bottom:1px solid var(--border);">
+      <td style="padding:6px 4px;"><input type="checkbox" class="clm-chk" checked></td>
+      <td style="padding:6px 4px;">${c.emp.nom} ${c.emp.prenom}</td>
+      <td style="padding:6px 4px;color:var(--success);font-family:var(--mono);">+${minToHM(c.total)}</td>
+      <td style="padding:6px 4px;"><input type="number" class="clm-montant" step="0.25" min="0" value="${(c.total / 60).toFixed(2)}" style="width:90px;"></td>
+    </tr>
+  `).join('');
+  openModal('modal-cloture-mensuelle');
+}
+function clmToggleTout() {
+  const v = document.getElementById('clm-tout').checked;
+  document.querySelectorAll('.clm-chk').forEach(chk => chk.checked = v);
+}
+function validerClotureMensuelle() {
+  const mois = document.getElementById('clm-mois').value;
+  if (!mois) { notify('Choisis le mois concerné', 'warning'); return; }
+  const note = document.getElementById('clm-note').value.trim();
+  let count = 0;
+  document.querySelectorAll('#clm-tbody tr').forEach(tr => {
+    const chk = tr.querySelector('.clm-chk');
+    if (!chk.checked) return;
+    const empId = tr.dataset.emp;
+    const montantH = parseFloat(tr.querySelector('.clm-montant').value);
+    if (isNaN(montantH) || montantH < 0) return;
+    upsertReglement(empId, mois, montantH * 60, note);
+    count++;
+  });
+  notify(`${count} règlement${count > 1 ? 's' : ''} enregistré${count > 1 ? 's' : ''} et verrouillé${count > 1 ? 's' : ''}`);
+  closeModal('modal-cloture-mensuelle');
+  calculerCompteurModulation();
+}
+
 function initCompteurModulation() {
   const wrap = document.getElementById('view-compteur');
   if (!document.getElementById('cpt-depuis')) {
@@ -6109,6 +6309,10 @@ function initCompteurModulation() {
       <div class="form-group" style="margin:0;">
         <label style="visibility:hidden;">_</label>
         <button class="btn btn-primary btn-sm" onclick="calculerCompteurModulation()">⚖️ Recalculer</button>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label style="visibility:hidden;">_</label>
+        <button class="btn btn-secondary btn-sm" onclick="ouvrirClotureMensuelle(_dernieresCartesCompteur)">📅 Clôture mensuelle</button>
       </div>
     `;
     wrap.insertBefore(bar, wrap.firstChild);
@@ -6163,14 +6367,14 @@ function calculerCompteurModulation() {
     const cartes = emps.map(emp => {
       const contratMin = Math.round((emp.contratH || 35) * 60);
       let weekKey = null, weekPt = 0;
-      let total = Math.round((emp.soldeInitial || 0) * 60);
+      let totalBrut = Math.round((emp.soldeInitial || 0) * 60);
       let semainesComptees = 0;
 
       jours.forEach(dk => {
         const d = isoToDate(dk);
         const dayWeekKey = dateKey(getMonday(d));
         if (weekKey !== null && dayWeekKey !== weekKey) {
-          if (weekPt > 0) { total += weekPt - contratMin; semainesComptees++; }
+          if (weekPt > 0) { totalBrut += weekPt - contratMin; semainesComptees++; }
           weekPt = 0;
         }
         weekKey = dayWeekKey;
@@ -6179,10 +6383,17 @@ function calculerCompteurModulation() {
       });
       const dernierJour = isoToDate(jours[jours.length - 1]);
       const dernierDimancheSemaine = addDays(getMonday(dernierJour), 6);
-      if (dernierDimancheSemaine <= hier && weekPt > 0) { total += weekPt - contratMin; semainesComptees++; }
+      if (dernierDimancheSemaine <= hier && weekPt > 0) { totalBrut += weekPt - contratMin; semainesComptees++; }
 
-      return { emp, total, semainesComptees, contratMin };
+      // Le total AFFICHÉ (et utilisé pour "Régler") est net des règlements déjà effectués — un
+      // règlement déduit définitivement du compteur, quelles que soient les semaines concernées.
+      const totalRegle = getTotalRegleEmploye(emp.id);
+      const total = totalBrut - totalRegle;
+      const reglementCeMois = getReglementMois(emp.id, moisActuelKey());
+
+      return { emp, total, totalBrut, totalRegle, semainesComptees, contratMin, reglementCeMois };
     });
+    _dernieresCartesCompteur = cartes;
 
     loadingEl.style.display = 'none';
     const noteEl = document.getElementById('cpt-note');
@@ -6222,13 +6433,20 @@ function calculerCompteurModulation() {
       const positif = c.total >= 0;
       const couleur = positif ? 'var(--success)' : 'var(--danger)';
       const largeurBarre = Math.min(100, Math.round((Math.abs(c.total) / maxAbs) * 100));
+      const infoReglement = c.totalRegle > 0 ? ` · réglé à ce jour ${minToHM(c.totalRegle)}` : '';
+      const actionBtn = c.total > 0
+        ? (c.reglementCeMois?.verrouille
+            ? `<button class="btn btn-secondary btn-sm" style="padding:3px 10px;font-size:11px;" onclick="ouvrirReglementModal('${c.emp.id}', ${c.total})" title="Réglé le ${new Date(c.reglementCeMois.dateReglement).toLocaleDateString('fr-FR')}">🔒 ${minToHM(c.reglementCeMois.montantMin)}</button>`
+            : `<button class="btn btn-primary btn-sm" style="padding:3px 10px;font-size:11px;" onclick="ouvrirReglementModal('${c.emp.id}', ${c.total})">Régler</button>`)
+        : '';
       return `<div style="display:flex;align-items:center;gap:14px;padding:10px 14px;background:var(--surface2);border-radius:8px;">
         <div style="min-width:150px;max-width:150px;font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${c.emp.prenom} ${c.emp.nom}">${c.emp.nom} ${c.emp.prenom}</div>
         <div style="flex:1;min-width:80px;height:8px;background:var(--surface3,rgba(255,255,255,.06));border-radius:4px;overflow:hidden;display:flex;">
           <div style="width:${largeurBarre}%;background:${couleur};height:100%;"></div>
         </div>
         <div style="min-width:78px;text-align:right;font-size:17px;font-weight:800;color:${couleur};font-family:var(--mono);">${positif ? '+' : '-'}${minToHM(Math.abs(c.total))}</div>
-        <div style="min-width:150px;font-size:11px;color:var(--text-dim);white-space:nowrap;" title="${c.emp.soldeInitial ? `dont solde initial ${c.emp.soldeInitial >= 0 ? '+' : ''}${c.emp.soldeInitial}h` : ''}">${minToHM(c.contratMin)}/sem · ${c.semainesComptees} sem.${c.emp.soldeInitial ? ' · solde init.' : ''}</div>
+        <div style="min-width:150px;font-size:11px;color:var(--text-dim);white-space:nowrap;" title="${c.emp.soldeInitial ? `dont solde initial ${c.emp.soldeInitial >= 0 ? '+' : ''}${c.emp.soldeInitial}h` : ''}${infoReglement}">${minToHM(c.contratMin)}/sem · ${c.semainesComptees} sem.${c.emp.soldeInitial ? ' · solde init.' : ''}${infoReglement}</div>
+        <div style="min-width:90px;text-align:right;">${actionBtn}</div>
       </div>`;
     };
 
