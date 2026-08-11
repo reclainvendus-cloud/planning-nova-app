@@ -1564,8 +1564,11 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <input type="month" id="rgl-mois">
     </div>
     <div class="form-group">
-      <label>Montant réglé (heures)</label>
-      <input type="number" id="rgl-montant" step="0.25" min="0">
+      <label>Montant réglé</label>
+      <div style="display:flex;gap:6px;">
+        <input type="number" id="rgl-montant-h" min="0" step="1" style="width:100%;" placeholder="h">
+        <input type="number" id="rgl-montant-m" min="0" max="59" step="5" style="width:100%;" placeholder="min">
+      </div>
       <div class="hint" id="rgl-solde-hint"></div>
     </div>
     <div class="form-group">
@@ -1598,7 +1601,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
             <th style="padding:6px 4px;"><input type="checkbox" id="clm-tout" onchange="clmToggleTout()"></th>
             <th style="padding:6px 4px;">Employé</th>
             <th style="padding:6px 4px;">Solde actuel</th>
-            <th style="padding:6px 4px;">Montant à régler (h)</th>
+            <th style="padding:6px 4px;">Montant à régler</th>
           </tr>
         </thead>
         <tbody id="clm-tbody"></tbody>
@@ -1862,7 +1865,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.66.0';
+const APP_VERSION = '1.67.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1879,6 +1882,8 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.67.0', items: ['Récap paie : nouveau badge "Heures sup" par employé — 🔒 "validées" avec le montant réellement réglé si un règlement existe pour le mois de fin de période (Compteur & modulation), sinon ⚠️ "non validées" avec l\'écart contrat de la période, pour bien distinguer aux yeux de la compta ce qui est définitif de ce qui peut encore bouger', 'Récap paie : ajout de "HS validées" et "HS non validées" dans le résumé global en haut de page'] },
+  { v: '1.66.1', items: ['Compteur & modulation : les champs de saisie des règlements (individuel et clôture mensuelle) utilisent maintenant heures + minutes séparées, comme partout ailleurs dans l\'appli, au lieu de décimales en centièmes d\'heure'] },
   { v: '1.66.0', items: ['Compteur & modulation : nouveau système de règlement des heures sup — bouton "Régler" par employé (solde positif uniquement) qui enregistre un règlement daté et verrouillé, déduit définitivement du compteur ; les heures non réglées restent dans le compteur pour le mois suivant', 'Nouvel écran "Clôture mensuelle" (bouton dédié) pour régler plusieurs employés d\'un coup, montant pré-rempli avec le solde actuel de chacun et ajustable ligne par ligne', 'Un règlement déjà enregistré est verrouillé contre les modifications accidentelles — un bouton "Déverrouiller" explicite permet de corriger si besoin', 'Fiche employé : le solde initial du compteur reste inchangé par les règlements, qui sont désormais tracés séparément dans un journal dédié'] },
   { v: '1.65.1', items: ['Compteur & modulation : message explicatif clair (au lieu de lignes à 0h00 silencieuses) quand aucune semaine complète n\'est encore terminée depuis la date de calcul choisie, avec la date exacte du premier résultat disponible'] },
   { v: '1.65.0', items: ['Compteur & modulation : refonte de l\'affichage en liste compacte avec jauge visuelle par employé (plus lisible qu\'avant, surtout avec beaucoup d\'employés)', 'Compteur & modulation : nouveau filtre par équipe (une équipe précise, "Sans équipe", ou toutes) — quand aucun filtre n\'est actif, les employés sont regroupés par équipe (dans l\'ordre défini dans Paramètres > Équipes) avec un total par groupe'] },
@@ -6203,13 +6208,15 @@ function ouvrirReglementModal(empId, soldeDisponibleMin) {
   document.getElementById('rgl-emp-id').value = empId;
   document.getElementById('rgl-emp-info').textContent = `${emp.nom} ${emp.prenom}`;
   document.getElementById('rgl-mois').value = mois;
-  document.getElementById('rgl-montant').value = existant ? (existant.montantMin / 60).toFixed(2) : Math.max(0, soldeAvantCeReglement / 60).toFixed(2);
+  const montantInitialMin = existant ? existant.montantMin : Math.max(0, soldeAvantCeReglement);
+  document.getElementById('rgl-montant-h').value = Math.floor(montantInitialMin / 60);
+  document.getElementById('rgl-montant-m').value = montantInitialMin % 60;
   document.getElementById('rgl-note').value = existant?.note || '';
   document.getElementById('rgl-solde-hint').textContent = `Solde disponible avant ce règlement : ${soldeAvantCeReglement >= 0 ? '+' : ''}${minToHM(soldeAvantCeReglement)}`;
 
   const lockInfo = document.getElementById('rgl-lock-info');
   const btnDeverr = document.getElementById('rgl-btn-deverrouiller');
-  const champsAVerrouiller = [document.getElementById('rgl-montant'), document.getElementById('rgl-mois'), document.getElementById('rgl-note')];
+  const champsAVerrouiller = [document.getElementById('rgl-montant-h'), document.getElementById('rgl-montant-m'), document.getElementById('rgl-mois'), document.getElementById('rgl-note')];
   if (existant?.verrouille) {
     lockInfo.style.display = '';
     lockInfo.textContent = `🔒 Déjà réglé et verrouillé le ${new Date(existant.dateReglement).toLocaleDateString('fr-FR')}. Déverrouille pour corriger.`;
@@ -6227,7 +6234,7 @@ function deverrouillerReglementUI() {
   const empId = document.getElementById('rgl-emp-id').value;
   const mois = document.getElementById('rgl-mois').value;
   deverrouillerReglement(empId, mois);
-  [document.getElementById('rgl-montant'), document.getElementById('rgl-mois'), document.getElementById('rgl-note')].forEach(el => el.disabled = false);
+  [document.getElementById('rgl-montant-h'), document.getElementById('rgl-montant-m'), document.getElementById('rgl-mois'), document.getElementById('rgl-note')].forEach(el => el.disabled = false);
   document.getElementById('rgl-lock-info').textContent = '🔓 Déverrouillé — modifie puis enregistre pour reverrouiller.';
   document.getElementById('rgl-btn-deverrouiller').style.display = 'none';
 }
@@ -6235,10 +6242,11 @@ function deverrouillerReglementUI() {
 function validerReglement() {
   const empId = document.getElementById('rgl-emp-id').value;
   const mois = document.getElementById('rgl-mois').value;
-  const montantH = parseFloat(document.getElementById('rgl-montant').value);
-  if (!mois || isNaN(montantH) || montantH < 0) { notify('Vérifie le mois et le montant', 'warning'); return; }
+  const h = parseInt(document.getElementById('rgl-montant-h').value) || 0;
+  const m = parseInt(document.getElementById('rgl-montant-m').value) || 0;
+  if (!mois || h < 0 || m < 0 || m > 59) { notify('Vérifie le mois et le montant', 'warning'); return; }
   const note = document.getElementById('rgl-note').value.trim();
-  upsertReglement(empId, mois, montantH * 60, note);
+  upsertReglement(empId, mois, h * 60 + m, note);
   notify('Règlement enregistré et verrouillé');
   closeModal('modal-reglement-hs');
   calculerCompteurModulation();
@@ -6258,7 +6266,12 @@ function ouvrirClotureMensuelle(cartes) {
       <td style="padding:6px 4px;"><input type="checkbox" class="clm-chk" checked></td>
       <td style="padding:6px 4px;">${c.emp.nom} ${c.emp.prenom}</td>
       <td style="padding:6px 4px;color:var(--success);font-family:var(--mono);">+${minToHM(c.total)}</td>
-      <td style="padding:6px 4px;"><input type="number" class="clm-montant" step="0.25" min="0" value="${(c.total / 60).toFixed(2)}" style="width:90px;"></td>
+      <td style="padding:6px 4px;">
+        <div style="display:flex;gap:4px;">
+          <input type="number" class="clm-montant-h" min="0" step="1" value="${Math.floor(c.total / 60)}" style="width:60px;" placeholder="h">
+          <input type="number" class="clm-montant-m" min="0" max="59" step="5" value="${c.total % 60}" style="width:60px;" placeholder="min">
+        </div>
+      </td>
     </tr>
   `).join('');
   openModal('modal-cloture-mensuelle');
@@ -6276,9 +6289,10 @@ function validerClotureMensuelle() {
     const chk = tr.querySelector('.clm-chk');
     if (!chk.checked) return;
     const empId = tr.dataset.emp;
-    const montantH = parseFloat(tr.querySelector('.clm-montant').value);
-    if (isNaN(montantH) || montantH < 0) return;
-    upsertReglement(empId, mois, montantH * 60, note);
+    const h = parseInt(tr.querySelector('.clm-montant-h').value) || 0;
+    const m = parseInt(tr.querySelector('.clm-montant-m').value) || 0;
+    if (h < 0 || m < 0 || m > 59) return;
+    upsertReglement(empId, mois, h * 60 + m, note);
     count++;
   });
   notify(`${count} règlement${count > 1 ? 's' : ''} enregistré${count > 1 ? 's' : ''} et verrouillé${count > 1 ? 's' : ''}`);
@@ -6511,7 +6525,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
   const nowMin = now.getHours() * 60 + now.getMinutes();
 
   // Calcule les totaux globaux pour le résumé
-  let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPrimes = 0, gtDecouchage = 0;
+  let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPrimes = 0, gtDecouchage = 0, gtHSValidees = 0, gtHSNonValidees = 0;
 
   const tablesHtml = emps.map(emp => {
     const contratMin = Math.round((emp.contratH || 35) * 60);
@@ -6652,6 +6666,12 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
     gtPlannifie += empPlannifie; gtPointe += empPointe; gtNuit += empNuit;
     gtPanier += empPanier; gtPrimes += empPrimes; gtDecouchage += empDecouchage;
+    {
+      const moisRecapFinGt = fin.getFullYear() + '-' + String(fin.getMonth() + 1).padStart(2, '0');
+      const reglementGt = getReglementMois(emp.id, moisRecapFinGt);
+      if (reglementGt) gtHSValidees += reglementGt.montantMin;
+      else if (empSemainesComptees > 0 && empEcartContrat > 0) gtHSNonValidees += empEcartContrat;
+    }
 
     const ecartColor = e => e === null ? 'var(--text-dim)' : e >= 0 ? 'var(--success)' : 'var(--danger)';
     const ecartFmt = e => e === null ? '—' : (e >= 0 ? '+' : '-') + minToHM(Math.abs(e));
@@ -6745,6 +6765,19 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     const ecartTotal = empPointe > 0 ? empPointe - empPlannifie : null;
     const clsTot = badgeClass(empPlannifie, contratMin * Math.ceil(jours.length / 7));
 
+    // Badge "Heures sup" pour la compta : si un règlement existe pour le mois de fin de la
+    // période affichée, c'est LUI qui fait foi (montant réellement validé/réglé, traçable) — sinon
+    // on affiche l'écart contrat de la période comme estimation, clairement marquée "non validé"
+    // puisqu'elle peut encore bouger (semaine pas terminée, ajustement à venir...).
+    const moisRecapFin = fin.getFullYear() + '-' + String(fin.getMonth() + 1).padStart(2, '0');
+    const reglementRecap = getReglementMois(emp.id, moisRecapFin);
+    let badgeHS = '';
+    if (reglementRecap) {
+      badgeHS = `<span style="background:rgba(46,204,113,.12);color:var(--success);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réglé et verrouillé le ${new Date(reglementRecap.dateReglement).toLocaleDateString('fr-FR')}${reglementRecap.note ? ' — ' + reglementRecap.note : ''}">🔒 Heures sup validées +${minToHM(reglementRecap.montantMin)}</span>`;
+    } else if (empSemainesComptees > 0 && empEcartContrat > 0) {
+      badgeHS = `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Pas encore réglé dans Compteur & modulation — ce montant peut encore évoluer">⚠️ Heures sup non validées +${minToHM(empEcartContrat)}</span>`;
+    }
+
     return `<div style="margin-bottom:28px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
         <div style="font-size:16px;font-weight:800;">${emp.prenom} ${emp.nom}</div>
@@ -6753,6 +6786,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
           ${empPointe > 0 ? `<span style="background:rgba(46,204,113,.12);color:var(--success);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Retenue ${minToHM(empPointe)}</span>` : ''}
           ${ecartTotal !== null ? `<span style="background:${ecartTotal >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${ecartTotal >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au planning prévu">Écart planning ${ecartTotal >= 0 ? '+' : ''}${minToHM(Math.abs(ecartTotal))}</span>` : ''}
           ${empSemainesComptees > 0 ? `<span style="background:${empEcartContrat >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${empEcartContrat >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au contrat de ${minToHM(contratMin)}/sem (${empSemainesComptees} semaine${empSemainesComptees > 1 ? 's' : ''})">Écart contrat ${empEcartContrat >= 0 ? '+' : ''}${minToHM(Math.abs(empEcartContrat))}</span>` : ''}
+          ${badgeHS}
           ${empNuit > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Nuit ${minToHM(empNuit)}</span>` : ''}
           ${empPanier > 0 ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Paniers ${empPanier.toFixed(2)}€</span>` : ''}
         </div>
@@ -6781,6 +6815,12 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     </div>
     <div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
       <div class="meta">Écart planning</div><div style="font-size:18px;font-weight:800;color:${gtPointe >= gtPlannifie ? 'var(--success)' : 'var(--danger)'};">${gtPointe >= gtPlannifie ? '+' : ''}${minToHM(Math.abs(gtPointe - gtPlannifie))}</div>
+    </div>` : ''}
+    ${gtHSValidees > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;border:1px solid rgba(46,204,113,.3);">
+      <div class="meta">🔒 HS validées</div><div style="font-size:18px;font-weight:800;color:var(--success);">+${minToHM(gtHSValidees)}</div>
+    </div>` : ''}
+    ${gtHSNonValidees > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;border:1px solid rgba(245,166,35,.3);">
+      <div class="meta">⚠️ HS non validées</div><div style="font-size:18px;font-weight:800;color:var(--warning);">+${minToHM(gtHSNonValidees)}</div>
     </div>` : ''}
     ${gtNuit > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
       <div class="meta">Heures de nuit</div><div style="font-size:18px;font-weight:800;color:#9d8fff;">${minToHM(gtNuit)}</div>
