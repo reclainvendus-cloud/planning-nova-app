@@ -1908,7 +1908,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.68.0';
+const APP_VERSION = '1.68.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1925,6 +1925,7 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.68.1', items: ['Export récap paie : correction de l\'affichage de la liste des employés (texte en majuscules/petite taille par erreur, héritait du style des libellés de champs) — utilise maintenant le même style de case à cocher que le reste de l\'appli'] },
   { v: '1.68.0', items: ['Récap paie : nouveau bouton "📊 Exporter" — génère un export Excel (.xlsx) mis en forme (en-têtes colorés, alternance de lignes, couleurs vert/rouge/orange selon les écarts) et/ou un CSV brut pour la comptabilité, avec les mêmes filtres et la même période que ceux affichés à l\'écran', 'Export Excel : choix du contenu — un onglet détaillé par employé, un tableau de synthèse condensé (une ligne par employé), ou les deux dans le même classeur', 'Export Excel : sélection des employés à inclure (tout cocher/décocher rapide)', 'Export Excel : une feuille "Résumé" avec les totaux globaux de la période (heures, nuit, heures sup validées/non validées, primes, découchages, paniers, et un décompte par type de congé réellement configuré dans l\'appli) ; le même récapitulatif est repris en bas de chaque onglet employé'] },
   { v: '1.67.0', items: ['Récap paie : nouveau badge "Heures sup" par employé — 🔒 "validées" avec le montant réellement réglé si un règlement existe pour le mois de fin de période (Compteur & modulation), sinon ⚠️ "non validées" avec l\'écart contrat de la période, pour bien distinguer aux yeux de la compta ce qui est définitif de ce qui peut encore bouger', 'Récap paie : ajout de "HS validées" et "HS non validées" dans le résumé global en haut de page'] },
   { v: '1.66.1', items: ['Compteur & modulation : les champs de saisie des règlements (individuel et clôture mensuelle) utilisent maintenant heures + minutes séparées, comme partout ailleurs dans l\'appli, au lieu de décimales en centièmes d\'heure'] },
@@ -6533,8 +6534,8 @@ function ouvrirExportRecapModal() {
   }
   const list = document.getElementById('exp-employes-list');
   list.innerHTML = _dernierRecapExport.donneesExport.map(d => `
-    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-      <input type="checkbox" class="exp-emp-chk" value="${d.emp.id}" checked>${d.emp.nom} ${d.emp.prenom}
+    <label class="checkbox-row" style="margin-bottom:0;">
+      <input type="checkbox" class="exp-emp-chk" value="${d.emp.id}" checked><span>${d.emp.nom} ${d.emp.prenom}</span>
     </label>
   `).join('');
   document.getElementById('exp-status').textContent = '';
