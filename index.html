@@ -668,6 +668,10 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
             <label style="visibility:hidden;">_</label>
             <button class="btn btn-secondary btn-sm" onclick="window.print()">🖨️ Imprimer</button>
           </div>
+          <div class="form-group" style="margin:0;">
+            <label style="visibility:hidden;">_</label>
+            <button class="btn btn-secondary btn-sm" onclick="ouvrirExportRecapModal()">📊 Exporter</button>
+          </div>
         </div>
         <div id="rp-summary" style="margin:18px 0;"></div>
         <div id="rp-cols-bar" style="display:flex;flex-wrap:wrap;gap:4px 14px;margin-bottom:14px;padding:10px 12px;background:var(--surface2);border-radius:var(--radius-sm);font-size:12px;"></div>
@@ -1552,6 +1556,44 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
   </div>
 </div>
 
+<!-- ===== MODAL EXPORT RÉCAP PAIE (Excel / CSV) ===== -->
+<div class="modal-overlay" id="modal-export-recap">
+  <div class="modal" style="width:560px;max-width:92vw;">
+    <button class="modal-close" onclick="closeModal('modal-export-recap')">✕</button>
+    <h2>📊 Exporter le récap paie</h2>
+    <div class="hint" style="margin-bottom:14px;">Utilise la période et les filtres actuellement affichés dans le Récap paie.</div>
+    <div class="form-group">
+      <label>Format</label>
+      <select id="exp-format">
+        <option value="xlsx">Excel (.xlsx)</option>
+        <option value="csv">CSV</option>
+        <option value="both">Excel + CSV</option>
+      </select>
+    </div>
+    <div class="form-group" id="exp-contenu-wrap">
+      <label>Contenu du classeur Excel</label>
+      <select id="exp-contenu">
+        <option value="onglets">Un onglet détaillé par employé</option>
+        <option value="synthese">Tableau condensé (synthèse, une ligne par employé)</option>
+        <option value="both" selected>Les deux (synthèse + un onglet par employé)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Employés à inclure</label>
+      <div style="display:flex;gap:10px;margin-bottom:6px;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="expToggleTousEmployes(true)">Tout cocher</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="expToggleTousEmployes(false)">Tout décocher</button>
+      </div>
+      <div id="exp-employes-list" style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;padding:8px;background:var(--surface2);border-radius:var(--radius-sm);"></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:8px;align-items:center;">
+      <button class="btn btn-primary" onclick="genererExportRecap()">⬇️ Générer</button>
+      <button class="btn btn-secondary" onclick="closeModal('modal-export-recap')">Annuler</button>
+      <span id="exp-status" style="font-size:12px;color:var(--text-dim);"></span>
+    </div>
+  </div>
+</div>
+
 <!-- ===== MODAL RÈGLEMENT HEURES SUP (individuel) ===== -->
 <div class="modal-overlay" id="modal-reglement-hs">
   <div class="modal" style="width:480px;">
@@ -1857,6 +1899,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 
 <script>
 // ===================================================
@@ -1865,7 +1908,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.67.0';
+const APP_VERSION = '1.68.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1882,6 +1925,7 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.68.0', items: ['Récap paie : nouveau bouton "📊 Exporter" — génère un export Excel (.xlsx) mis en forme (en-têtes colorés, alternance de lignes, couleurs vert/rouge/orange selon les écarts) et/ou un CSV brut pour la comptabilité, avec les mêmes filtres et la même période que ceux affichés à l\'écran', 'Export Excel : choix du contenu — un onglet détaillé par employé, un tableau de synthèse condensé (une ligne par employé), ou les deux dans le même classeur', 'Export Excel : sélection des employés à inclure (tout cocher/décocher rapide)', 'Export Excel : une feuille "Résumé" avec les totaux globaux de la période (heures, nuit, heures sup validées/non validées, primes, découchages, paniers, et un décompte par type de congé réellement configuré dans l\'appli) ; le même récapitulatif est repris en bas de chaque onglet employé'] },
   { v: '1.67.0', items: ['Récap paie : nouveau badge "Heures sup" par employé — 🔒 "validées" avec le montant réellement réglé si un règlement existe pour le mois de fin de période (Compteur & modulation), sinon ⚠️ "non validées" avec l\'écart contrat de la période, pour bien distinguer aux yeux de la compta ce qui est définitif de ce qui peut encore bouger', 'Récap paie : ajout de "HS validées" et "HS non validées" dans le résumé global en haut de page'] },
   { v: '1.66.1', items: ['Compteur & modulation : les champs de saisie des règlements (individuel et clôture mensuelle) utilisent maintenant heures + minutes séparées, comme partout ailleurs dans l\'appli, au lieu de décimales en centièmes d\'heure'] },
   { v: '1.66.0', items: ['Compteur & modulation : nouveau système de règlement des heures sup — bouton "Régler" par employé (solde positif uniquement) qui enregistre un règlement daté et verrouillé, déduit définitivement du compteur ; les heures non réglées restent dans le compteur pour le mois suivant', 'Nouvel écran "Clôture mensuelle" (bouton dédié) pour régler plusieurs employés d\'un coup, montant pré-rempli avec le solde actuel de chacun et ajustable ligne par ligne', 'Un règlement déjà enregistré est verrouillé contre les modifications accidentelles — un bouton "Déverrouiller" explicite permet de corriger si besoin', 'Fiche employé : le solde initial du compteur reste inchangé par les règlements, qui sont désormais tracés séparément dans un journal dédié'] },
@@ -6255,6 +6299,7 @@ function validerReglement() {
 // ----- Clôture mensuelle (règlements groupés) -----
 let _clmCartes = [];
 let _dernieresCartesCompteur = [];
+let _dernierRecapExport = null;
 function ouvrirClotureMensuelle(cartes) {
   _clmCartes = cartes.filter(c => c.total > 0);
   if (!_clmCartes.length) { notify('Aucun employé avec un solde positif à régler', 'warning'); return; }
@@ -6477,6 +6522,268 @@ function calculerCompteurModulation() {
   });
 }
 
+// ===================================================
+// EXPORT COMPTABILITÉ (Excel stylé via ExcelJS + CSV) — réutilise _dernierRecapExport, capturé au
+// dernier calcul du Récap paie (mêmes filtres, mêmes chiffres qu'à l'écran).
+// ===================================================
+function ouvrirExportRecapModal() {
+  if (!_dernierRecapExport || !_dernierRecapExport.donneesExport.length) {
+    notify('Calcule d\'abord un récap paie avant d\'exporter', 'warning');
+    return;
+  }
+  const list = document.getElementById('exp-employes-list');
+  list.innerHTML = _dernierRecapExport.donneesExport.map(d => `
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
+      <input type="checkbox" class="exp-emp-chk" value="${d.emp.id}" checked>${d.emp.nom} ${d.emp.prenom}
+    </label>
+  `).join('');
+  document.getElementById('exp-status').textContent = '';
+  openModal('modal-export-recap');
+}
+function expToggleTousEmployes(v) {
+  document.querySelectorAll('.exp-emp-chk').forEach(chk => chk.checked = v);
+}
+
+function formatDateFR(d) { return d.toLocaleDateString('fr-FR'); }
+function nomFichierPeriode() {
+  const { debut, fin } = _dernierRecapExport;
+  return `recap-paie_${dateKey(debut)}_au_${dateKey(fin)}`;
+}
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function genererExportRecap() {
+  const statusEl = document.getElementById('exp-status');
+  const format = document.getElementById('exp-format').value;
+  const contenu = document.getElementById('exp-contenu').value;
+  const empIdsChoisis = [...document.querySelectorAll('.exp-emp-chk:checked')].map(chk => chk.value);
+  if (!empIdsChoisis.length) { notify('Sélectionne au moins un employé', 'warning'); return; }
+  const donnees = _dernierRecapExport.donneesExport.filter(d => empIdsChoisis.includes(d.emp.id));
+
+  statusEl.textContent = 'Génération en cours…';
+  try {
+    if (format === 'xlsx' || format === 'both') {
+      const buffer = await construireClasseurExcel(donnees, contenu);
+      downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), nomFichierPeriode() + '.xlsx');
+    }
+    if (format === 'csv' || format === 'both') {
+      downloadBlob(new Blob(['\uFEFF' + construireCSV(donnees)], { type: 'text/csv;charset=utf-8' }), nomFichierPeriode() + '.csv');
+    }
+    statusEl.textContent = 'Export généré ✓';
+    setTimeout(() => closeModal('modal-export-recap'), 800);
+  } catch (e) {
+    console.error('Export récap:', e);
+    statusEl.textContent = 'Erreur lors de la génération — réessaie.';
+  }
+}
+
+// ----- CSV : une ligne par jour × employé, format brut pour import comptable -----
+function construireCSV(donnees) {
+  const sep = ';'; // Excel FR ouvre correctement avec le point-virgule
+  const DOW = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+  const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lignesCsv = [['Employé','Contrat/sem','Jour','Date','Planifié','Pointé net','Écart planning','Nuit','Panier (€)','Primes (€)','Découchage','Congé'].map(esc).join(sep)];
+  donnees.forEach(d => {
+    d.lignes.filter(l => l.type === 'jour').forEach(l => {
+      lignesCsv.push([
+        `${d.emp.nom} ${d.emp.prenom}`, (d.contratMin / 60).toFixed(2),
+        DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}/${l.d.getFullYear()}`,
+        l.planMin ? minToHM(l.planMin) : '', l.pointeMin ? minToHM(l.pointeMin) : '',
+        l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '') + minToHM(l.ecartMin) : '',
+        l.nuitMin ? minToHM(l.nuitMin) : '', l.panierJour ? l.panierJour.toFixed(2) : '',
+        l.primesJour ? l.primesJour.toFixed(2) : '', l.decouchageJour ? 'Oui' : '', l.congeLabel || '',
+      ].map(esc).join(sep));
+    });
+  });
+  return lignesCsv.join('\r\n');
+}
+
+// ----- Excel stylé (ExcelJS) -----
+const XLS_COULEURS = {
+  entete: 'FF2C3E67', enteteTxt: 'FFFFFFFF',
+  semaine: 'FF1E2A47', semaineTxt: 'FFE8ECF7',
+  vert: 'FFDFF5E3', vertTxt: 'FF1B7A38',
+  rouge: 'FFFCE3E3', rougeTxt: 'FFB0272C',
+  orange: 'FFFFF1D6', orangeTxt: 'FFB4750D',
+  ligneAlt: 'FFF5F7FB', bordure: 'FFD8DEEA',
+};
+function xlsFill(argb) { return { type: 'pattern', pattern: 'solid', fgColor: { argb } }; }
+function xlsBordureFine() {
+  const style = { style: 'thin', color: { argb: XLS_COULEURS.bordure } };
+  return { top: style, bottom: style, left: style, right: style };
+}
+
+async function construireClasseurExcel(donnees, contenu) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Planning Nova';
+  wb.created = new Date();
+  const { debut, fin } = _dernierRecapExport;
+  const DOW = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+
+  // ---------- Feuille Résumé (toujours présente) ----------
+  const wsResume = wb.addWorksheet('Résumé');
+  wsResume.columns = [{ width: 32 }, { width: 20 }];
+  wsResume.mergeCells('A1:B1');
+  wsResume.getCell('A1').value = `Récap paie — du ${formatDateFR(debut)} au ${formatDateFR(fin)}`;
+  wsResume.getCell('A1').font = { bold: true, size: 14, color: { argb: XLS_COULEURS.enteteTxt } };
+  wsResume.getCell('A1').fill = xlsFill(XLS_COULEURS.entete);
+  wsResume.getRow(1).height = 26;
+  wsResume.getCell('A1').alignment = { vertical: 'middle' };
+
+  const g = _dernierRecapExport;
+  const congesTotal = {};
+  donnees.forEach(d => Object.entries(d.congesParType).forEach(([k, v]) => { congesTotal[k] = (congesTotal[k] || 0) + v; }));
+
+  const lignesResume = [
+    ['Heures planifiées', minToHM(g.gtPlannifie)],
+    ['Heures pointées (nettes)', g.gtPointe ? minToHM(g.gtPointe) : '—'],
+    ['Écart vs planning', g.gtPointe ? (g.gtPointe >= g.gtPlannifie ? '+' : '') + minToHM(g.gtPointe - g.gtPlannifie) : '—'],
+    ['Heures de nuit', minToHM(g.gtNuit)],
+    ['🔒 Heures sup validées (réglées)', g.gtHSValidees ? '+' + minToHM(g.gtHSValidees) : '—'],
+    ['⚠️ Heures sup non validées', g.gtHSNonValidees ? '+' + minToHM(g.gtHSNonValidees) : '—'],
+    ['Primes', g.gtPrimes ? g.gtPrimes.toFixed(2) + ' €' : '—'],
+    ['Découchages', g.gtDecouchage || '—'],
+    ['Paniers', g.gtPanier ? g.gtPanier.toFixed(2) + ' €' : '—'],
+    ...Object.entries(congesTotal).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
+  ];
+  let r = 3;
+  wsResume.getCell(`A${r}`).value = 'Indicateur'; wsResume.getCell(`B${r}`).value = 'Valeur';
+  ['A','B'].forEach(col => { wsResume.getCell(`${col}${r}`).font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } }; wsResume.getCell(`${col}${r}`).fill = xlsFill(XLS_COULEURS.semaine); });
+  r++;
+  lignesResume.forEach(([label, val], i) => {
+    wsResume.getCell(`A${r}`).value = label;
+    wsResume.getCell(`B${r}`).value = val;
+    if (i % 2 === 1) { ['A','B'].forEach(col => wsResume.getCell(`${col}${r}`).fill = xlsFill(XLS_COULEURS.ligneAlt)); }
+    ['A','B'].forEach(col => wsResume.getCell(`${col}${r}`).border = xlsBordureFine());
+    r++;
+  });
+
+  // ---------- Feuille Synthèse (une ligne par employé) ----------
+  if (contenu === 'synthese' || contenu === 'both') {
+    const wsSyn = wb.addWorksheet('Synthèse employés');
+    const typesConge = Object.keys(congesTotal);
+    const entetes = ['Nom', 'Prénom', 'Contrat/sem', 'Planifié', 'Pointé net', 'Écart planning', 'Écart contrat', 'Statut HS', 'Heures sup', 'Nuit', 'Primes (€)', 'Découchages', 'Paniers (€)', ...typesConge.map(t => `Congé: ${t}`)];
+    wsSyn.columns = entetes.map((h, i) => ({ width: i < 2 ? 16 : 15 }));
+    const headerRow = wsSyn.addRow(entetes);
+    headerRow.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } }; cell.fill = xlsFill(XLS_COULEURS.entete); cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center', vertical: 'middle' }; });
+    headerRow.height = 20;
+
+    donnees.forEach((d, i) => {
+      const hsValidees = d.reglementRecap ? d.reglementRecap.montantMin : null;
+      const hsNonValidees = !d.reglementRecap && d.empSemainesComptees > 0 && d.empEcartContrat > 0 ? d.empEcartContrat : null;
+      const row = wsSyn.addRow([
+        d.emp.nom, d.emp.prenom, (d.contratMin / 60).toFixed(2) + ' h',
+        minToHM(d.empPlannifie), d.empPointe ? minToHM(d.empPointe) : '—',
+        d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '') + minToHM(d.ecartTotal) : '—',
+        d.empSemainesComptees > 0 ? (d.empEcartContrat >= 0 ? '+' : '') + minToHM(d.empEcartContrat) : '—',
+        d.reglementRecap ? 'Validée' : (hsNonValidees ? 'Non validée' : '—'),
+        hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—'),
+        d.empNuit ? minToHM(d.empNuit) : '—',
+        d.empPrimes ? d.empPrimes.toFixed(2) : '—',
+        d.empDecouchage || '—',
+        d.empPanier ? d.empPanier.toFixed(2) : '—',
+        ...typesConge.map(t => d.congesParType[t] || '—'),
+      ]);
+      row.eachCell((cell, colNumber) => {
+        cell.border = xlsBordureFine();
+        cell.alignment = { horizontal: colNumber <= 2 ? 'left' : 'center' };
+        if (i % 2 === 1) cell.fill = xlsFill(XLS_COULEURS.ligneAlt);
+      });
+      // Colore la cellule "Statut HS" et "Heures sup"
+      const statutCell = row.getCell(8), montantCell = row.getCell(9);
+      if (d.reglementRecap) { statutCell.fill = xlsFill(XLS_COULEURS.vert); statutCell.font = { color: { argb: XLS_COULEURS.vertTxt }, bold: true }; montantCell.font = { color: { argb: XLS_COULEURS.vertTxt }, bold: true }; }
+      else if (hsNonValidees) { statutCell.fill = xlsFill(XLS_COULEURS.orange); statutCell.font = { color: { argb: XLS_COULEURS.orangeTxt }, bold: true }; montantCell.font = { color: { argb: XLS_COULEURS.orangeTxt }, bold: true }; }
+      // Écart planning / écart contrat : vert si positif, rouge si négatif
+      [row.getCell(6), row.getCell(7)].forEach(cell => {
+        if (typeof cell.value === 'string' && cell.value.startsWith('+')) { cell.font = { color: { argb: XLS_COULEURS.vertTxt } }; }
+        else if (typeof cell.value === 'string' && cell.value.startsWith('-')) { cell.font = { color: { argb: XLS_COULEURS.rougeTxt } }; }
+      });
+    });
+    wsSyn.autoFilter = { from: 'A1', to: `${String.fromCharCode(65 + entetes.length - 1)}1` };
+    wsSyn.views = [{ state: 'frozen', ySplit: 1 }];
+  }
+
+  // ---------- Un onglet détaillé par employé ----------
+  if (contenu === 'onglets' || contenu === 'both') {
+    donnees.forEach(d => {
+      const nomOnglet = `${d.emp.nom} ${d.emp.prenom}`.slice(0, 31).replace(/[\\/*?:[\]]/g, ' ');
+      const ws = wb.addWorksheet(nomOnglet || d.emp.id);
+      ws.columns = [{ width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 20 }];
+
+      ws.mergeCells('A1:I1');
+      ws.getCell('A1').value = `${d.emp.nom} ${d.emp.prenom} — du ${formatDateFR(debut)} au ${formatDateFR(fin)}`;
+      ws.getCell('A1').font = { bold: true, size: 13, color: { argb: XLS_COULEURS.enteteTxt } };
+      ws.getCell('A1').fill = xlsFill(XLS_COULEURS.entete);
+      ws.getRow(1).height = 24;
+      ws.getCell('A1').alignment = { vertical: 'middle' };
+
+      const entetes = ['Jour', 'Date', 'Planifié', 'Pointé net', 'Écart planning', 'Nuit', 'Panier (€)', 'Primes (€)', 'Congé'];
+      const headerRow = ws.addRow(entetes);
+      headerRow.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } }; cell.fill = xlsFill(XLS_COULEURS.entete); cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' }; });
+
+      let i = 0;
+      d.lignes.forEach(l => {
+        if (l.type === 'jour') {
+          const row = ws.addRow([
+            DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}`,
+            l.planMin ? minToHM(l.planMin) : '—', l.pointeMin ? minToHM(l.pointeMin) : '—',
+            l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '') + minToHM(l.ecartMin) : '—',
+            l.nuitMin ? minToHM(l.nuitMin) : '—', l.panierJour ? l.panierJour.toFixed(2) : '—',
+            l.primesJour ? l.primesJour.toFixed(2) : '—', l.congeLabel || '',
+          ]);
+          row.eachCell(cell => { cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' }; if (i % 2 === 1) cell.fill = xlsFill(XLS_COULEURS.ligneAlt); });
+          const ecartCell = row.getCell(5);
+          if (l.ecartMin !== null) ecartCell.font = { color: { argb: l.ecartMin >= 0 ? XLS_COULEURS.vertTxt : XLS_COULEURS.rougeTxt } };
+          i++;
+        } else if (l.type === 'week') {
+          const row = ws.addRow([`Semaine ${l.label}`, '', minToHM(l.weekPlan), l.weekPt ? minToHM(l.weekPt) : '—', '', l.weekNuit ? minToHM(l.weekNuit) : '—', '', '', '']);
+          row.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.semaineTxt } }; cell.fill = xlsFill(XLS_COULEURS.semaine); cell.border = xlsBordureFine(); });
+          ws.mergeCells(`A${row.number}:B${row.number}`);
+        }
+      });
+
+      // Récapitulatif en bas de CE rapport employé
+      const hsValidees = d.reglementRecap ? d.reglementRecap.montantMin : null;
+      const hsNonValidees = !d.reglementRecap && d.empSemainesComptees > 0 && d.empEcartContrat > 0 ? d.empEcartContrat : null;
+      let rr = ws.rowCount + 2;
+      ws.mergeCells(`A${rr}:B${rr}`);
+      ws.getCell(`A${rr}`).value = 'Récapitulatif';
+      ws.getCell(`A${rr}`).font = { bold: true, size: 12, color: { argb: XLS_COULEURS.enteteTxt } };
+      ws.getCell(`A${rr}`).fill = xlsFill(XLS_COULEURS.entete);
+      rr++;
+      const recapLignes = [
+        ['Total planifié', minToHM(d.empPlannifie)],
+        ['Total pointé (net)', d.empPointe ? minToHM(d.empPointe) : '—'],
+        ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '') + minToHM(d.ecartTotal) : '—'],
+        ['Écart contrat', d.empSemainesComptees > 0 ? (d.empEcartContrat >= 0 ? '+' : '') + minToHM(d.empEcartContrat) : '—'],
+        [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non validées', hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—')],
+        ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
+        ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
+        ['Découchages', d.empDecouchage || '—'],
+        ['Paniers', d.empPanier ? d.empPanier.toFixed(2) + ' €' : '—'],
+        ...Object.entries(d.congesParType).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
+      ];
+      recapLignes.forEach(([label, val], idx) => {
+        ws.mergeCells(`A${rr}:B${rr}`);
+        ws.getCell(`A${rr}`).value = label;
+        ws.getCell(`C${rr}`).value = val;
+        ws.getCell(`C${rr}`).font = { bold: true };
+        if (idx % 2 === 1) { ['A','C'].forEach(col => ws.getCell(`${col}${rr}`).fill = xlsFill(XLS_COULEURS.ligneAlt)); }
+        ['A','C'].forEach(col => ws.getCell(`${col}${rr}`).border = xlsBordureFine());
+        rr++;
+      });
+      ws.views = [{ state: 'frozen', ySplit: 2 }];
+    });
+  }
+
+  return await wb.xlsx.writeBuffer();
+}
+
 function calculerRecapPaie() {
   const { debut, fin } = rpGetBornes();
   if (!debut || !fin || isNaN(debut) || isNaN(fin)) { notify('Période invalide', 'warning'); return; }
@@ -6526,6 +6833,11 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
   // Calcule les totaux globaux pour le résumé
   let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPrimes = 0, gtDecouchage = 0, gtHSValidees = 0, gtHSNonValidees = 0;
+
+  // Capture des données par employé pour l'export Excel/CSV (mêmes chiffres que l'écran, aucun
+  // second calcul en parallèle qui risquerait de diverger — voir exportRecapPaie()).
+  const donneesExport = [];
+  const colonnesActives = RECAP_COLONNES.filter(c => colPrefs[c.id]);
 
   const tablesHtml = emps.map(emp => {
     const contratMin = Math.round((emp.contratH || 35) * 60);
@@ -6690,7 +7002,6 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     const modeTitre = mode => ({ auto: 'Validé automatiquement (dans la tolérance)', reel: 'Validé par l\'admin sur l\'heure pointée', planning: 'Validé par l\'admin sur l\'heure planning', manuel: 'Heure saisie manuellement par l\'admin' }[mode] || '');
     const heureAttente = statut => statut === 'attente' ? '<span style="color:var(--warning);font-size:10px;">attente</span>' : '—';
 
-    const colonnesActives = RECAP_COLONNES.filter(c => colPrefs[c.id]);
     const nbColsFixes = 3; // Jour + Horaires + Planifié
     const totalCols = nbColsFixes + colonnesActives.length;
 
@@ -6778,6 +7089,20 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       badgeHS = `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Pas encore réglé dans Compteur & modulation — ce montant peut encore évoluer">⚠️ Heures sup non validées +${minToHM(empEcartContrat)}</span>`;
     }
 
+    // Décompte des jours de congé par type (noms de tâches réellement configurés dans l'appli —
+    // voir Bibliothèque de tâches — pas de liste figée) pour le récapitulatif de l'export.
+    const congesParType = {};
+    lignes.filter(l => l.type === 'jour' && l.congeLabel).forEach(l => {
+      congesParType[l.congeLabel] = (congesParType[l.congeLabel] || 0) + 1;
+    });
+
+    donneesExport.push({
+      emp, lignes, contratMin,
+      empPlannifie, empPointe, empNuit, empPanier, empPrimes, empDecouchage,
+      empEcartContrat, empSemainesComptees, ecartTotal,
+      reglementRecap, congesParType,
+    });
+
     return `<div style="margin-bottom:28px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
         <div style="font-size:16px;font-weight:800;">${emp.prenom} ${emp.nom}</div>
@@ -6804,6 +7129,11 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       </div>
     </div>`;
   });
+
+  // Rend les données capturées disponibles pour l'export Excel/CSV (voir exportRecapPaie()) —
+  // toujours en phase avec ce qui vient d'être affiché, y compris les congés par type et le
+  // détail global (heures sup validées/non validées calculées juste après).
+  _dernierRecapExport = { donneesExport, debut, fin, colonnesActives, gtPlannifie, gtPointe, gtNuit, gtPanier, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees };
 
   // Résumé global
   document.getElementById('rp-summary').innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px;">
