@@ -1950,7 +1950,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.69.1';
+const APP_VERSION = '1.69.3';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1967,6 +1967,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.69.3', items: [
+    'Correction d\'un affichage incorrect des écarts négatifs (ex: "-19h-54" au lieu de "-18h54") dans l\'export Excel et les emails de récap paie (individuel et groupé) — touchait Écart planning, Écart contrat et les écarts jour par jour quand ils étaient négatifs',
+  ] },
+  { v: '1.69.2', items: [
+    'Récap paie : l\'envoi "Groupé" utilise maintenant le même style tableau clair que l\'envoi individuel (lisible aussi bien sur mobile que sur PC, façon export Excel) au lieu de copier le tableau de bord sombre de l\'appli — avec un résumé global en tête suivi du détail complet de chaque employé',
+  ] },
   { v: '1.69.1', items: [
     'Planning : la date de semaine collante ("Semaine n°X...") est maintenant plus grande, en gras et en couleur accent — nettement plus lisible qu\'avant',
     'Planning (vue Graphique semaine) : les jours rappelés dans les bandeaux de séparation d\'équipe sont désormais alignés exactement sous leur colonne (vraies cellules de grille), au lieu d\'un texte flottant décalé',
@@ -6690,7 +6696,7 @@ function construireCSV(donnees) {
         `${d.emp.nom} ${d.emp.prenom}`, (d.contratMin / 60).toFixed(2),
         DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}/${l.d.getFullYear()}`,
         l.planMin ? minToHM(l.planMin) : '', l.pointeMin ? minToHM(l.pointeMin) : '',
-        l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '') + minToHM(l.ecartMin) : '',
+        l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '',
         l.nuitMin ? minToHM(l.nuitMin) : '', l.panierJour ? l.panierJour.toFixed(2) : '',
         l.primesJour ? l.primesJour.toFixed(2) : '', l.decouchageJour ? 'Oui' : '', l.congeLabel || '',
       ].map(esc).join(sep));
@@ -6738,7 +6744,7 @@ async function construireClasseurExcel(donnees, contenu) {
   const lignesResume = [
     ['Heures planifiées', minToHM(g.gtPlannifie)],
     ['Heures pointées (nettes)', g.gtPointe ? minToHM(g.gtPointe) : '—'],
-    ['Écart vs planning', g.gtPointe ? (g.gtPointe >= g.gtPlannifie ? '+' : '') + minToHM(g.gtPointe - g.gtPlannifie) : '—'],
+    ['Écart vs planning', g.gtPointe ? (g.gtPointe >= g.gtPlannifie ? '+' : '-') + minToHM(Math.abs(g.gtPointe - g.gtPlannifie)) : '—'],
     ['Heures de nuit', minToHM(g.gtNuit)],
     ['🔒 Heures sup validées (réglées)', g.gtHSValidees ? '+' + minToHM(g.gtHSValidees) : '—'],
     ['⚠️ Heures sup non validées', g.gtHSNonValidees ? '+' + minToHM(g.gtHSNonValidees) : '—'],
@@ -6775,8 +6781,8 @@ async function construireClasseurExcel(donnees, contenu) {
       const row = wsSyn.addRow([
         d.emp.nom, d.emp.prenom, (d.contratMin / 60).toFixed(2) + ' h',
         minToHM(d.empPlannifie), d.empPointe ? minToHM(d.empPointe) : '—',
-        d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '') + minToHM(d.ecartTotal) : '—',
-        d.empSemainesComptees > 0 ? (d.empEcartContrat >= 0 ? '+' : '') + minToHM(d.empEcartContrat) : '—',
+        d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '-') + minToHM(Math.abs(d.ecartTotal)) : '—',
+        d.empSemainesComptees > 0 ? (d.empEcartContrat >= 0 ? '+' : '-') + minToHM(Math.abs(d.empEcartContrat)) : '—',
         d.reglementRecap ? 'Validée' : (hsNonValidees ? 'Non validée' : '—'),
         hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—'),
         d.empNuit ? minToHM(d.empNuit) : '—',
@@ -6828,7 +6834,7 @@ async function construireClasseurExcel(donnees, contenu) {
           const row = ws.addRow([
             DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}`,
             l.planMin ? minToHM(l.planMin) : '—', l.pointeMin ? minToHM(l.pointeMin) : '—',
-            l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '') + minToHM(l.ecartMin) : '—',
+            l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '—',
             l.nuitMin ? minToHM(l.nuitMin) : '—', l.panierJour ? l.panierJour.toFixed(2) : '—',
             l.primesJour ? l.primesJour.toFixed(2) : '—', l.congeLabel || '',
           ]);
@@ -6858,8 +6864,8 @@ async function construireClasseurExcel(donnees, contenu) {
       const recapLignes = [
         ['Total planifié', minToHM(d.empPlannifie)],
         ['Total pointé (net)', d.empPointe ? minToHM(d.empPointe) : '—'],
-        ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '') + minToHM(d.ecartTotal) : '—'],
-        ['Écart contrat', d.empSemainesComptees > 0 ? (d.empEcartContrat >= 0 ? '+' : '') + minToHM(d.empEcartContrat) : '—'],
+        ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '-') + minToHM(Math.abs(d.ecartTotal)) : '—'],
+        ['Écart contrat', d.empSemainesComptees > 0 ? (d.empEcartContrat >= 0 ? '+' : '-') + minToHM(Math.abs(d.empEcartContrat)) : '—'],
         [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non validées', hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—')],
         ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
         ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
@@ -9383,7 +9389,10 @@ function emailRecapToutCocher(v) {
 // Construit un email HTML clair et lisible sur smartphone pour UN SEUL employé (fond clair,
 // tableau simple, dans le même esprit que l'onglet employé de l'export Excel) — bien distinct du
 // tableau de bord sombre affiché dans l'appli, pas adapté à un email.
-function construireHTMLRecapEmploye(d, debut, fin) {
+// Construit le FRAGMENT HTML (sans balises document) du récap d'UN employé — tableau clair,
+// réutilisé aussi bien pour un email individuel que pour la section de cet employé dans un envoi
+// groupé (voir construireHTMLRecapFragmentEmploye + construireHTMLRecapGroupe ci-dessous).
+function construireHTMLRecapFragmentEmploye(d, debut, fin) {
   const DOW = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
   const style = {
     entete: 'background:#2C3E67;color:#fff;', semaine: 'background:#1E2A47;color:#E8ECF7;font-weight:700;',
@@ -9396,7 +9405,7 @@ function construireHTMLRecapEmploye(d, debut, fin) {
     if (l.type === 'jour') {
       const fond = i % 2 === 1 ? style.alt : '';
       const ecartCouleur = l.ecartMin === null ? '#888' : (l.ecartMin >= 0 ? style.vert : style.rouge);
-      lignesHtml += `<tr>${td(DOW[l.dow] + ' ' + String(l.d.getDate()).padStart(2,'0') + '/' + String(l.d.getMonth()+1).padStart(2,'0'), fond)}${td(l.planMin ? minToHM(l.planMin) : '—', fond)}${td(l.pointeMin ? minToHM(l.pointeMin) : '—', fond)}${td(l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '') + minToHM(l.ecartMin) : '—', fond + `color:${ecartCouleur};font-weight:600;`)}${td(l.nuitMin ? minToHM(l.nuitMin) : '—', fond)}${td(l.congeLabel || '—', fond)}</tr>`;
+      lignesHtml += `<tr>${td(DOW[l.dow] + ' ' + String(l.d.getDate()).padStart(2,'0') + '/' + String(l.d.getMonth()+1).padStart(2,'0'), fond)}${td(l.planMin ? minToHM(l.planMin) : '—', fond)}${td(l.pointeMin ? minToHM(l.pointeMin) : '—', fond)}${td(l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '—', fond + `color:${ecartCouleur};font-weight:600;`)}${td(l.nuitMin ? minToHM(l.nuitMin) : '—', fond)}${td(l.congeLabel || '—', fond)}</tr>`;
       i++;
     } else if (l.type === 'week') {
       const wd = isoToDate(l.label), wf = addDays(wd, 6);
@@ -9410,7 +9419,7 @@ function construireHTMLRecapEmploye(d, debut, fin) {
   const recapLignes = [
     ['Total planifié', minToHM(d.empPlannifie)],
     ['Total pointé (net)', d.empPointe ? minToHM(d.empPointe) : '—'],
-    ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '') + minToHM(d.ecartTotal) : '—'],
+    ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '-') + minToHM(Math.abs(d.ecartTotal)) : '—'],
     [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non validées', hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—')],
     ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
     ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
@@ -9419,7 +9428,7 @@ function construireHTMLRecapEmploye(d, debut, fin) {
     ...Object.entries(d.congesParType).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
   ];
 
-  return `<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;background:#fff;color:#222;padding:16px;">
+  return `<div style="max-width:600px;margin:0 auto 28px;font-family:Arial,Helvetica,sans-serif;">
     <div style="${style.entete}padding:14px 16px;border-radius:8px 8px 0 0;">
       <div style="font-size:16px;font-weight:700;">${d.emp.prenom} ${d.emp.nom}</div>
       <div style="font-size:12px;opacity:.85;">Récap paie du ${formatDateFR(debut)} au ${formatDateFR(fin)}</div>
@@ -9432,7 +9441,44 @@ function construireHTMLRecapEmploye(d, debut, fin) {
       <tr><td colspan="2" style="${style.entete}padding:8px;font-weight:700;font-size:13px;">Récapitulatif</td></tr>
       ${recapLignes.map(([label, val], idx) => `<tr style="${idx % 2 === 1 ? style.alt : ''}"><td style="padding:6px 8px;border:1px solid #D8DEEA;font-size:13px;">${label}</td><td style="padding:6px 8px;border:1px solid #D8DEEA;font-size:13px;font-weight:700;text-align:right;">${val}</td></tr>`).join('')}
     </table>
-  </body></html>`;
+  </div>`;
+}
+
+function construireHTMLRecapEmploye(d, debut, fin) {
+  return `<!DOCTYPE html><html><body style="background:#fff;color:#222;padding:16px;margin:0;">${construireHTMLRecapFragmentEmploye(d, debut, fin)}</body></html>`;
+}
+
+// Envoi "Groupé" : même style tableau clair que l'individuel (lisible mobile ET PC), avec un
+// récapitulatif global en tête (équivalent de la feuille "Résumé" de l'export Excel), suivi du
+// détail de chaque employé sélectionné — au lieu de copier le tableau de bord sombre de l'appli.
+function construireHTMLRecapGroupe(donnees, debut, fin, g) {
+  const style = { entete: 'background:#2C3E67;color:#fff;', alt: 'background:#F5F7FB;' };
+  const congesTotal = {};
+  donnees.forEach(d => Object.entries(d.congesParType).forEach(([k, v]) => { congesTotal[k] = (congesTotal[k] || 0) + v; }));
+  const lignesResume = [
+    ['Heures planifiées', minToHM(g.gtPlannifie)],
+    ['Heures pointées (nettes)', g.gtPointe ? minToHM(g.gtPointe) : '—'],
+    ['Écart vs planning', g.gtPointe ? (g.gtPointe >= g.gtPlannifie ? '+' : '-') + minToHM(Math.abs(g.gtPointe - g.gtPlannifie)) : '—'],
+    ['Heures de nuit', minToHM(g.gtNuit)],
+    ['🔒 Heures sup validées (réglées)', g.gtHSValidees ? '+' + minToHM(g.gtHSValidees) : '—'],
+    ['⚠️ Heures sup non validées', g.gtHSNonValidees ? '+' + minToHM(g.gtHSNonValidees) : '—'],
+    ['Primes', g.gtPrimes ? g.gtPrimes.toFixed(2) + ' €' : '—'],
+    ['Découchages', g.gtDecouchage || '—'],
+    ['Paniers', g.gtPanier ? g.gtPanier.toFixed(2) + ' €' : '—'],
+    ...Object.entries(congesTotal).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
+  ];
+  const resumeHtml = `<div style="max-width:600px;margin:0 auto 28px;font-family:Arial,Helvetica,sans-serif;">
+    <div style="${style.entete}padding:16px;border-radius:8px 8px 0 0;">
+      <div style="font-size:18px;font-weight:700;">Récap paie — ${db.params.societeNom || 'Planning'}</div>
+      <div style="font-size:12px;opacity:.85;">Du ${formatDateFR(debut)} au ${formatDateFR(fin)} — ${donnees.length} employé${donnees.length > 1 ? 's' : ''}</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;">
+      <tr><td colspan="2" style="${style.entete}padding:8px;font-weight:700;font-size:13px;">Résumé global</td></tr>
+      ${lignesResume.map(([label, val], idx) => `<tr style="${idx % 2 === 1 ? style.alt : ''}"><td style="padding:6px 8px;border:1px solid #D8DEEA;font-size:13px;">${label}</td><td style="padding:6px 8px;border:1px solid #D8DEEA;font-size:13px;font-weight:700;text-align:right;">${val}</td></tr>`).join('')}
+    </table>
+  </div>`;
+  const detailsHtml = donnees.map(d => construireHTMLRecapFragmentEmploye(d, debut, fin)).join('');
+  return `<!DOCTYPE html><html><body style="background:#fff;color:#222;padding:16px;margin:0;">${resumeHtml}${detailsHtml}</body></html>`;
 }
 
 async function envoyerRecap() {
@@ -9459,10 +9505,7 @@ async function envoyerRecap() {
     const email = document.getElementById('er-email').value.trim();
     if (!email) { notify('Saisis un email destinataire', 'warning'); return; }
     status.textContent = 'Envoi…';
-    const recapEl = document.getElementById('recap-content') || document.getElementById('gr-content');
-    const corps = recapEl ? recapEl.innerHTML : '<p>Voir le récap paie dans l\'application.</p>';
-    const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;max-width:800px;margin:20px auto;">
-      <h2 style="color:#1a1d2e;">Récap paie — ${db.params.societeNom || 'Planning'}</h2>${corps}</body></html>`;
+    const html = construireHTMLRecapGroupe(_dernierRecapExport.donneesExport, debut, fin, _dernierRecapExport);
     try {
       await brevoSendEmail({ to: email, subject: `Récap paie — ${db.params.societeNom || 'Planning'}`, html });
       status.textContent = '✅ Envoyé';
