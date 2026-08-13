@@ -1950,7 +1950,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.69.3';
+const APP_VERSION = '1.69.4';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1967,6 +1967,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.69.4', items: [
+    'Email récap paie (individuel et groupé) : correction du décalage de colonnes sur les lignes "Semaine" (les heures de nuit apparaissaient à tort dans la colonne Congé) — un colspan mal dimensionné',
+  ] },
   { v: '1.69.3', items: [
     'Correction d\'un affichage incorrect des écarts négatifs (ex: "-19h-54" au lieu de "-18h54") dans l\'export Excel et les emails de récap paie (individuel et groupé) — touchait Écart planning, Écart contrat et les écarts jour par jour quand ils étaient négatifs',
   ] },
@@ -9410,7 +9413,7 @@ function construireHTMLRecapFragmentEmploye(d, debut, fin) {
     } else if (l.type === 'week') {
       const wd = isoToDate(l.label), wf = addDays(wd, 6);
       const labelSemaine = `Semaine du ${String(wd.getDate()).padStart(2,'0')}/${String(wd.getMonth()+1).padStart(2,'0')} au ${String(wf.getDate()).padStart(2,'0')}/${String(wf.getMonth()+1).padStart(2,'0')}`;
-      lignesHtml += `<tr style="${style.semaine}"><td style="padding:6px 8px;border:1px solid #D8DEEA;font-size:13px;" colspan="2">${labelSemaine}</td>${td(minToHM(l.weekPlan), style.semaine)}${td(l.weekPt ? minToHM(l.weekPt) : '—', style.semaine)}${td('', style.semaine)}${td(l.weekNuit ? minToHM(l.weekNuit) : '—', style.semaine)}</tr>`;
+      lignesHtml += `<tr style="${style.semaine}"><td style="padding:6px 8px;border:1px solid #D8DEEA;font-size:13px;">${labelSemaine}</td>${td(minToHM(l.weekPlan), style.semaine)}${td(l.weekPt ? minToHM(l.weekPt) : '—', style.semaine)}${td('', style.semaine)}${td(l.weekNuit ? minToHM(l.weekNuit) : '—', style.semaine)}${td('', style.semaine)}</tr>`;
     }
   });
 
