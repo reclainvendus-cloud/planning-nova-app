@@ -44,6 +44,17 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); heig
 #logo .badge-new { display:inline-block;margin-top:6px;font-size:9px;font-weight:700;color:var(--warning);
   border:1px solid rgba(245,166,35,.3);background:rgba(245,166,35,.1);padding:2px 6px;border-radius:20px; }
 
+/* Estimation de l'espace Firebase utilisé (voir estimerEspaceFirebase) — jauge discrète en bas du
+   logo, toujours visible quel que soit le menu ouvert. Pas de valeur officielle disponible côté
+   client, donc "estimation" est assumé dans le libellé plutôt que présenté comme un chiffre exact. */
+#sidebar-storage .ss-label { font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--text-dim); display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+#sidebar-storage .ss-refresh { cursor: pointer; opacity: .6; font-size: 10px; }
+#sidebar-storage .ss-refresh:hover { opacity: 1; }
+#sidebar-storage .ss-track { height: 5px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
+#sidebar-storage .ss-fill { height: 100%; border-radius: 3px; transition: width .3s; }
+#sidebar-storage .ss-detail { font-size: 9px; color: var(--text-dim); margin-top: 3px; text-align: center; opacity: .8; }
+
 .nav-section { padding: 14px 14px 6px; font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
   text-transform: uppercase; color: var(--text-dim); }
 .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 16px; margin: 1px 8px;
@@ -428,6 +439,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <div id="sidebar-presence" style="margin-top:8px;font-size:11px;color:var(--text-dim);"></div>
       <div id="sidebar-logout" style="margin-top:4px;"></div>
       <div id="sidebar-version" style="margin-top:8px;font-size:10px;color:var(--text-dim);text-align:center;opacity:.6;"></div>
+      <div id="sidebar-storage" style="margin-top:10px;"></div>
     </div>
 
     <div class="nav-section">Principal</div>
@@ -1950,7 +1962,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.69.4';
+const APP_VERSION = '1.70.2';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1967,6 +1979,15 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.70.2', items: [
+    'Espace Firebase : lit désormais chaque section (data, pointages, audit, appMeta) individuellement au lieu de la racine "/" en une seule fois — une lecture racine peut être bloquée par les règles de sécurité Firebase même quand chaque section prise séparément est lisible normalement, ce qui empêchait la barre de s\'afficher',
+  ] },
+  { v: '1.70.1', items: [
+    'Espace Firebase : la toute première estimation se déclenche automatiquement dès la connexion (au lieu d\'attendre un premier clic manuel) — les rafraîchissements suivants restent manuels via 🔄',
+  ] },
+  { v: '1.70.0', items: [
+    'Nouvelle jauge "Espace Firebase" en bas du menu, toujours visible — estimation (Firebase ne fournit pas de chiffre exact côté navigateur) de l\'espace de stockage utilisé sur les 1 Go du plan gratuit, avec un bouton 🔄 pour ré-estimer à la demande (pas de vérification automatique répétée, pour ne pas consommer de bande passante inutilement)',
+  ] },
   { v: '1.69.4', items: [
     'Email récap paie (individuel et groupé) : correction du décalage de colonnes sur les lignes "Semaine" (les heures de nuit apparaissaient à tort dans la colonne Congé) — un colspan mal dimensionné',
   ] },
@@ -7852,7 +7873,13 @@ function listenConnectionState() {
   fbDb.ref('.info/connected').on('value', snap => {
     const wasConnected = fbConnected;
     updateFirebaseStatus(snap.val() === true, snap.val() === true ? 'Connecté' : 'Déconnecté');
-    if (fbConnected && !wasConnected) { loadFromFirebaseThenListen(); refreshValidationBadge(); }
+    if (fbConnected && !wasConnected) {
+      loadFromFirebaseThenListen();
+      refreshValidationBadge();
+      // Estimation automatique UNE SEULE FOIS (jamais faite avant) — les rafraîchissements
+      // suivants restent manuels via le bouton 🔄 pour ne pas consommer de bande passante inutile.
+      if (!db.params.storageEstimate) estimerEspaceFirebase();
+    }
   });
 }
 
@@ -10815,6 +10842,60 @@ function estVersionValide(v) {
   return typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
 }
 
+// ===================================================
+// ESTIMATION DE L'ESPACE FIREBASE UTILISÉ
+// ===================================================
+// Firebase ne fournit aucune API accessible depuis le navigateur pour connaître l'espace exact
+// utilisé (cette info n'existe que côté console Firebase). On l'ESTIME en récupérant la racine de
+// la base et en mesurant sa taille sérialisée en JSON — fiable à quelques % près, largement
+// suffisant pour surveiller la tendance. Mis en cache dans db.params pour ne pas re-télécharger
+// toute la base à chaque chargement de page (ça consommerait le quota de bande passante mensuel
+// pour rien) — seul un clic sur 🔄 ou un cache de plus de 24h déclenche une nouvelle mesure.
+const FIREBASE_SPARK_LIMITE_OCTETS = 1024 * 1024 * 1024; // 1 Go, plan gratuit
+
+function renderSidebarStorage() {
+  const wrap = document.getElementById('sidebar-storage');
+  if (!wrap) return;
+  const est = db.params?.storageEstimate;
+  if (!est) {
+    wrap.innerHTML = `<div class="ss-label"><span>Espace Firebase</span><span class="ss-refresh" onclick="estimerEspaceFirebase()" title="Estimer maintenant">🔄 estimer</span></div>`;
+    return;
+  }
+  const pct = Math.min(100, (est.bytes / FIREBASE_SPARK_LIMITE_OCTETS) * 100);
+  const mo = (est.bytes / (1024 * 1024)).toFixed(2);
+  const couleur = pct < 50 ? 'var(--success)' : pct < 80 ? 'var(--warning)' : 'var(--danger)';
+  const dateStr = new Date(est.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  wrap.innerHTML = `
+    <div class="ss-label"><span>Espace Firebase (est.)</span><span class="ss-refresh" onclick="estimerEspaceFirebase()" title="Ré-estimer maintenant">🔄</span></div>
+    <div class="ss-track"><div class="ss-fill" style="width:${pct}%;background:${couleur};"></div></div>
+    <div class="ss-detail" title="Estimation approximative basée sur la taille JSON des données — l'espace réel facturé par Firebase peut différer légèrement (métadonnées internes). Mesuré le ${dateStr}.">${mo} Mo / 1024 Mo (${pct.toFixed(1)}%)${est.partiel ? ' ⚠️' : ''}</div>
+  `;
+}
+
+function estimerEspaceFirebase() {
+  const wrap = document.getElementById('sidebar-storage');
+  if (!fbDb) { notify('Connecte Firebase d\'abord pour estimer l\'espace utilisé', 'warning'); return; }
+  if (wrap) wrap.innerHTML = `<div class="ss-label"><span>Espace Firebase</span><span></span></div><div class="ss-detail">Estimation en cours…</div>`;
+  // Lit chaque section connue individuellement plutôt que la racine "/" d'un coup : selon les
+  // règles de sécurité Firebase configurées, une lecture à la racine peut être refusée même quand
+  // chaque section listée ci-dessous est, elle, lisible normalement (c'est ce que le reste de
+  // l'appli fait déjà en continu) — plus robuste, quelle que soit la configuration des règles.
+  const sections = ['data', 'pointages', 'audit', 'appMeta'];
+  Promise.all(sections.map(s => fbDb.ref(s).once('value').then(snap => snap.val()).catch(() => null)))
+    .then(results => {
+      const bytes = results.reduce((total, val) => val ? total + new TextEncoder().encode(JSON.stringify(val)).length : total, 0);
+      const echecs = results.filter(v => v === null).length;
+      db.params.storageEstimate = { bytes, date: new Date().toISOString(), partiel: echecs > 0 };
+      saveDB();
+      renderSidebarStorage();
+      if (echecs > 0) notify(`Estimation partielle : ${echecs}/${sections.length} section(s) illisible(s) (droits Firebase ?)`, 'warning');
+    })
+    .catch(e => {
+      notify('Échec de l\'estimation : ' + e.message, 'danger');
+      renderSidebarStorage();
+    });
+}
+
 function checkAppVersion() {
   if (!fbDb) return;
   fbDb.ref('appMeta/latestVersion').once('value').then(snap => {
@@ -10845,6 +10926,7 @@ initDjTrackEvents();
 initFirebaseConnection();
 checkAdminLoginGate();
 document.querySelectorAll('#sidebar-version').forEach(el => el.textContent = 'v' + APP_VERSION);
+renderSidebarStorage();
 // Laisse le temps à Firebase de se connecter avant de vérifier la version — non bloquant,
 // n'interfère jamais avec le chargement normal de l'appli.
 setTimeout(checkAppVersion, 1500);
