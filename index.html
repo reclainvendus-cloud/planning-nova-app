@@ -143,6 +143,15 @@ label { display: block; font-size: 11px; font-weight: 700; text-transform: upper
 /* ===== PLANNING ===== */
 .week-nav { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
 .week-nav .label { font-family: var(--mono); font-size: 13px; color: var(--text-muted); min-width: 190px; text-align: center; }
+/* Activé via Paramètres > Affichage : garde la barre de semaine (et son numéro ISO) visible en
+   permanence en haut de l'écran pendant le scroll, pour ne jamais perdre de vue quelle semaine on
+   regarde quand la liste des employés dépasse la hauteur visible. */
+.week-nav-fixe {
+  position: sticky; top: -24px; z-index: 20;
+  background: var(--bg); margin: -24px -28px 18px -28px; padding: 16px 28px 4px 28px;
+  border-bottom: 1px solid var(--border);
+}
+#pg-week-num { font-size: 14px; font-weight: 700; color: var(--accent); text-align: center; margin: 4px 0 14px; letter-spacing: .3px; }
 .mode-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; margin-left: auto; }
 .mode-toggle div { padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--text-muted); }
 .mode-toggle div.active { background: rgba(79,124,255,.15); color: var(--accent); }
@@ -237,6 +246,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 .gr-group-title .dot, .grw-row-group-title .dot { display: inline-block; margin-right: 6px; vertical-align: 1px; }
 .grw-row-group-title { padding: 6px 8px; background: var(--surface2); font-size: 11px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .6px; color: var(--text-muted); display: flex; align-items: center; }
+.grw-row-group-dow { justify-content: center; text-align: center; font-weight: 400; text-transform: none; letter-spacing: 0; opacity: .55; }
 .gr-legend .dot3 { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 5px; vertical-align: -1px; }
 
 /* ===== VUE CONGÉS — calendrier annuel (façon ancienne version) ===== */
@@ -461,16 +471,17 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <button class="btn btn-secondary btn-sm" onclick="terminerEditionSemaineType(false)">✕ Annuler</button>
         </div>
 
-        <div class="week-nav">
-          <button class="btn btn-secondary btn-sm" onclick="changeWeek(-1)">◀</button>
-          <div class="label" id="pg-week-label"></div>
-          <button class="btn btn-secondary btn-sm" onclick="changeWeek(1)">▶</button>
-          <button class="btn btn-secondary btn-sm" onclick="goToday()">Aujourd'hui</button>
-          <button class="btn btn-secondary btn-sm" id="pg-lock-btn" onclick="toggleVerrouSemaine()" style="font-size:16px;padding:4px 10px;" title=""></button>
-          <button class="btn btn-secondary btn-sm" onclick="window.print()">🖨️ Imprimer</button>
-          <button class="btn btn-secondary btn-sm" onclick="openCopyWeekModal()">📋 Copier la semaine</button>
-          <div class="mode-toggle">
-            <div id="mode-btn-edition" onclick="setPlanningMode('edition')">Édition</div>
+        <div id="pg-week-nav-wrap">
+          <div class="week-nav">
+            <button class="btn btn-secondary btn-sm" onclick="changeWeek(-1)">◀</button>
+            <div class="label" id="pg-week-label"></div>
+            <button class="btn btn-secondary btn-sm" onclick="changeWeek(1)">▶</button>
+            <button class="btn btn-secondary btn-sm" onclick="goToday()">Aujourd'hui</button>
+            <button class="btn btn-secondary btn-sm" id="pg-lock-btn" onclick="toggleVerrouSemaine()" style="font-size:16px;padding:4px 10px;" title=""></button>
+            <button class="btn btn-secondary btn-sm" onclick="window.print()">🖨️ Imprimer</button>
+            <button class="btn btn-secondary btn-sm" onclick="openCopyWeekModal()">📋 Copier la semaine</button>
+            <div class="mode-toggle">
+              <div id="mode-btn-edition" onclick="setPlanningMode('edition')">Édition</div>
             <div id="mode-btn-lecture" onclick="setPlanningMode('lecture')">Lecture</div>
             <div class="active" id="mode-btn-graphique" onclick="setPlanningMode('graphique')">Graphique</div>
             <div id="mode-btn-individuel" onclick="setPlanningMode('individuel')">Individuel</div>
@@ -479,6 +490,8 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <div class="mode-toggle" id="mode-toggle-semainetype" style="margin-left:10px;background:rgba(157,143,255,.12);border:1px solid rgba(157,143,255,.35);">
             <div id="mode-btn-semainetype" onclick="setPlanningMode('semainetype')" style="color:#c3b8ff;">🗓️ Semaine type</div>
           </div>
+          </div>
+          <div id="pg-week-num"></div>
         </div>
 
         <div class="pg-wrap" id="pg-edition-wrap"><table class="pg" id="pg-table"></table></div>
@@ -866,6 +879,9 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
             <textarea id="pa-signature" rows="3" style="width:100%;font-family:inherit;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);padding:9px 12px;"></textarea>
           </div>
           <button class="btn btn-primary btn-sm" onclick="saveParamGeneral()">💾 Enregistrer</button>
+
+          <div class="section-label" style="margin-top:20px;">🖥️ Affichage</div>
+          <label class="checkbox-row"><input type="checkbox" id="pa-planning-semaine-fixe" onchange="saveParamGeneral(); applyPlanningWeekBarFixe();"><span>Toujours garder la date de la semaine visible en haut de l'écran dans le Planning (utile en scrollant avec beaucoup d'employés)</span></label>
 
           <div class="section-label" style="margin-top:20px;">📌 Note d'information</div>
           <div class="hint" style="margin-bottom:10px;">S'affiche une fois à chaque admin (à la connexion) tant qu'il ne l'a pas fermée — pratique pour signaler une nouveauté ou un rappel ponctuel. Laisse vide pour ne rien afficher.</div>
@@ -1539,16 +1555,33 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 
 <!-- ===== MODAL EMAIL RÉCAP PAIE ===== -->
 <div class="modal-overlay" id="modal-email-recap">
-  <div class="modal" style="width:520px;">
+  <div class="modal" style="width:660px;max-height:90vh;overflow-y:auto;">
     <button class="modal-close" onclick="closeModal('modal-email-recap')">✕</button>
     <h2>✉️ Envoyer le récap paie</h2>
-    <div class="hint" style="margin-bottom:14px;">Envoie le récap de la période actuellement affichée.</div>
+    <div class="hint" style="margin-bottom:14px;">Période actuellement affichée — <span id="email-recap-periode-label"></span></div>
     <div class="form-group">
-      <label>Destinataire</label>
-      <input type="email" id="er-email" list="er-email-list" placeholder="destinataire@exemple.com ou choisir un employé">
-      <datalist id="er-email-list"></datalist>
+      <label>Type d'envoi</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <label class="checkbox-row"><input type="radio" name="er-type" id="er-type-individuel" checked onchange="renderEmailRecapDestinataires()"><span>Individuel (chaque employé reçoit uniquement SON récap)</span></label>
+        <label class="checkbox-row"><input type="radio" name="er-type" id="er-type-groupe" onchange="renderEmailRecapDestinataires()"><span>Groupé (un destinataire reçoit le récap complet affiché, ex: comptable)</span></label>
+      </div>
     </div>
-    <div style="display:flex;gap:10px;margin-top:4px;align-items:center;">
+    <div id="er-individuel-section">
+      <div class="section-label">Destinataires (récap individuel)</div>
+      <div class="hint" style="margin-bottom:8px;">Employés sans email renseigné sont indisponibles.</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <button class="btn btn-secondary btn-sm" onclick="emailRecapToutCocher(true)">Tout cocher</button>
+        <button class="btn btn-secondary btn-sm" onclick="emailRecapToutCocher(false)">Tout décocher</button>
+      </div>
+      <div id="er-destinataires-list" style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:10px;"></div>
+    </div>
+    <div id="er-groupe-section" style="display:none;">
+      <div class="form-group">
+        <label>Destinataire</label>
+        <input type="email" id="er-email" placeholder="destinataire@exemple.com">
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:16px;align-items:center;">
       <button class="btn btn-primary" onclick="envoyerRecap()">✉️ Envoyer</button>
       <button class="btn btn-secondary" onclick="closeModal('modal-email-recap')">Annuler</button>
       <span id="er-status" style="font-size:12px;color:var(--text-dim);"></span>
@@ -1830,6 +1863,15 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <input type="number" id="em-solde-initial" step="0.25" value="0" style="max-width:160px;">
       <div class="hint">Heures déjà accumulées (+) ou dues (−) avant l'utilisation de l'appli — ex: 12.5 pour +12h30. Ce solde s'ajoute au cumul calculé automatiquement dans Compteur & modulation.</div>
     </div>
+    <div class="form-group">
+      <label>Date de début de contrat</label>
+      <input type="date" id="em-date-debut-contrat" style="max-width:200px;">
+      <div class="hint">Si renseignée, le Compteur & modulation ne compte jamais une semaine antérieure à cette date comme un déficit — utile si le contrat démarre en cours de semaine.</div>
+    </div>
+    <div class="form-group">
+      <label>Téléphone</label>
+      <input type="tel" id="em-telephone" placeholder="06 12 34 56 78">
+    </div>
 
     <div class="section-label">Production chaud / froid <span style="font-weight:400;text-transform:none;color:var(--text-dim);">(utilisé par le calcul de capacité Distribution)</span></div>
     <div class="form-row">
@@ -1908,7 +1950,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.68.2';
+const APP_VERSION = '1.69.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1925,6 +1967,17 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.69.1', items: [
+    'Planning : la date de semaine collante ("Semaine n°X...") est maintenant plus grande, en gras et en couleur accent — nettement plus lisible qu\'avant',
+    'Planning (vue Graphique semaine) : les jours rappelés dans les bandeaux de séparation d\'équipe sont désormais alignés exactement sous leur colonne (vraies cellules de grille), au lieu d\'un texte flottant décalé',
+  ] },
+  { v: '1.69.0', items: [
+    'Récap paie : refonte complète de l\'envoi par email — nouveau choix "Individuel" (chaque employé reçoit désormais UNIQUEMENT son propre récap, dans un email clair et lisible sur smartphone façon tableau, corrige le bug où tout le monde recevait les données de tout le monde) ou "Groupé" (un destinataire unique reçoit le récap complet affiché, ex: comptable) ; liste à cocher des employés au lieu du champ texte',
+    'Fiche employé : nouveau champ "Date de début de contrat" — le Compteur & modulation ignore désormais toute semaine antérieure à la première semaine complète suivant cette date, pour ne plus afficher à tort un déficit quand un contrat démarre en cours de semaine',
+    'Fiche employé : nouveau champ "Téléphone"',
+    'Paramètres > Affichage : nouvelle option pour garder la date de la semaine (avec son numéro) visible en permanence en haut de l\'écran du Planning pendant le scroll, utile avec beaucoup d\'employés',
+    'Planning (vue Graphique semaine) : rappel discret des jours de la semaine dans chaque bandeau de séparation d\'équipe, pour ne plus les perdre de vue en scrollant',
+  ] },
   { v: '1.68.2', items: ['Export récap paie (Excel) : les lignes "Semaine" affichaient une date technique brute (ex: "Semaine 2026-08-03") au lieu d\'une plage de dates lisible comme à l\'écran — corrigé en "Semaine du 03/08 au 09/08/2026"'] },
   { v: '1.68.1', items: ['Export récap paie : correction de l\'affichage de la liste des employés (texte en majuscules/petite taille par erreur, héritait du style des libellés de champs) — utilise maintenant le même style de case à cocher que le reste de l\'appli'] },
   { v: '1.68.0', items: ['Récap paie : nouveau bouton "📊 Exporter" — génère un export Excel (.xlsx) mis en forme (en-têtes colorés, alternance de lignes, couleurs vert/rouge/orange selon les écarts) et/ou un CSV brut pour la comptabilité, avec les mêmes filtres et la même période que ceux affichés à l\'écran', 'Export Excel : choix du contenu — un onglet détaillé par employé, un tableau de synthèse condensé (une ligne par employé), ou les deux dans le même classeur', 'Export Excel : sélection des employés à inclure (tout cocher/décocher rapide)', 'Export Excel : une feuille "Résumé" avec les totaux globaux de la période (heures, nuit, heures sup validées/non validées, primes, découchages, paniers, et un décompte par type de congé réellement configuré dans l\'appli) ; le même récapitulatif est repris en bas de chaque onglet employé'] },
@@ -3087,9 +3140,19 @@ function formatDayLabel(d) {
   return `${DOW[d.getDay()]} ${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`;
 }
 
+function applyPlanningWeekBarFixe() {
+  const wrap = document.getElementById('pg-week-nav-wrap');
+  if (!wrap) return;
+  wrap.classList.toggle('week-nav-fixe', !!db.params.planningSemaineFixe);
+}
+
 function renderPlanning() {
+  applyPlanningWeekBarFixe();
   renderPlanningQualiteAlertWidget('planning-qualite-alert-banner', pgWeekMonday);
   document.getElementById('pg-week-label').textContent = formatWeekLabel(pgWeekMonday);
+  const dimanche = addDays(pgWeekMonday, 6);
+  const noSem = getISOWeekNumber(pgWeekMonday);
+  document.getElementById('pg-week-num').textContent = `Semaine n°${noSem} de Lun ${String(pgWeekMonday.getDate()).padStart(2,'0')}/${String(pgWeekMonday.getMonth()+1).padStart(2,'0')} à Dim ${String(dimanche.getDate()).padStart(2,'0')}/${String(dimanche.getMonth()+1).padStart(2,'0')}/${dimanche.getFullYear()}`;
   renderVerrouSemaineBtn();
   document.getElementById('pg-edition-wrap').style.display = pgMode === 'edition' ? 'block' : 'none';
   document.getElementById('pg-lecture-wrap').style.display = pgMode === 'lecture' ? 'block' : 'none';
@@ -3541,9 +3604,16 @@ function renderGraphiqueSemaine() {
   const groupes = getEmployesGroupesParEquipe(true);
   let row = 2;
   groupes.forEach(groupe => {
-    cells += `<div class="grw-row-group-title" style="grid-row:${row};grid-column:1 / -1;">
+    // Bandeau de séparation d'équipe : une cellule de grille par colonne (nom + 7 jours +
+    // semaine), toutes avec le même fond, pour que le rappel des jours tombe exactement à
+    // l'aplomb des colonnes concernées — pas un simple texte flottant à droite.
+    cells += `<div class="grw-row-group-title" style="grid-row:${row};grid-column:1;">
       <span class="dot" style="background:${groupe.equipe?.color || '#888'};width:8px;height:8px;"></span>${groupe.equipe?.nom || 'Sans équipe'}
     </div>`;
+    days.forEach((d, j) => {
+      cells += `<div class="grw-row-group-title grw-row-group-dow" style="grid-row:${row};grid-column:${j+2};">${DOW[j]} ${d.getDate()}/${d.getMonth()+1}</div>`;
+    });
+    cells += `<div class="grw-row-group-title" style="grid-row:${row};grid-column:9;"></div>`;
     row++;
     groupe.employes.forEach(emp => {
       const joursCongeRemp = getJoursCongeAvecRemplacement(emp.id, days);
@@ -4604,6 +4674,7 @@ function openEmployeModal() {
   document.getElementById('em-pin').value = '1234';
   document.getElementById('em-equipe').value = '';
   document.getElementById('em-email').value = '';
+  document.getElementById('em-telephone').value = '';
   document.getElementById('em-repos-hebdo').value = '0';
   renderObjectifsJoursInputs([7,7,7,7,7,7,7]);
   document.getElementById('em-contrat-h').value = 35;
@@ -4614,6 +4685,7 @@ function openEmployeModal() {
   document.getElementById('em-prod-chaud').value = 1000;
   document.getElementById('em-prod-froid').value = 1000;
   document.getElementById('em-solde-initial').value = 0;
+  document.getElementById('em-date-debut-contrat').value = '';
   document.getElementById('btn-delete-employe').style.display = 'none';
   openModal('modal-employe');
 }
@@ -4629,6 +4701,7 @@ function editEmploye(id) {
   document.getElementById('em-pin').value = e.pin || '';
   document.getElementById('em-equipe').value = e.equipeId || '';
   document.getElementById('em-email').value = e.email || '';
+  document.getElementById('em-telephone').value = e.telephone || '';
   document.getElementById('em-repos-hebdo').value = String(e.reposHebdo ?? 0);
   renderObjectifsJoursInputs(e.objectifsJours || [7,7,7,7,7,7,7]);
   const contratVal = e.contratH || 35;
@@ -4641,6 +4714,7 @@ function editEmploye(id) {
   document.getElementById('em-prod-chaud').value = e.prodChaud || 0;
   document.getElementById('em-prod-froid').value = e.prodFroid || 0;
   document.getElementById('em-solde-initial').value = e.soldeInitial ?? 0;
+  document.getElementById('em-date-debut-contrat').value = e.dateDebutContrat || '';
   document.getElementById('btn-delete-employe').style.display = 'inline-flex';
   openModal('modal-employe');
 }
@@ -4655,6 +4729,7 @@ function saveEmploye() {
     pin: document.getElementById('em-pin').value.trim(),
     equipeId: document.getElementById('em-equipe').value || null,
     email: document.getElementById('em-email').value.trim(),
+    telephone: document.getElementById('em-telephone').value.trim(),
     reposHebdo: parseInt(document.getElementById('em-repos-hebdo').value) || 0,
     objectifsJours: getObjectifsJoursFromForm(),
     contratH: (parseFloat(document.getElementById('em-contrat-h').value) || 0) + (parseFloat(document.getElementById('em-contrat-m').value) || 0) / 60,
@@ -4663,6 +4738,7 @@ function saveEmploye() {
     prodChaud: parseFloat(document.getElementById('em-prod-chaud').value) || 0,
     prodFroid: parseFloat(document.getElementById('em-prod-froid').value) || 0,
     soldeInitial: parseFloat(document.getElementById('em-solde-initial').value) || 0,
+    dateDebutContrat: document.getElementById('em-date-debut-contrat').value || null,
   };
   const idx = db.employes.findIndex(x => x.id === id);
   if (idx >= 0) db.employes[idx] = employe; else db.employes.push(employe);
@@ -6199,9 +6275,18 @@ function getCompteurDepuis() {
 // donc toujours à la première semaine calendaire ENTIÈREMENT postérieure à l'activation.
 function getPremiereSemaineExploitable() {
   if (!db.params.pointageDateDebut) return null;
-  const act = isoToDate(db.params.pointageDateDebut);
-  const lundiAct = getMonday(act);
-  const debutReel = act.getTime() === lundiAct.getTime() ? lundiAct : addDays(lundiAct, 7);
+  return premiereSemaineCompleteApres(db.params.pointageDateDebut);
+}
+
+// Même principe que ci-dessus, généralisé : renvoie la date (YYYY-MM-DD) du lundi de la première
+// semaine calendaire ENTIÈREMENT postérieure à la date donnée — utilisé pour l'activation de la
+// pointeuse comme pour la date de début de contrat d'un employé (ex: contrat démarré un mercredi,
+// cette semaine-là ne doit jamais être comptée comme un déficit partiel).
+function premiereSemaineCompleteApres(dateStr) {
+  if (!dateStr) return null;
+  const d = isoToDate(dateStr);
+  const lundi = getMonday(d);
+  const debutReel = d.getTime() === lundi.getTime() ? lundi : addDays(lundi, 7);
   return dateKey(debutReel);
 }
 
@@ -6431,8 +6516,16 @@ function calculerCompteurModulation() {
       let totalBrut = Math.round((emp.soldeInitial || 0) * 60);
       let semainesComptees = 0;
 
+      // Si l'employé a une date de début de contrat renseignée, aucune semaine antérieure à la
+      // première semaine calendaire ENTIÈREMENT postérieure à cette date n'est comptée — sinon un
+      // contrat démarré en cours de semaine (ex: mercredi) ferait apparaître à tort un déficit sur
+      // les jours d'avant son embauche.
+      const premiereSemEmp = emp.dateDebutContrat ? premiereSemaineCompleteApres(emp.dateDebutContrat) : null;
+      const jourDebutEmp = premiereSemEmp ? isoToDate(premiereSemEmp) : null;
+
       jours.forEach(dk => {
         const d = isoToDate(dk);
+        if (jourDebutEmp && d < jourDebutEmp) return; // avant le début de contrat effectif
         const dayWeekKey = dateKey(getMonday(d));
         if (weekKey !== null && dayWeekKey !== weekKey) {
           if (weekPt > 0) { totalBrut += weekPt - contratMin; semainesComptees++; }
@@ -6444,7 +6537,7 @@ function calculerCompteurModulation() {
       });
       const dernierJour = isoToDate(jours[jours.length - 1]);
       const dernierDimancheSemaine = addDays(getMonday(dernierJour), 6);
-      if (dernierDimancheSemaine <= hier && weekPt > 0) { totalBrut += weekPt - contratMin; semainesComptees++; }
+      if (weekKey !== null && dernierDimancheSemaine <= hier && weekPt > 0) { totalBrut += weekPt - contratMin; semainesComptees++; }
 
       // Le total AFFICHÉ (et utilisé pour "Régler") est net des règlements déjà effectués — un
       // règlement déduit définitivement du compteur, quelles que soient les semaines concernées.
@@ -6452,7 +6545,7 @@ function calculerCompteurModulation() {
       const total = totalBrut - totalRegle;
       const reglementCeMois = getReglementMois(emp.id, moisActuelKey());
 
-      return { emp, total, totalBrut, totalRegle, semainesComptees, contratMin, reglementCeMois };
+      return { emp, total, totalBrut, totalRegle, semainesComptees, contratMin, reglementCeMois, jourDebutEmp };
     });
     _dernieresCartesCompteur = cartes;
 
@@ -6495,6 +6588,7 @@ function calculerCompteurModulation() {
       const couleur = positif ? 'var(--success)' : 'var(--danger)';
       const largeurBarre = Math.min(100, Math.round((Math.abs(c.total) / maxAbs) * 100));
       const infoReglement = c.totalRegle > 0 ? ` · réglé à ce jour ${minToHM(c.totalRegle)}` : '';
+      const infoContrat = c.emp.dateDebutContrat ? ` · contrat depuis le ${new Date(c.emp.dateDebutContrat).toLocaleDateString('fr-FR')}` : '';
       const actionBtn = c.total > 0
         ? (c.reglementCeMois?.verrouille
             ? `<button class="btn btn-secondary btn-sm" style="padding:3px 10px;font-size:11px;" onclick="ouvrirReglementModal('${c.emp.id}', ${c.total})" title="Réglé le ${new Date(c.reglementCeMois.dateReglement).toLocaleDateString('fr-FR')}">🔒 ${minToHM(c.reglementCeMois.montantMin)}</button>`
@@ -6506,7 +6600,7 @@ function calculerCompteurModulation() {
           <div style="width:${largeurBarre}%;background:${couleur};height:100%;"></div>
         </div>
         <div style="min-width:78px;text-align:right;font-size:17px;font-weight:800;color:${couleur};font-family:var(--mono);">${positif ? '+' : '-'}${minToHM(Math.abs(c.total))}</div>
-        <div style="min-width:150px;font-size:11px;color:var(--text-dim);white-space:nowrap;" title="${c.emp.soldeInitial ? `dont solde initial ${c.emp.soldeInitial >= 0 ? '+' : ''}${c.emp.soldeInitial}h` : ''}${infoReglement}">${minToHM(c.contratMin)}/sem · ${c.semainesComptees} sem.${c.emp.soldeInitial ? ' · solde init.' : ''}${infoReglement}</div>
+        <div style="min-width:150px;font-size:11px;color:var(--text-dim);white-space:nowrap;" title="${c.emp.soldeInitial ? `dont solde initial ${c.emp.soldeInitial >= 0 ? '+' : ''}${c.emp.soldeInitial}h` : ''}${infoReglement}${infoContrat}">${minToHM(c.contratMin)}/sem · ${c.semainesComptees} sem.${c.emp.soldeInitial ? ' · solde init.' : ''}${infoReglement}${infoContrat}</div>
         <div style="min-width:90px;text-align:right;">${actionBtn}</div>
       </div>`;
     };
@@ -7514,6 +7608,7 @@ function initParametres() {
   document.getElementById('pa-societe').value = db.params.societeNom || '';
   document.getElementById('pa-signature').value = db.params.emailSignature || '';
   document.getElementById('pa-note-info').value = db.params.appNoteText || '';
+  document.getElementById('pa-planning-semaine-fixe').checked = !!db.params.planningSemaineFixe;
 
   const fb = db.params.firebase || {};
   document.getElementById('pa-fb-apikey').value = fb.apiKey || '';
@@ -7676,6 +7771,7 @@ function corrigerConflitsCongeTravail() {
 function saveParamGeneral() {
   db.params.societeNom = document.getElementById('pa-societe').value.trim();
   db.params.emailSignature = document.getElementById('pa-signature').value;
+  db.params.planningSemaineFixe = document.getElementById('pa-planning-semaine-fixe').checked;
   saveDB();
   notify('Paramètres généraux enregistrés');
 }
@@ -9253,32 +9349,126 @@ async function envoyerPlanning() {
 // --- Récap paie ---
 function openEmailRecapModal() {
   if (!brevoConfigured()) { notify('Configure d\'abord Brevo dans Paramètres > Connexions', 'warning'); return; }
+  if (!_dernierRecapExport || !_dernierRecapExport.donneesExport.length) {
+    notify('Calcule d\'abord un récap paie avant de l\'envoyer', 'warning');
+    return;
+  }
+  const { debut, fin } = _dernierRecapExport;
+  document.getElementById('email-recap-periode-label').textContent = `du ${formatDateFR(debut)} au ${formatDateFR(fin)}`;
   document.getElementById('er-email').value = '';
   document.getElementById('er-status').textContent = '';
-  const list = document.getElementById('er-email-list');
-  const emails = [...new Set(getEmployesTries().filter(e => e.email).map(e => e.email))];
-  list.innerHTML = emails.map(email => {
-    const e = getEmployesTries().find(x => x.email === email);
-    return `<option value="${email}">${e ? e.prenom + ' ' + e.nom : ''}</option>`;
-  }).join('');
+  document.getElementById('er-type-individuel').checked = true;
+  renderEmailRecapDestinataires();
   openModal('modal-email-recap');
 }
 
+function renderEmailRecapDestinataires() {
+  const individuel = document.getElementById('er-type-individuel').checked;
+  document.getElementById('er-individuel-section').style.display = individuel ? '' : 'none';
+  document.getElementById('er-groupe-section').style.display = individuel ? 'none' : '';
+  if (!individuel) return;
+  const wrap = document.getElementById('er-destinataires-list');
+  wrap.innerHTML = _dernierRecapExport.donneesExport.map(d => {
+    const hasEmail = !!d.emp.email;
+    return `<label class="checkbox-row" style="${!hasEmail ? 'opacity:.4;cursor:not-allowed;' : ''}">
+      <input type="checkbox" class="er-emp-cb" data-emp="${d.emp.id}" ${hasEmail ? 'checked' : ''} ${!hasEmail ? 'disabled' : ''}>
+      <span>${d.emp.prenom} ${d.emp.nom}${hasEmail ? ` <span style="color:var(--text-dim);font-size:11px;">(${d.emp.email})</span>` : ' <span style="color:var(--warning);font-size:11px;">sans email</span>'}</span>
+    </label>`;
+  }).join('');
+}
+function emailRecapToutCocher(v) {
+  document.querySelectorAll('.er-emp-cb:not(:disabled)').forEach(cb => cb.checked = v);
+}
+
+// Construit un email HTML clair et lisible sur smartphone pour UN SEUL employé (fond clair,
+// tableau simple, dans le même esprit que l'onglet employé de l'export Excel) — bien distinct du
+// tableau de bord sombre affiché dans l'appli, pas adapté à un email.
+function construireHTMLRecapEmploye(d, debut, fin) {
+  const DOW = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+  const style = {
+    entete: 'background:#2C3E67;color:#fff;', semaine: 'background:#1E2A47;color:#E8ECF7;font-weight:700;',
+    alt: 'background:#F5F7FB;', vert: '#1B7A38', rouge: '#B0272C', orange: '#B4750D',
+  };
+  const td = (v, extra='') => `<td style="padding:6px 8px;border:1px solid #D8DEEA;font-size:13px;${extra}">${v}</td>`;
+  let lignesHtml = '';
+  let i = 0;
+  d.lignes.forEach(l => {
+    if (l.type === 'jour') {
+      const fond = i % 2 === 1 ? style.alt : '';
+      const ecartCouleur = l.ecartMin === null ? '#888' : (l.ecartMin >= 0 ? style.vert : style.rouge);
+      lignesHtml += `<tr>${td(DOW[l.dow] + ' ' + String(l.d.getDate()).padStart(2,'0') + '/' + String(l.d.getMonth()+1).padStart(2,'0'), fond)}${td(l.planMin ? minToHM(l.planMin) : '—', fond)}${td(l.pointeMin ? minToHM(l.pointeMin) : '—', fond)}${td(l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '') + minToHM(l.ecartMin) : '—', fond + `color:${ecartCouleur};font-weight:600;`)}${td(l.nuitMin ? minToHM(l.nuitMin) : '—', fond)}${td(l.congeLabel || '—', fond)}</tr>`;
+      i++;
+    } else if (l.type === 'week') {
+      const wd = isoToDate(l.label), wf = addDays(wd, 6);
+      const labelSemaine = `Semaine du ${String(wd.getDate()).padStart(2,'0')}/${String(wd.getMonth()+1).padStart(2,'0')} au ${String(wf.getDate()).padStart(2,'0')}/${String(wf.getMonth()+1).padStart(2,'0')}`;
+      lignesHtml += `<tr style="${style.semaine}"><td style="padding:6px 8px;border:1px solid #D8DEEA;font-size:13px;" colspan="2">${labelSemaine}</td>${td(minToHM(l.weekPlan), style.semaine)}${td(l.weekPt ? minToHM(l.weekPt) : '—', style.semaine)}${td('', style.semaine)}${td(l.weekNuit ? minToHM(l.weekNuit) : '—', style.semaine)}</tr>`;
+    }
+  });
+
+  const hsValidees = d.reglementRecap ? d.reglementRecap.montantMin : null;
+  const hsNonValidees = !d.reglementRecap && d.empSemainesComptees > 0 && d.empEcartContrat > 0 ? d.empEcartContrat : null;
+  const recapLignes = [
+    ['Total planifié', minToHM(d.empPlannifie)],
+    ['Total pointé (net)', d.empPointe ? minToHM(d.empPointe) : '—'],
+    ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '') + minToHM(d.ecartTotal) : '—'],
+    [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non validées', hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—')],
+    ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
+    ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
+    ['Découchages', d.empDecouchage || '—'],
+    ['Paniers', d.empPanier ? d.empPanier.toFixed(2) + ' €' : '—'],
+    ...Object.entries(d.congesParType).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
+  ];
+
+  return `<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;background:#fff;color:#222;padding:16px;">
+    <div style="${style.entete}padding:14px 16px;border-radius:8px 8px 0 0;">
+      <div style="font-size:16px;font-weight:700;">${d.emp.prenom} ${d.emp.nom}</div>
+      <div style="font-size:12px;opacity:.85;">Récap paie du ${formatDateFR(debut)} au ${formatDateFR(fin)}</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;margin-top:0;">
+      <thead><tr style="${style.entete}">${['Jour','Planifié','Pointé net','Écart','Nuit','Congé'].map(h => `<th style="padding:6px 8px;border:1px solid #D8DEEA;font-size:12px;text-align:left;">${h}</th>`).join('')}</tr></thead>
+      <tbody>${lignesHtml}</tbody>
+    </table>
+    <table style="width:100%;border-collapse:collapse;margin-top:16px;">
+      <tr><td colspan="2" style="${style.entete}padding:8px;font-weight:700;font-size:13px;">Récapitulatif</td></tr>
+      ${recapLignes.map(([label, val], idx) => `<tr style="${idx % 2 === 1 ? style.alt : ''}"><td style="padding:6px 8px;border:1px solid #D8DEEA;font-size:13px;">${label}</td><td style="padding:6px 8px;border:1px solid #D8DEEA;font-size:13px;font-weight:700;text-align:right;">${val}</td></tr>`).join('')}
+    </table>
+  </body></html>`;
+}
+
 async function envoyerRecap() {
-  const email = document.getElementById('er-email').value.trim();
-  if (!email) { notify('Saisis un email destinataire', 'warning'); return; }
   const status = document.getElementById('er-status');
-  status.textContent = 'Envoi…';
-  // Récupère le contenu HTML de la vue Récap
-  const recapEl = document.getElementById('recap-content') || document.getElementById('gr-content');
-  const corps = recapEl ? recapEl.innerHTML : '<p>Voir le récap paie dans l\'application.</p>';
-  const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;max-width:800px;margin:20px auto;">
-    <h2 style="color:#1a1d2e;">Récap paie — ${db.params.societeNom || 'Planning'}</h2>${corps}</body></html>`;
-  try {
-    await brevoSendEmail({ to: email, subject: `Récap paie — ${db.params.societeNom || 'Planning'}`, html });
-    status.textContent = '✅ Envoyé';
-    notify('Récap paie envoyé');
-  } catch(e) { status.textContent = '⚠️ Échec : ' + e.message; }
+  const individuel = document.getElementById('er-type-individuel').checked;
+  const { debut, fin } = _dernierRecapExport;
+
+  if (individuel) {
+    const empIds = [...document.querySelectorAll('.er-emp-cb:checked')].map(cb => cb.dataset.emp);
+    if (!empIds.length) { notify('Sélectionne au moins un destinataire', 'warning'); return; }
+    let ok = 0, echecs = [];
+    for (let i = 0; i < empIds.length; i++) {
+      const d = _dernierRecapExport.donneesExport.find(x => x.emp.id === empIds[i]);
+      if (!d) continue;
+      status.textContent = `Envoi ${i + 1}/${empIds.length}…`;
+      try {
+        await brevoSendEmail({ to: d.emp.email, subject: `Récap paie — ${d.emp.prenom} ${d.emp.nom} — ${db.params.societeNom || 'Planning'}`, html: construireHTMLRecapEmploye(d, debut, fin) });
+        ok++;
+      } catch (e) { echecs.push(`${d.emp.prenom} ${d.emp.nom}`); }
+    }
+    status.textContent = echecs.length ? `⚠️ ${ok} envoyé(s), échec pour : ${echecs.join(', ')}` : `✅ ${ok} récap(s) envoyé(s)`;
+    if (!echecs.length) notify(`${ok} récap(s) individuel(s) envoyé(s)`);
+  } else {
+    const email = document.getElementById('er-email').value.trim();
+    if (!email) { notify('Saisis un email destinataire', 'warning'); return; }
+    status.textContent = 'Envoi…';
+    const recapEl = document.getElementById('recap-content') || document.getElementById('gr-content');
+    const corps = recapEl ? recapEl.innerHTML : '<p>Voir le récap paie dans l\'application.</p>';
+    const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;max-width:800px;margin:20px auto;">
+      <h2 style="color:#1a1d2e;">Récap paie — ${db.params.societeNom || 'Planning'}</h2>${corps}</body></html>`;
+    try {
+      await brevoSendEmail({ to: email, subject: `Récap paie — ${db.params.societeNom || 'Planning'}`, html });
+      status.textContent = '✅ Envoyé';
+      notify('Récap paie envoyé');
+    } catch (e) { status.textContent = '⚠️ Échec : ' + e.message; }
+  }
 }
 
 // --- Congés ---
