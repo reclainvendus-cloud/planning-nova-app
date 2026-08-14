@@ -1038,6 +1038,11 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
             <div id="pa-feries-list" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
           </div>
           <div class="task-card" style="cursor:default;max-width:640px;margin-bottom:16px;">
+            <div class="section-label" style="margin-top:0;">Nettoyage — anciens fériés auto-générés</div>
+            <div class="hint" style="margin-bottom:10px;">Retire du planning les tâches "Férié" posées automatiquement par l'ancien système (avant qu'il ne devienne manuel) — n'affecte jamais un férié que tu as placé toi-même depuis la palette. À usage ponctuel, une seule fois.</div>
+            <button class="btn btn-secondary btn-sm" onclick="purgerAnciensFeriesAuto()">🧹 Purger les anciens fériés auto-générés</button>
+          </div>
+          <div class="task-card" style="cursor:default;max-width:640px;margin-bottom:16px;">
             <div class="section-label" style="margin-top:0;">Majoration jour férié travaillé</div>
             <div class="hint" style="margin-bottom:10px;">Le 1er mai applique toujours +100% (automatique, légal). Pour les autres jours fériés, renseigne ici le taux de ta convention collective — laisse vide pour n'avoir qu'un simple signalement visuel dans le Récap paie, sans calcul automatique.</div>
             <div class="form-group" style="max-width:220px;">
@@ -1971,7 +1976,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.74.0';
+const APP_VERSION = '1.74.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1988,6 +1993,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.74.1', items: [
+    'Paramètres > Congés : nouveau bouton "🧹 Purger les anciens fériés auto-générés" — retire du planning les tâches Férié posées par l\'ancien système automatique (avant qu\'il ne devienne manuel en v1.74.0), sans jamais toucher un férié placé manuellement depuis la palette',
+  ] },
   { v: '1.74.0', items: [
     'Retour en arrière sur la gestion des fériés : suppression complète de l\'automatisation (plus de pose automatique dans le planning) et du circuit de confirmation dédié (alerte tableau de bord, écran de validation, badges "⏳")',
     'La tâche "Férié" se pose désormais manuellement, en glisser-déposé, exactement comme n\'importe quelle autre tâche',
@@ -7942,6 +7950,32 @@ function saveParamMajorationFerie() {
   db.params.majorationFerieAutrePct = v === '' ? null : Math.max(0, parseFloat(v) || 0);
   saveDB();
   notify('Majoration jour férié enregistrée');
+}
+
+// Nettoyage ponctuel : retire uniquement les tâches "Férié" posées par l'ANCIEN système automatique
+// (elles portent toujours un champ confirme, même valant true après une éventuelle validation
+// passée) — un férié placé manuellement depuis la palette (v1.74+) n'a jamais ce champ du tout,
+// donc n'est jamais touché ici, quel que soit son statut confirmé ou non.
+function purgerAnciensFeriesAuto() {
+  if (!confirm('Retirer du planning tous les fériés posés automatiquement par l\'ancien système ? Les fériés que tu as placés toi-même manuellement ne seront pas touchés.')) return;
+  let count = 0;
+  Object.keys(db.planning).forEach(empId => {
+    Object.keys(db.planning[empId]).forEach(dk => {
+      const insts = db.planning[empId][dk] || [];
+      const filtres = insts.filter(i => {
+        const task = db.tasks.find(t => t.id === i.taskId);
+        const estAncienAuto = task?.ferie && i.confirme !== undefined;
+        if (estAncienAuto) count++;
+        return !estAncienAuto;
+      });
+      if (filtres.length !== insts.length) {
+        if (filtres.length) db.planning[empId][dk] = filtres;
+        else delete db.planning[empId][dk];
+      }
+    });
+  });
+  if (count > 0) { saveDB(); renderPlanning(); }
+  notify(count > 0 ? `${count} ancien(s) férié(s) auto-généré(s) supprimé(s)` : 'Aucun ancien férié automatique trouvé — rien à nettoyer');
 }
 
 // ===================================================
