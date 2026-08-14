@@ -1976,7 +1976,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.74.4';
+const APP_VERSION = '1.74.5';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1993,6 +1993,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.74.5', items: [
+    'Correction : si une pause est ajoutée sur la tâche "Férié" (ex: 7h30 avec 30min de pause), le Compteur & modulation et le libellé "Férié (Xh)" comptaient à tort la durée brute (7h30) au lieu de la durée nette (7h00) — la pause est désormais bien déduite partout, cohérent avec "Planifié" qui la déduisait déjà correctement',
+  ] },
   { v: '1.74.4', items: [
     'Récap paie : "Planifié" inclut désormais les heures de férié chômé (comme le total du planning), avec une mention claire "(dont Xh férié)" partout où c\'est affiché — écran, badges, résumé global, export Excel et emails',
     'Récap paie : "Écart planning" est neutralisé du férié chômé (même principe qu\'"Écart contrat") pour ne plus afficher un faux déficit quand un jour férié légitimement chômé fait partie de la période — un repère "(férié neutralisé)" l\'indique clairement',
@@ -6461,7 +6464,7 @@ function getOrCreateTacheFerie() {
 // pointé) déclenche la majoration si le jour est finalement travaillé.
 function calculerFerieMinJour(empId, dk) {
   const insts = (db.planning[empId]?.[dk] || []).filter(i => db.tasks.find(t => t.id === i.taskId)?.ferie);
-  return insts.reduce((s, i) => s + Math.max(0, (i.fin || 0) - (i.debut || 0)), 0);
+  return insts.reduce((s, i) => s + ownDayMinutes(i), 0); // pause éventuelle déduite, cohérent avec "Planifié"
 }
 
 function getPremiereSemaineExploitable() {
@@ -7179,7 +7182,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       // au même titre que le total hebdomadaire du planning, mais toujours clairement distinguée
       // dans l'affichage (label "Férié (Xh)" sur la ligne, jamais mélangée au "pointé").
       const ferieInstJour = congeInsts.find(i => db.tasks.find(t => t.id === i.taskId)?.ferie);
-      const congeFerieMin = ferieInstJour ? Math.max(0, ferieInstJour.fin - ferieInstJour.debut) : 0;
+      const congeFerieMin = ferieInstJour ? ownDayMinutes(ferieInstJour) : 0; // pause éventuelle déduite
       const evts = Object.values(pointagesParAnnee[dk.slice(0,4)]?.[dk]?.[emp.id]?.evenements || {});
 
       // Continuation d'hier (tâche à cheval sur minuit) : sa portion après minuit doit être
