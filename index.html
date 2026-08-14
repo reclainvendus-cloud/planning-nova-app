@@ -1976,7 +1976,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.74.1';
+const APP_VERSION = '1.74.4';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1993,6 +1993,16 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.74.4', items: [
+    'Récap paie : "Planifié" inclut désormais les heures de férié chômé (comme le total du planning), avec une mention claire "(dont Xh férié)" partout où c\'est affiché — écran, badges, résumé global, export Excel et emails',
+    'Récap paie : "Écart planning" est neutralisé du férié chômé (même principe qu\'"Écart contrat") pour ne plus afficher un faux déficit quand un jour férié légitimement chômé fait partie de la période — un repère "(férié neutralisé)" l\'indique clairement',
+  ] },
+  { v: '1.74.3', items: [
+    'Récap paie : la ligne d\'un jour férié affiche maintenant sa durée à côté du libellé (ex: "Férié (8h00)") au lieu du seul mot "Férié" sans aucun chiffre — visible à l\'écran comme dans l\'export Excel et les emails',
+  ] },
+  { v: '1.74.2', items: [
+    'Planning : le total hebdomadaire affiché ("Semaine Xh / contrat") compte désormais les heures de la tâche "Férié", comme n\'importe quelle heure planifiée — jusqu\'ici il était exclu comme un congé classique. Le Récap paie, lui, continue de le distinguer clairement comme chômé (non compté dans le "pointé"), aucun changement de ce côté.',
+  ] },
   { v: '1.74.1', items: [
     'Paramètres > Congés : nouveau bouton "🧹 Purger les anciens fériés auto-générés" — retire du planning les tâches Férié posées par l\'ancien système automatique (avant qu\'il ne devienne manuel en v1.74.0), sans jamais toucher un férié placé manuellement depuis la palette',
   ] },
@@ -3181,12 +3191,18 @@ function postMinuitWorkMinutes(i) {
 function dayTotalMinutes(empId, dk) {
   let total = 0;
   (db.planning[empId]?.[dk] || []).forEach(i => {
-    if (db.tasks.find(t => t.id === i.taskId)?.conge) return; // un congé n'est pas du temps travaillé
+    const task = db.tasks.find(t => t.id === i.taskId);
+    // Un congé n'est pas du temps travaillé... SAUF la tâche "Férié" : elle représente des heures
+    // chômées mais légalement dues, donc comptées dans le total planning affiché (widget "Semaine
+    // Xh / contrat") — comme demandé. Le Récap paie, lui, continue de l'exclure du "pointé" (voir
+    // calculerFerieMinJour / weekPtContrat) : le férié y reste clairement distingué comme chômé.
+    if (task?.conge && !task?.ferie) return;
     total += ownDayMinutes(i);
   });
   const prevDk = dateKey(addDays(isoToDate(dk), -1));
   (db.planning[empId]?.[prevDk] || []).forEach(i => {
-    if (db.tasks.find(t => t.id === i.taskId)?.conge) return;
+    const task = db.tasks.find(t => t.id === i.taskId);
+    if (task?.conge && !task?.ferie) return;
     if (i.crosseMinuit) total += postMinuitWorkMinutes(i);
   });
   return total;
@@ -6840,7 +6856,7 @@ function formatDateFR(d) { return d.toLocaleDateString('fr-FR'); }
 // Libellé uniforme pour la colonne "Congé" d'une ligne jour, réutilisé par le CSV, l'Excel et les
 // emails — priorité au congé posé (explicite), sinon signale un jour férié (travaillé ou non).
 function libelleCongeJour(l) {
-  if (l.congeLabel) return l.congeLabel;
+  if (l.congeLabel) return l.congeLabel + (l.congeFerieMin > 0 ? ` (${minToHM(l.congeFerieMin)})` : '');
   if (l.ferieTravaille) return `🎉 Férié travaillé${l.pctMajoration > 0 ? ` (+${l.pctMajoration}%)` : ''}`;
   if (l.nomFerie) return `🎉 Férié`;
   return '';
@@ -6940,9 +6956,9 @@ async function construireClasseurExcel(donnees, contenu) {
   donnees.forEach(d => Object.entries(d.congesParType).forEach(([k, v]) => { congesTotal[k] = (congesTotal[k] || 0) + v; }));
 
   const lignesResume = [
-    ['Heures planifiées', minToHM(g.gtPlannifie)],
+    ['Heures planifiées', minToHM(g.gtPlannifie) + (g.gtFerieChomeMin ? ` (dont ${minToHM(g.gtFerieChomeMin)} férié)` : '')],
     ['Heures pointées (nettes)', g.gtPointe ? minToHM(g.gtPointe) : '—'],
-    ['Écart vs planning', g.gtPointe ? (g.gtPointe >= g.gtPlannifie ? '+' : '-') + minToHM(Math.abs(g.gtPointe - g.gtPlannifie)) : '—'],
+    ['Écart vs planning', g.gtPointe ? (g.gtPointe >= (g.gtPlannifie - (g.gtFerieChomeMin||0)) ? '+' : '-') + minToHM(Math.abs(g.gtPointe - (g.gtPlannifie - (g.gtFerieChomeMin||0)))) + (g.gtFerieChomeMin ? ' (férié neutralisé)' : '') : '—'],
     ['Heures de nuit', minToHM(g.gtNuit)],
     ['🔒 Heures sup validées (réglées)', g.gtHSValidees ? '+' + minToHM(g.gtHSValidees) : '—'],
     ['⚠️ Heures sup non validées', g.gtHSNonValidees ? '+' + minToHM(g.gtHSNonValidees) : '—'],
@@ -7061,7 +7077,7 @@ async function construireClasseurExcel(donnees, contenu) {
       ws.getCell(`A${rr}`).fill = xlsFill(XLS_COULEURS.entete);
       rr++;
       const recapLignes = [
-        ['Total planifié', minToHM(d.empPlannifie)],
+        ['Total planifié', minToHM(d.empPlannifie) + (d.empFerieChomeMin ? ` (dont ${minToHM(d.empFerieChomeMin)} férié)` : '')],
         ['Total pointé (net)', d.empPointe ? minToHM(d.empPointe) : '—'],
         ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '-') + minToHM(Math.abs(d.ecartTotal)) : '—'],
         ['Écart contrat', d.empSemainesComptees > 0 ? (d.empEcartContrat >= 0 ? '+' : '-') + minToHM(Math.abs(d.empEcartContrat)) : '—'],
@@ -7137,7 +7153,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
   const nowMin = now.getHours() * 60 + now.getMinutes();
 
   // Calcule les totaux globaux pour le résumé
-  let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPrimes = 0, gtDecouchage = 0, gtHSValidees = 0, gtHSNonValidees = 0, gtFerieTravailleJours = 0, gtHeuresMajorees = 0;
+  let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPrimes = 0, gtDecouchage = 0, gtHSValidees = 0, gtHSNonValidees = 0, gtFerieTravailleJours = 0, gtHeuresMajorees = 0, gtFerieChomeMin = 0;
 
   // Capture des données par employé pour l'export Excel/CSV (mêmes chiffres que l'écran, aucun
   // second calcul en parallèle qui risquerait de diverger — voir exportRecapPaie()).
@@ -7146,7 +7162,8 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
   const tablesHtml = emps.map(emp => {
     const contratMin = Math.round((emp.contratH || 35) * 60);
-    let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPrimes = 0, empDecouchage = 0, empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0;
+    let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPrimes = 0, empDecouchage = 0, empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
+    let weekFerieChomeMin = 0;
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekNuit = 0, weekPause = 0;
     const badgeBg = { ok: 'rgba(46,204,113,.12)', under: 'rgba(245,166,35,.12)', over: 'rgba(255,77,106,.12)', empty: 'transparent' };
     const badgeCol = { ok: 'var(--success)', under: 'var(--warning)', over: 'var(--danger)', empty: 'var(--text-dim)' };
@@ -7158,6 +7175,11 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const dow = d.getDay();
       const insts = (db.planning[emp.id]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge).sort((a,b) => a.debut - b.debut);
       const congeInsts = (db.planning[emp.id]?.[dk] || []).filter(i => db.tasks.find(t => t.id === i.taskId)?.conge);
+      // Durée de la tâche "Férié" ce jour-là (si posée) — comptée dans le planifié (voir plus bas),
+      // au même titre que le total hebdomadaire du planning, mais toujours clairement distinguée
+      // dans l'affichage (label "Férié (Xh)" sur la ligne, jamais mélangée au "pointé").
+      const ferieInstJour = congeInsts.find(i => db.tasks.find(t => t.id === i.taskId)?.ferie);
+      const congeFerieMin = ferieInstJour ? Math.max(0, ferieInstJour.fin - ferieInstJour.debut) : 0;
       const evts = Object.values(pointagesParAnnee[dk.slice(0,4)]?.[dk]?.[emp.id]?.evenements || {});
 
       // Continuation d'hier (tâche à cheval sur minuit) : sa portion après minuit doit être
@@ -7180,7 +7202,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         }
       }
 
-      const planMin = insts.reduce((s, i) => s + ownDayMinutes(i), 0) + planMinHier;
+      const planMin = insts.reduce((s, i) => s + ownDayMinutes(i), 0) + planMinHier + congeFerieMin;
       // Répartition symétrique à planMin : la portion de nuit d'AUJOURD'HUI est celle d'avant
       // minuit pour les tâches propres à ce jour, plus la portion après minuit de la continuation
       // d'hier — sinon les heures de nuit d'un service à cheval sur minuit restent toutes
@@ -7259,11 +7281,16 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       if (weekKey !== null && dayWeekKey !== weekKey) {
         const cls = badgeClass(weekPlan, contratMin);
         if (weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
-        lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol });
-        weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekNuit = 0; weekPause = 0;
+        lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol, weekFerieChomeMin });
+        weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0;
       }
       weekKey = dayWeekKey;
       weekPlan += planMin; weekPt += pointeMin; weekNuit += nuitMin; weekPause += pauseJourMin;
+      // Cumule les heures de férié CHÔMÉ (pas travaillé) — sert à neutraliser "Écart planning" plus
+      // bas, sans jamais retirer ces heures de "Planifié" (qui doit bien les inclure, comme demandé).
+      const ferieChomeMinJour = (congeFerieMin > 0 && pointeMin === 0) ? congeFerieMin : 0;
+      weekFerieChomeMin += ferieChomeMinJour;
+      empFerieChomeMin += ferieChomeMinJour;
       // weekPtContrat sert UNIQUEMENT à comparer au contrat (Écart contrat / Heures sup) — jamais
       // affiché tel quel. Un jour férié chômé ou un congé posé isolément (sans rien pointé) ne doit
       // jamais compter comme un déficit. Référence légale : la durée VALIDÉE de la tâche "Férié"
@@ -7295,18 +7322,19 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const heuresMajorees = pctMajoration > 0 ? Math.round(pointeMin * pctMajoration / 100) : 0;
       if (ferieTravaille) { empFerieTravailleJours++; empHeuresMajorees += heuresMajorees; }
 
-      lignes.push({ type: 'jour', dk, d, dow, planMin, pointeMin, ecartMin, nuitMin, panierJour, primesJour, decouchageJour, congeLabel, hasWork, pointeHorsPlanning, embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin, nomFerie, ferieTravaille, pctMajoration, heuresMajorees });
+      lignes.push({ type: 'jour', dk, d, dow, planMin, pointeMin, ecartMin, nuitMin, panierJour, primesJour, decouchageJour, congeLabel, congeFerieMin, hasWork, pointeHorsPlanning, embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin, nomFerie, ferieTravaille, pctMajoration, heuresMajorees });
     });
 
     // Dernier total semaine
     if (weekKey !== null) {
       const cls = badgeClass(weekPlan, contratMin);
       if (weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
-      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol });
+      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol, weekFerieChomeMin });
     }
 
     gtPlannifie += empPlannifie; gtPointe += empPointe; gtNuit += empNuit;
     gtPanier += empPanier; gtPrimes += empPrimes; gtDecouchage += empDecouchage;
+    gtFerieChomeMin += empFerieChomeMin;
     gtFerieTravailleJours += empFerieTravailleJours; gtHeuresMajorees += empHeuresMajorees;
     {
       const moisRecapFinGt = fin.getFullYear() + '-' + String(fin.getMonth() + 1).padStart(2, '0');
@@ -7364,7 +7392,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       if (l.type === 'week') {
         const wd = isoToDate(l.label);
         const wl = `${wd.getDate()}/${wd.getMonth()+1} – ${addDays(wd,6).getDate()}/${addDays(wd,6).getMonth()+1}`;
-        const ecartW = l.weekPt > 0 ? l.weekPt - l.weekPlan : null;
+        const ecartW = l.weekPt > 0 ? l.weekPt - (l.weekPlan - (l.weekFerieChomeMin || 0)) : null;
         // Ligne de total semaine : reprend uniquement Retenue/Écart total/Nuit s'ils sont actifs,
         // le reste des colonnes actives est vide sur cette ligne (peu de sens à sommer des heures).
         const cellulesSemaine = colonnesActives.map(c => {
@@ -7389,7 +7417,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const rowBg = isWE ? 'rgba(255,255,255,.02)' : '';
       if (l.congeLabel) return `<tr style="background:${rowBg};">
         <td style="padding:6px 8px;font-size:12px;color:${isWE ? 'var(--warning)' : 'var(--text-muted)'};">${DOW[l.dow]} ${l.d.getDate()}/${l.d.getMonth()+1}</td>
-        <td colspan="${totalCols - 1}" style="padding:6px 8px;font-size:12px;color:var(--text-muted);font-style:italic;">${l.congeLabel}</td>
+        <td colspan="${totalCols - 1}" style="padding:6px 8px;font-size:12px;color:var(--text-muted);font-style:italic;">${l.congeLabel}${l.congeFerieMin > 0 ? ` <span style="color:var(--warning);font-style:normal;font-weight:600;">(${minToHM(l.congeFerieMin)})</span>` : ''}</td>
       </tr>`;
       if (!l.hasWork) return `<tr style="background:${rowBg};">
         <td style="padding:6px 8px;font-size:12px;color:${l.nomFerie ? 'var(--warning)' : (isWE ? 'var(--warning)' : 'var(--text-dim)')};">${DOW[l.dow]} ${l.d.getDate()}/${l.d.getMonth()+1}</td>
@@ -7403,7 +7431,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       </tr>`;
     }).join('');
 
-    const ecartTotal = empPointe > 0 ? empPointe - empPlannifie : null;
+    // Écart planning neutralisé du férié chômé (pointé jamais concerné, seul le côté "planifié"
+    // de la comparaison est corrigé) — sinon un férié légitimement chômé ferait mécaniquement
+    // apparaître un faux déficit, malgré la case "Planifié" incluant volontairement ces heures.
+    const ecartTotal = empPointe > 0 ? empPointe - (empPlannifie - empFerieChomeMin) : null;
     const clsTot = badgeClass(empPlannifie, contratMin * Math.ceil(jours.length / 7));
 
     // Badge "Heures sup" pour la compta : si un règlement existe pour le mois de fin de la
@@ -7434,16 +7465,16 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       emp, lignes, contratMin,
       empPlannifie, empPointe, empNuit, empPanier, empPrimes, empDecouchage,
       empEcartContrat, empSemainesComptees, ecartTotal,
-      reglementRecap, congesParType, empFerieTravailleJours, empHeuresMajorees,
+      reglementRecap, congesParType, empFerieTravailleJours, empHeuresMajorees, empFerieChomeMin,
     });
 
     return `<div style="margin-bottom:28px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
         <div style="font-size:16px;font-weight:800;">${emp.prenom} ${emp.nom}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <span style="background:rgba(79,124,255,.12);color:var(--accent);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Planifié ${minToHM(empPlannifie)}</span>
+          <span style="background:rgba(79,124,255,.12);color:var(--accent);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="${empFerieChomeMin > 0 ? `dont ${minToHM(empFerieChomeMin)} de férié chômé` : ''}">Planifié ${minToHM(empPlannifie)}${empFerieChomeMin > 0 ? ` <span style="font-weight:400;opacity:.85;">(dont 🎉 ${minToHM(empFerieChomeMin)} férié)</span>` : ''}</span>
           ${empPointe > 0 ? `<span style="background:rgba(46,204,113,.12);color:var(--success);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Retenue ${minToHM(empPointe)}</span>` : ''}
-          ${ecartTotal !== null ? `<span style="background:${ecartTotal >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${ecartTotal >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au planning prévu">Écart planning ${ecartTotal >= 0 ? '+' : ''}${minToHM(Math.abs(ecartTotal))}</span>` : ''}
+          ${ecartTotal !== null ? `<span style="background:${ecartTotal >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${ecartTotal >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au planning prévu${empFerieChomeMin > 0 ? ` — neutralisé de ${minToHM(empFerieChomeMin)} de férié chômé` : ''}">Écart planning ${ecartTotal >= 0 ? '+' : ''}${minToHM(Math.abs(ecartTotal))}${empFerieChomeMin > 0 ? ` <span style="font-weight:400;opacity:.85;">(férié neutralisé)</span>` : ''}</span>` : ''}
           ${empSemainesComptees > 0 ? `<span style="background:${empEcartContrat >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${empEcartContrat >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au contrat de ${minToHM(contratMin)}/sem (${empSemainesComptees} semaine${empSemainesComptees > 1 ? 's' : ''})">Écart contrat ${empEcartContrat >= 0 ? '+' : ''}${minToHM(Math.abs(empEcartContrat))}</span>` : ''}
           ${badgeHS}
           ${badgeFerie}
@@ -7468,18 +7499,19 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
   // Rend les données capturées disponibles pour l'export Excel/CSV (voir exportRecapPaie()) —
   // toujours en phase avec ce qui vient d'être affiché, y compris les congés par type et le
   // détail global (heures sup validées/non validées calculées juste après).
-  _dernierRecapExport = { donneesExport, debut, fin, colonnesActives, gtPlannifie, gtPointe, gtNuit, gtPanier, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees };
+  _dernierRecapExport = { donneesExport, debut, fin, colonnesActives, gtPlannifie, gtPointe, gtNuit, gtPanier, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin };
 
   // Résumé global
   document.getElementById('rp-summary').innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px;">
-    <div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
+    <div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;" title="${gtFerieChomeMin > 0 ? `dont ${minToHM(gtFerieChomeMin)} de férié chômé` : ''}">
       <div class="meta">Planifié</div><div style="font-size:18px;font-weight:800;color:var(--accent);">${minToHM(gtPlannifie)}</div>
+      ${gtFerieChomeMin > 0 ? `<div style="font-size:10px;color:var(--warning);margin-top:2px;">dont 🎉 ${minToHM(gtFerieChomeMin)} férié</div>` : ''}
     </div>
     ${gtPointe > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
       <div class="meta">Pointé</div><div style="font-size:18px;font-weight:800;color:var(--success);">${minToHM(gtPointe)}</div>
     </div>
     <div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
-      <div class="meta">Écart planning</div><div style="font-size:18px;font-weight:800;color:${gtPointe >= gtPlannifie ? 'var(--success)' : 'var(--danger)'};">${gtPointe >= gtPlannifie ? '+' : ''}${minToHM(Math.abs(gtPointe - gtPlannifie))}</div>
+      <div class="meta">Écart planning</div><div style="font-size:18px;font-weight:800;color:${gtPointe >= (gtPlannifie - gtFerieChomeMin) ? 'var(--success)' : 'var(--danger)'};">${gtPointe >= (gtPlannifie - gtFerieChomeMin) ? '+' : ''}${minToHM(Math.abs(gtPointe - (gtPlannifie - gtFerieChomeMin)))}</div>
     </div>` : ''}
     ${gtHSValidees > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;border:1px solid rgba(46,204,113,.3);">
       <div class="meta">🔒 HS validées</div><div style="font-size:18px;font-weight:800;color:var(--success);">+${minToHM(gtHSValidees)}</div>
@@ -9690,7 +9722,7 @@ function construireHTMLRecapFragmentEmploye(d, debut, fin) {
   const hsValidees = d.reglementRecap ? d.reglementRecap.montantMin : null;
   const hsNonValidees = !d.reglementRecap && d.empSemainesComptees > 0 && d.empEcartContrat > 0 ? d.empEcartContrat : null;
   const recapLignes = [
-    ['Total planifié', minToHM(d.empPlannifie)],
+    ['Total planifié', minToHM(d.empPlannifie) + (d.empFerieChomeMin ? ` (dont ${minToHM(d.empFerieChomeMin)} férié)` : '')],
     ['Total pointé (net)', d.empPointe ? minToHM(d.empPointe) : '—'],
     ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '-') + minToHM(Math.abs(d.ecartTotal)) : '—'],
     [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non validées', hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—')],
@@ -9730,9 +9762,9 @@ function construireHTMLRecapGroupe(donnees, debut, fin, g) {
   const congesTotal = {};
   donnees.forEach(d => Object.entries(d.congesParType).forEach(([k, v]) => { congesTotal[k] = (congesTotal[k] || 0) + v; }));
   const lignesResume = [
-    ['Heures planifiées', minToHM(g.gtPlannifie)],
+    ['Heures planifiées', minToHM(g.gtPlannifie) + (g.gtFerieChomeMin ? ` (dont ${minToHM(g.gtFerieChomeMin)} férié)` : '')],
     ['Heures pointées (nettes)', g.gtPointe ? minToHM(g.gtPointe) : '—'],
-    ['Écart vs planning', g.gtPointe ? (g.gtPointe >= g.gtPlannifie ? '+' : '-') + minToHM(Math.abs(g.gtPointe - g.gtPlannifie)) : '—'],
+    ['Écart vs planning', g.gtPointe ? (g.gtPointe >= (g.gtPlannifie - (g.gtFerieChomeMin||0)) ? '+' : '-') + minToHM(Math.abs(g.gtPointe - (g.gtPlannifie - (g.gtFerieChomeMin||0)))) + (g.gtFerieChomeMin ? ' (férié neutralisé)' : '') : '—'],
     ['Heures de nuit', minToHM(g.gtNuit)],
     ['🔒 Heures sup validées (réglées)', g.gtHSValidees ? '+' + minToHM(g.gtHSValidees) : '—'],
     ['⚠️ Heures sup non validées', g.gtHSNonValidees ? '+' + minToHM(g.gtHSNonValidees) : '—'],
