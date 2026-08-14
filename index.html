@@ -1971,7 +1971,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.73.1';
+const APP_VERSION = '1.73.2';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1988,6 +1988,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.73.2', items: [
+    'Correction : la durée par défaut des tâches "Férié" ne se resynchronisait jamais avec l\'objectif d\'heures par jour si celui-ci était modifié après leur création — désormais, tant qu\'un férié n\'a pas été confirmé, sa durée se met à jour automatiquement sur l\'objectif actuel à chaque connexion ; une fois confirmé, elle reste figée comme prévu',
+  ] },
   { v: '1.73.1', items: [
     'Correction : les tâches "Férié" posées automatiquement ne remontent plus dans l\'alerte "Congés en attente de confirmation" du tableau de bord (ce ne sont pas de vraies demandes d\'un employé) — elles restent visibles et gérables directement dans le planning et le calendrier détaillé de chaque employé',
   ] },
@@ -6398,9 +6401,15 @@ function getOrCreateTacheFerie() {
 // ce soit une tâche de travail ou un autre congé). Durée par défaut = objectif du jour, modifiable
 // ensuite (glisser les bords comme une tâche normale) — confirme:false déclenche le badge "⏳ à
 // confirmer" et fait apparaître l'entrée dans l'écran de validation des congés déjà existant.
+// Pose automatiquement la tâche "Férié" pour chaque employé sur chaque jour férié des années
+// données, SEULEMENT s'il a normalement vocation à travailler ce jour de semaine (objectif > 0). Si
+// un autre contenu existe déjà ce jour-là (travail, congé...), on n'y touche jamais. Si la tâche
+// Férié existe déjà mais n'a PAS encore été confirmée par l'admin, sa durée est resynchronisée sur
+// l'objectif actuel à chaque appel (utile si l'objectif est modifié après la création initiale) —
+// dès qu'elle est confirmée, elle devient la source de vérité et n'est plus jamais réécrite.
 function assurerTachesFerie(annees) {
   const tache = getOrCreateTacheFerie();
-  let cree = 0;
+  let cree = 0, misAJour = 0;
   annees.forEach(annee => {
     const feries = getJoursFeries(annee);
     Object.keys(feries).forEach(dk => {
@@ -6411,14 +6420,23 @@ function assurerTachesFerie(annees) {
         if (objectifMin <= 0) return; // ne travaille normalement pas ce jour-là — rien à neutraliser
         if (emp.dateDebutContrat && d < isoToDate(emp.dateDebutContrat)) return; // pas encore en contrat
         if (!db.planning[emp.id]) db.planning[emp.id] = {};
-        if ((db.planning[emp.id][dk] || []).length) return; // jour déjà renseigné, on n'y touche jamais
+        const existant = db.planning[emp.id][dk] || [];
+        const ferieInst = existant.find(i => i.taskId === tache.id);
+        if (existant.length && !ferieInst) return; // autre chose déjà renseigné ce jour-là — jamais touché
+        if (ferieInst) {
+          if (ferieInst.confirme === false && (ferieInst.fin - ferieInst.debut) !== objectifMin) {
+            ferieInst.fin = ferieInst.debut + objectifMin;
+            misAJour++;
+          }
+          return;
+        }
         const debutMin = 480; // 08:00 par défaut, purement indicatif — seule la durée compte pour les calculs
         db.planning[emp.id][dk] = [{ id: uid(), taskId: tache.id, debut: debutMin, fin: debutMin + objectifMin, crosseMinuit: false, confirme: false, tachesRemplacees: [] }];
         cree++;
       });
     });
   });
-  if (cree > 0) { saveDB(); renderPlanning(); }
+  if (cree > 0 || misAJour > 0) { saveDB(); renderPlanning(); }
   return cree;
 }
 
