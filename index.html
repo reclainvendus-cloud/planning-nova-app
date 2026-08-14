@@ -1971,7 +1971,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.72.0';
+const APP_VERSION = '1.73.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1988,6 +1988,15 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.73.1', items: [
+    'Correction : les tâches "Férié" posées automatiquement ne remontent plus dans l\'alerte "Congés en attente de confirmation" du tableau de bord (ce ne sont pas de vraies demandes d\'un employé) — elles restent visibles et gérables directement dans le planning et le calendrier détaillé de chaque employé',
+  ] },
+  { v: '1.73.0', items: [
+    'Nouvelle tâche système "Férié", posée automatiquement dans le planning de chaque employé sur chaque jour férié où il a normalement vocation à travailler (objectif > 0 ce jour de semaine) — durée par défaut = son objectif habituel, modifiable en la redimensionnant comme n\'importe quelle tâche',
+    'La confirmation de cette durée réutilise l\'écran de validation des congés déjà existant (elle y apparaît automatiquement tant qu\'elle n\'a pas été ajustée ou confirmée) — en cas de suppression accidentelle, elle peut être reposée depuis le menu Congés comme un congé classique',
+    'Compteur & modulation et Récap paie utilisent maintenant en priorité la durée VALIDÉE de cette tâche pour neutraliser un férié chômé (au lieu d\'un objectif générique) — conforme à la règle légale : un jour férié compte les heures réellement prévues ce jour précis, pas une moyenne, essentiel pour des horaires irréguliers qui varient d\'une semaine à l\'autre',
+    'Si la tâche "Férié" est remplacée par une vraie tâche de travail (jour finalement travaillé), la majoration se déclenche normalement comme avant',
+  ] },
   { v: '1.72.0', items: [
     'Paramètres > Congés : nouveau taux de majoration pour un jour férié travaillé (hors 1er mai, qui applique toujours automatiquement +100% comme la loi l\'impose) — laisser vide n\'affiche qu\'un signalement visuel, sans calcul automatique',
     'Récap paie : les jours fériés chômés s\'affichent désormais clairement ("🎉 Férié") au lieu d\'un générique "Repos" ; un férié travaillé affiche un badge avec le détail de la majoration au survol',
@@ -2393,6 +2402,9 @@ function loadFromFirebaseThenListen() {
       syncToFirebase();
       checkAdminLoginGate();
     }
+    // Pose automatiquement la tâche "Férié" manquante (année en cours + suivante) pour chaque
+    // employé qui y a normalement vocation — idempotent, ne touche jamais un jour déjà renseigné.
+    assurerTachesFerie([new Date().getFullYear(), new Date().getFullYear() + 1]);
     listenRemoteChanges();
   }).catch(e => console.error('Chargement initial Firebase:', e));
 }
@@ -5149,7 +5161,9 @@ function poserPlageActif() {
 // CONFIRMATION DES CONGÉS — détection, groupement, modal, attestation
 // ===================================================
 
-// Liste à plat de toutes les instances de congé non confirmées (confirme === false)
+// Liste à plat de toutes les instances de congé non confirmées (confirme === false) — exclut
+// volontairement les tâches "Férié" (posées automatiquement par l'appli, pas de vraies demandes
+// d'un employé) : elles se gèrent depuis leur propre repère visuel dans le planning, pas ici.
 function getCongesNonConfirmes() {
   const list = [];
   db.employes.forEach(emp => {
@@ -5157,7 +5171,7 @@ function getCongesNonConfirmes() {
     Object.keys(empPlanning).forEach(dk => {
       (empPlanning[dk] || []).forEach(inst => {
         const task = db.tasks.find(t => t.id === inst.taskId);
-        if (task?.conge && inst.confirme === false) list.push({ emp, dk, inst, task });
+        if (task?.conge && !task?.ferie && inst.confirme === false) list.push({ emp, dk, inst, task });
       });
     });
   });
@@ -6190,6 +6204,20 @@ function renderRecapColsBar() {
 // détaillées jour par jour) et le Compteur & modulation (cumul semaine par semaine vs contrat).
 // Gère les services à cheval sur minuit (fusion avec hier/demain), les pauses, et le hors planning
 // (dépannage). Extrait tel quel du calcul historique du Récap paie — ne pas dupliquer ailleurs.
+// Calcule la durée PLANIFIÉE (prévue) d'un employé pour un jour donné — pendant qu'un férié tombe
+// sur un jour, c'est cette valeur (les heures réellement prévues ce jour précis, pas une moyenne
+// générique) qui doit servir de référence légale pour neutraliser le jour dans le Compteur &
+// modulation et le Récap paie (voir calculerCompteurModulation / renderRecapPaieEnrichi) — un
+// jour férié chômé vaut les heures qui auraient été travaillées CE jour-là, pas 7h par défaut.
+function calculerPlanMinJour(empId, dk, splitSeuil) {
+  const d = isoToDate(dk);
+  const insts = (db.planning[empId]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge);
+  const dkHier = dateKey(addDays(d, -1));
+  const instsHierCross = buildChaineHierCross(empId, dkHier, splitSeuil);
+  const planMinHier = instsHierCross.reduce((s, i) => s + postMinuitWorkMinutes(i), 0);
+  return insts.reduce((s, i) => s + ownDayMinutes(i), 0) + planMinHier;
+}
+
 function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
   const d = isoToDate(dk);
   const insts = (db.planning[empId]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge).sort((a,b) => a.debut - b.debut);
@@ -6337,6 +6365,69 @@ function getCompteurDepuis() {
 // Compteur & modulation (voir calculerCompteurModulation).
 function estJourCongePose(empId, dk) {
   return (db.planning[empId]?.[dk] || []).some(i => db.tasks.find(t => t.id === i.taskId)?.conge);
+}
+
+// ===================================================
+// TÂCHE SYSTÈME "FÉRIÉ"
+// ===================================================
+// Une tâche unique, marquée conge:true (hérite gratuitement de tout le mécanisme de confirmation
+// et de restauration déjà existant pour les congés — écran "à valider", tachesRemplacees...) ET
+// ferie:true (marqueur propre, pour qu'on sache la traiter différemment : lecture de sa durée
+// validée pour neutraliser le Compteur & modulation / Récap paie, et détection de son remplacement
+// par une vraie tâche de travail pour déclencher la majoration).
+const TACHE_FERIE_ID = 'task_systeme_ferie';
+function getOrCreateTacheFerie() {
+  let t = db.tasks.find(t => t.id === TACHE_FERIE_ID || t.ferie === true);
+  if (!t) {
+    t = {
+      id: TACHE_FERIE_ID, nom: 'Férié', abrev: 'Fér.', categorie: null,
+      color: '#f5a623', textColor: '#1a1d2e', dureeH: 0, dureeM: 0, heureDebut: null,
+      joursPrevu: null, suivi: false, sacrifiable: false, panier: 0, panierNuit: 0,
+      decouchage: 0, heuresChaud: 0, heuresFroid: 0, primes: [],
+      conge: true, methodeDecompte: null, repos: false, compteur: false, nuit: false, cycle: null,
+      ferie: true,
+    };
+    db.tasks.push(t);
+  }
+  return t;
+}
+
+// Pose automatiquement la tâche "Férié" pour chaque employé sur chaque jour férié des années
+// données, SEULEMENT s'il a normalement vocation à travailler ce jour de semaine (objectif > 0) ET
+// que rien n'est déjà renseigné ce jour-là (ne touche jamais à un jour déjà géré par l'admin, que
+// ce soit une tâche de travail ou un autre congé). Durée par défaut = objectif du jour, modifiable
+// ensuite (glisser les bords comme une tâche normale) — confirme:false déclenche le badge "⏳ à
+// confirmer" et fait apparaître l'entrée dans l'écran de validation des congés déjà existant.
+function assurerTachesFerie(annees) {
+  const tache = getOrCreateTacheFerie();
+  let cree = 0;
+  annees.forEach(annee => {
+    const feries = getJoursFeries(annee);
+    Object.keys(feries).forEach(dk => {
+      const d = isoToDate(dk);
+      const dayIdx = jsDayToIndex(d.getDay());
+      db.employes.forEach(emp => {
+        const objectifMin = getObjectifJourMin(emp, dayIdx);
+        if (objectifMin <= 0) return; // ne travaille normalement pas ce jour-là — rien à neutraliser
+        if (emp.dateDebutContrat && d < isoToDate(emp.dateDebutContrat)) return; // pas encore en contrat
+        if (!db.planning[emp.id]) db.planning[emp.id] = {};
+        if ((db.planning[emp.id][dk] || []).length) return; // jour déjà renseigné, on n'y touche jamais
+        const debutMin = 480; // 08:00 par défaut, purement indicatif — seule la durée compte pour les calculs
+        db.planning[emp.id][dk] = [{ id: uid(), taskId: tache.id, debut: debutMin, fin: debutMin + objectifMin, crosseMinuit: false, confirme: false, tachesRemplacees: [] }];
+        cree++;
+      });
+    });
+  });
+  if (cree > 0) { saveDB(); renderPlanning(); }
+  return cree;
+}
+
+// Durée VALIDÉE (ou en attente de validation, mais déjà réglée) de la tâche Férié pour un employé
+// un jour donné — référence légale pour neutraliser le compteur : les heures réellement prévues CE
+// jour-là, pas une moyenne générique. Renvoie 0 si la tâche a été supprimée/remplacée.
+function calculerFerieMinJour(empId, dk) {
+  const insts = (db.planning[empId]?.[dk] || []).filter(i => db.tasks.find(t => t.id === i.taskId)?.ferie);
+  return insts.reduce((s, i) => s + Math.max(0, (i.fin || 0) - (i.debut || 0)), 0);
 }
 
 function getPremiereSemaineExploitable() {
@@ -6604,15 +6695,18 @@ function calculerCompteurModulation() {
         if (pointeMin === 0) {
           // Jour férié chômé ou congé posé isolément (même s'il tombe au milieu d'une semaine par
           // ailleurs travaillée) : légalement rémunéré, ne doit jamais compter comme un déficit.
-          // On crédite fictivement l'objectif d'heures habituel de l'employé pour ce jour de
-          // semaine (fiche employé > Contrat), pour neutraliser exactement l'écart que ce jour
-          // aurait sinon créé — s'il n'a jamais vocation à travailler ce jour-là (objectif à 0,
-          // ex: dimanche), rien n'est ajouté, cohérent avec le reste du calcul.
+          // Référence légale : les heures qui étaient RÉELLEMENT PRÉVUES ce jour précis (et non
+          // une moyenne générique) — un jour férié ne vaut pas systématiquement 7h, il vaut ce que
+          // le salarié aurait dû travailler CE jour-là, particulièrement important pour des
+          // horaires irréguliers qui varient d'une semaine à l'autre. On se base donc en priorité
+          // sur le planning réellement posé ce jour (même férié), et seulement à défaut (rien de
+          // planifié du tout) sur l'objectif générique du jour de semaine comme repli raisonnable.
           const estFerie = !!getJoursFeries(d.getFullYear())[dk];
           const estConge = estJourCongePose(emp.id, dk);
           if (estFerie || estConge) {
-            const objectifMin = getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
-            if (objectifMin > 0) { weekPt += objectifMin; jourNeutralise++; }
+            const ferieMinJour = calculerFerieMinJour(emp.id, dk);
+            const creditMin = ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
+            if (creditMin > 0) { weekPt += creditMin; jourNeutralise++; }
           }
         } else {
           weekPt += pointeMin;
@@ -7154,10 +7248,14 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       weekPlan += planMin; weekPt += pointeMin; weekNuit += nuitMin; weekPause += pauseJourMin;
       // weekPtContrat sert UNIQUEMENT à comparer au contrat (Écart contrat / Heures sup) — jamais
       // affiché tel quel. Un jour férié chômé ou un congé posé isolément (sans rien pointé) ne doit
-      // jamais compter comme un déficit : on y crédite fictivement l'objectif d'heures habituel de
-      // l'employé pour ce jour de semaine, cohérent avec la même règle du Compteur & modulation.
+      // jamais compter comme un déficit. Référence légale : la durée VALIDÉE de la tâche "Férié"
+      // (fiche employé > objectif du jour par défaut, ajustable par l'admin sur le planning) plutôt
+      // qu'une moyenne générique — un férié ne vaut pas systématiquement 7h, particulièrement
+      // important pour des horaires irréguliers qui varient d'une semaine à l'autre. Repli sur
+      // l'objectif générique si la tâche a été supprimée sans être remplacée par du travail.
       if (pointeMin === 0 && (!!getJoursFeries(d.getFullYear())[dk] || congeInsts.length > 0)) {
-        weekPtContrat += getObjectifJourMin(emp, jsDayToIndex(dow));
+        const ferieMinJour = calculerFerieMinJour(emp.id, dk);
+        weekPtContrat += ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(dow));
       } else {
         weekPtContrat += pointeMin;
       }
