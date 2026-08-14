@@ -868,6 +868,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 
       <div class="view" id="view-dashboard">
         <div id="dash-conges-alert"></div>
+        <div id="dash-feries-alert"></div>
         <div id="dash-planning-qualite-alert"></div>
         <div id="dash-wrap"></div>
       </div>
@@ -1803,6 +1804,20 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
   </div>
 </div>
 
+<!-- ===== MODAL FÉRIÉS À CONFIRMER ===== -->
+<div class="modal-overlay" id="modal-feries-confirmation">
+  <div class="modal" style="width:640px;max-height:88vh;overflow-y:auto;">
+    <button class="modal-close" onclick="closeModal('modal-feries-confirmation')">✕</button>
+    <h2>🎉 Fériés à confirmer</h2>
+    <div class="hint" style="margin-bottom:14px;">Durée pré-remplie avec l'objectif habituel de chaque employé pour ce jour — ajuste si besoin (ou directement sur le planning en redimensionnant le bloc), puis confirme. Une fois confirmée, la durée sert de référence définitive pour le Compteur & modulation et le Récap paie.</div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+      <button class="btn btn-secondary btn-sm" onclick="confirmerTousFeries()">✅ Confirmer tout aux valeurs affichées</button>
+      <button class="btn btn-secondary btn-sm" onclick="renderFeriesConfirmationList(true)" id="fc-voir-tout-btn">Voir aussi les fériés plus lointains</button>
+    </div>
+    <div id="fc-list"></div>
+  </div>
+</div>
+
 <!-- ===== MODAL MOTIF DE REFUS ===== -->
 <div class="modal-overlay" id="modal-cc-refus">
   <div class="modal" style="width:480px;">
@@ -1971,7 +1986,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.73.2';
+const APP_VERSION = '1.73.5';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1988,6 +2003,18 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.73.5', items: [
+    'Fériés à confirmer : les jours antérieurs à l\'activation de la pointeuse (Paramètres > Pointages) ne sont plus posés ni remontés en alerte — même logique que pour les anomalies de pointage',
+    'Repère "⏳" directement visible sur le bloc de la tâche dans le planning (vues Édition et Graphique semaine) pour tout férié dont la durée n\'a pas encore été confirmée — plus besoin d\'ouvrir le détail du jour pour le repérer',
+  ] },
+  { v: '1.73.4', items: [
+    'Fériés à confirmer : l\'alerte du tableau de bord ne montre plus que les fériés des 30 prochains jours (au lieu de tous ceux de l\'année d\'un coup) — un lien "voir aussi les fériés plus lointains" reste disponible dans la fenêtre de confirmation si besoin',
+    'Confirmation directe sur le planning : un bouton "✓" apparaît désormais sur le bloc d\'une tâche Férié non confirmée (repère "⏳") dans l\'écran journalier — plus besoin de passer par une fenêtre séparée',
+    'Redimensionner ou déplacer manuellement une tâche Férié sur le planning la confirme désormais automatiquement (l\'ajustement fait office de validation)',
+  ] },
+  { v: '1.73.3', items: [
+    'Correction importante : en excluant les fériés de l\'alerte "Congés en attente" (v1.73.1), plus aucun moyen de les confirmer n\'existait — nouvel écran dédié "🎉 Fériés à confirmer" sur le tableau de bord (orange, distinct de l\'alerte congés rouge), avec la durée modifiable directement dans la liste et une confirmation individuelle ou groupée en un clic',
+  ] },
   { v: '1.73.2', items: [
     'Correction : la durée par défaut des tâches "Férié" ne se resynchronisait jamais avec l\'objectif d\'heures par jour si celui-ci était modifié après leur création — désormais, tant qu\'un férié n\'a pas été confirmé, sa durée se met à jour automatiquement sur l\'objectif actuel à chaque connexion ; une fois confirmé, elle reste figée comme prévu',
   ] },
@@ -3353,12 +3380,12 @@ function renderPlanningEdition() {
       const prevCross = (db.planning[emp.id]?.[prevDk2] || []).filter(i => i.crosseMinuit);
       const segs = [
         ...prevCross.map(i => ({ task: db.tasks.find(t => t.id === i.taskId), minutes: i.fin, start: 0, suite: true })),
-        ...insts.map(i => ({ task: db.tasks.find(t => t.id === i.taskId), minutes: ownDayMinutes(i), start: i.debut, suite: false })),
+        ...insts.map(i => ({ task: db.tasks.find(t => t.id === i.taskId), minutes: ownDayMinutes(i), start: i.debut, suite: false, ferieAConfirmer: db.tasks.find(t => t.id === i.taskId)?.ferie && i.confirme === false })),
       ];
       const stack = segs.length ? `<div class="pg-stack">${segs.map(s => {
         const label = s.task?.abrev || s.task?.nom || 'Tâche';
         return `<div class="pg-task-row" style="border-left-color:${s.task?.color || '#888'}">
-          <span class="lbl">${s.suite ? '← ' : minToTime(s.start) + ' '}${label}</span><span class="dur">${minToHM(s.minutes)}</span>
+          <span class="lbl">${s.ferieAConfirmer ? '⏳ ' : ''}${s.suite ? '← ' : minToTime(s.start) + ' '}${label}</span><span class="dur">${minToHM(s.minutes)}</span>
         </div>`;
       }).join('')}</div>` : '';
       return `<td class="pg-day-cell" onclick="openDayDetail('${emp.id}','${dk}')">${badge}${stack}</td>`;
@@ -3468,14 +3495,15 @@ function getDayTaskSegments(empId, dk) {
   prevCross.forEach(x => segs.push({ start: 0, end: x.fin, task: db.tasks.find(t => t.id === x.taskId) }));
   insts.forEach(x => {
     const task = db.tasks.find(t => t.id === x.taskId);
+    const ferieAConfirmer = task?.ferie && x.confirme === false;
     const end = x.crosseMinuit ? 1440 : x.fin;
     if (x.pauseDuree > 0) {
       const pauseStart = x.debut + x.pauseDebut;
       const pauseEnd = pauseStart + x.pauseDuree;
-      if (pauseStart > x.debut) segs.push({ start: x.debut, end: pauseStart, task });
-      if (pauseEnd < end) segs.push({ start: pauseEnd, end, task });
+      if (pauseStart > x.debut) segs.push({ start: x.debut, end: pauseStart, task, ferieAConfirmer });
+      if (pauseEnd < end) segs.push({ start: pauseEnd, end, task, ferieAConfirmer });
     } else {
-      segs.push({ start: x.debut, end, task });
+      segs.push({ start: x.debut, end, task, ferieAConfirmer });
     }
   });
   return segs;
@@ -3580,7 +3608,7 @@ function buildShiftGroups(empId, dk, lo, hi) {
     .filter(s => s.start < hi && s.end > lo)
     .map(s => ({
       start: Math.max(s.start, lo), end: Math.min(s.end, hi), task: s.task,
-      clippedBefore: s.start < lo, clippedAfter: s.end > hi,
+      clippedBefore: s.start < lo, clippedAfter: s.end > hi, ferieAConfirmer: s.ferieAConfirmer,
     }))
     .sort((a, b) => a.start - b.start);
   if (!segs.length) return [];
@@ -3604,7 +3632,7 @@ function buildShiftGroups(empId, dk, lo, hi) {
         prev.end = s.end;
         prev.clippedAfter = s.clippedAfter;
       } else {
-        blocks.push({ task: s.task, start: s.start, end: s.end, clippedBefore: s.clippedBefore, clippedAfter: s.clippedAfter });
+        blocks.push({ task: s.task, start: s.start, end: s.end, clippedBefore: s.clippedBefore, clippedAfter: s.clippedAfter, ferieAConfirmer: s.ferieAConfirmer });
       }
     });
     return {
@@ -3623,8 +3651,8 @@ function renderShiftGroup(group, usedTaskIds, columnPx) {
     const x = idx * w;
     usedTaskIds.push(b.task?.id);
     const pxWidth = (w / 100) * (columnPx || 280);
-    const nomComplet = b.task?.nom || 'Tâche';
-    const abrev = b.task?.abrev || nomComplet;
+    const nomComplet = (b.ferieAConfirmer ? '⏳ ' : '') + (b.task?.nom || 'Tâche');
+    const abrev = (b.ferieAConfirmer ? '⏳' : '') + (b.task?.abrev || b.task?.nom || 'Tâche');
     // Le nom complet passe en priorité ; l'abréviation ne prend le relais que si la place manque
     // vraiment, en estimant la largeur nécessaire au texte plutôt qu'un seuil fixe arbitraire.
     const largeurEstimee = (txt) => txt.length * 6.4 + 14;
@@ -4140,11 +4168,14 @@ function renderTrack() {
       ? `<div class="nom" style="font-size:11px;white-space:nowrap;">${task?.nom || 'Tâche'}${i.crosseMinuit ? ' →' : ''} <span style="opacity:.75;font-weight:400;">${minToTime(i.debut)}–${i.crosseMinuit ? '24:00' : minToTime(i.fin)}</span>${pauseLabel}</div>`
       : `<div class="nom">${task?.nom || 'Tâche'}${i.crosseMinuit ? ' →' : ''}${pauseLabel}</div>
       <div class="hrs">${minToTime(i.debut)} – ${i.crosseMinuit ? '24:00' : minToTime(i.fin)}</div>`;
+    const estFerieAConfirmer = task?.ferie && i.confirme === false;
     html += `<div class="dj-block ${cls}" style="top:${top}px;height:${h}px;background:${task?.color||'#888'};color:${getTextColor(task)};z-index:${zIndex};${compact ? 'padding:2px 8px;' : ''}"
       onmousedown="onBlockMouseDown(event,'${i.id}')">
       <div class="resize top" onmousedown="onResizeMouseDown(event,'${i.id}','top')"></div>
       ${pauseHtml}
+      ${estFerieAConfirmer ? `<div style="position:absolute;top:2px;left:2px;font-size:10px;background:rgba(0,0,0,.25);border-radius:4px;padding:1px 5px;" title="Durée à confirmer">⏳</div>` : ''}
       ${contenu}
+      ${estFerieAConfirmer ? `<div class="del" style="right:24px;" onclick="confirmerFerieInline(event,'${i.id}')" title="Confirmer cette durée">✓</div>` : ''}
       <div class="del" onclick="deleteInstance(event,'${i.id}')" title="Supprimer">✕</div>
       <div class="resize bottom" onmousedown="onResizeMouseDown(event,'${i.id}','bottom')"></div>
     </div>`;
@@ -4308,6 +4339,11 @@ function onDragEnd() {
         selectInstance(dragCtx.instId);
       }
     } else if (dragCtx.moved) {
+      // Redimensionner/déplacer manuellement une tâche Férié équivaut à en valider la durée —
+      // évite d'avoir à repasser par un bouton "Confirmer" séparé après ce geste.
+      const inst = getDayInsts().find(i => i.id === dragCtx.instId);
+      const task = inst ? db.tasks.find(t => t.id === inst.taskId) : null;
+      if (inst && task?.ferie && inst.confirme === false) { inst.confirme = true; refreshCongesAlerts(); }
       saveDB();
       renderPlanning();
     }
@@ -4415,6 +4451,21 @@ function deleteInstance(e, instId) {
   }
   saveDB();
   renderTrack();
+  renderPlanning();
+}
+
+// Confirme directement la durée actuelle d'un férié depuis le planning (glisser-déposer déjà
+// effectué si besoin) — évite de repasser par l'écran dédié "Fériés à confirmer" pour ce cas simple.
+function confirmerFerieInline(e, instId) {
+  e.stopPropagation();
+  const insts = getDayInsts();
+  const inst = insts.find(i => i.id === instId);
+  if (!inst) return;
+  inst.confirme = true;
+  saveDB();
+  notify('Férié confirmé');
+  renderTrack();
+  refreshCongesAlerts();
   renderPlanning();
 }
 
@@ -5232,6 +5283,124 @@ function renderCongesAlertWidget(targetId) {
 function refreshCongesAlerts() {
   renderCongesAlertWidget('dash-conges-alert');
   renderCongesAlertWidget('conges-alert-banner');
+  renderFeriesAlertWidget('dash-feries-alert');
+}
+
+// ===================================================
+// FÉRIÉS À CONFIRMER — écran dédié, séparé de l'alerte congés (pas de vraies demandes d'employés)
+// ===================================================
+// Ne remonte que les fériés PROCHES (30 jours) dans l'alerte du tableau de bord — sinon, avec
+// l'auto-création sur l'année en cours + suivante, les ~11 fériés × tous les employés apparaissent
+// tous d'un coup, illisible. Rien n'est perdu : ceux plus lointains restent en attente et
+// apparaîtront naturellement à l'approche de leur date (le filtre est juste un affichage, la
+// donnée confirme:false ne change pas). Ignore aussi tout férié antérieur à l'activation de la
+// pointeuse (Paramètres > Pointages) — comme pour les anomalies de pointage, ces jours-là n'ont
+// jamais eu vocation à être suivis, pas de fausse alerte à leur sujet.
+function getFeriesNonConfirmes(fenetreJours) {
+  const limite = fenetreJours != null;
+  const aujourdhui = new Date(); aujourdhui.setHours(0,0,0,0);
+  const dateLimite = limite ? addDays(aujourdhui, fenetreJours) : null;
+  const dateActivation = db.params.pointageDateDebut || null;
+  const list = [];
+  db.employes.forEach(emp => {
+    const empPlanning = db.planning[emp.id] || {};
+    Object.keys(empPlanning).forEach(dk => {
+      if (dateActivation && dk < dateActivation) return;
+      if (limite && (isoToDate(dk) > dateLimite)) return;
+      (empPlanning[dk] || []).forEach(inst => {
+        const task = db.tasks.find(t => t.id === inst.taskId);
+        if (task?.ferie && inst.confirme === false) list.push({ emp, dk, inst, task });
+      });
+    });
+  });
+  return list.sort((a, b) => a.dk.localeCompare(b.dk) || a.emp.nom.localeCompare(b.emp.nom, 'fr'));
+}
+
+function renderFeriesAlertWidget(targetId) {
+  const el = document.getElementById(targetId);
+  if (!el) return;
+  const list = getFeriesNonConfirmes(30);
+  if (!list.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="task-card" style="cursor:pointer;border:2px solid var(--warning);background:rgba(245,166,35,.08);margin-bottom:16px;" onclick="openFeriesConfirmationModal()">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="font-size:24px;">🎉</div>
+      <div>
+        <div style="font-weight:800;color:var(--warning);">${list.length} férié${list.length > 1 ? 's' : ''} à confirmer</div>
+        <div style="font-size:13px;color:var(--text-muted);">Durée à valider pour le Compteur & modulation — clique pour traiter</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function openFeriesConfirmationModal() {
+  renderFeriesConfirmationList();
+  openModal('modal-feries-confirmation');
+}
+
+function renderFeriesConfirmationList(voirTout) {
+  const wrap = document.getElementById('fc-list');
+  const list = getFeriesNonConfirmes(voirTout ? null : 30);
+  const btnVoirTout = document.getElementById('fc-voir-tout-btn');
+  if (btnVoirTout) btnVoirTout.style.display = voirTout ? 'none' : '';
+  window._fcList = list;
+  if (!list.length) {
+    wrap.innerHTML = '<div class="empty-state"><div class="ico">✅</div><p>Aucun férié en attente.</p></div>';
+    return;
+  }
+  const feriesParAnnee = {};
+  wrap.innerHTML = list.map((item, idx) => {
+    const d = isoToDate(item.dk);
+    const an = d.getFullYear();
+    if (!feriesParAnnee[an]) feriesParAnnee[an] = getJoursFeries(an);
+    const nomFerie = feriesParAnnee[an][item.dk] || 'Férié';
+    const dureeActuelle = Math.max(0, item.inst.fin - item.inst.debut);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;">
+      <div style="flex:1;">
+        <div style="font-weight:700;">${item.emp.prenom} ${item.emp.nom}</div>
+        <div style="font-size:13px;color:var(--text-muted);">${nomFerie} — ${formatDateFR(d)}</div>
+      </div>
+      <div style="display:flex;gap:4px;align-items:center;">
+        <input type="number" class="fc-h" data-idx="${idx}" min="0" step="1" value="${Math.floor(dureeActuelle / 60)}" style="width:52px;text-align:center;" title="Heures">
+        <span style="color:var(--text-dim);">h</span>
+        <input type="number" class="fc-m" data-idx="${idx}" min="0" max="59" step="5" value="${dureeActuelle % 60}" style="width:52px;text-align:center;" title="Minutes">
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="confirmerFerie(${idx})">✓ Confirmer</button>
+    </div>`;
+  }).join('');
+}
+
+function confirmerFerie(idx) {
+  const item = window._fcList?.[idx];
+  if (!item) return;
+  const h = parseInt(document.querySelector(`.fc-h[data-idx="${idx}"]`).value) || 0;
+  const m = parseInt(document.querySelector(`.fc-m[data-idx="${idx}"]`).value) || 0;
+  item.inst.debut = item.inst.debut ?? 480;
+  item.inst.fin = item.inst.debut + (h * 60 + m);
+  item.inst.confirme = true;
+  saveDB();
+  notify('Férié confirmé');
+  renderFeriesConfirmationList();
+  refreshCongesAlerts();
+  renderPlanning();
+}
+
+function confirmerTousFeries() {
+  const list = window._fcList || getFeriesNonConfirmes(30);
+  if (!list.length) return;
+  list.forEach((item, idx) => {
+    const hEl = document.querySelector(`.fc-h[data-idx="${idx}"]`);
+    const mEl = document.querySelector(`.fc-m[data-idx="${idx}"]`);
+    const h = hEl ? (parseInt(hEl.value) || 0) : Math.floor((item.inst.fin - item.inst.debut) / 60);
+    const m = mEl ? (parseInt(mEl.value) || 0) : (item.inst.fin - item.inst.debut) % 60;
+    item.inst.debut = item.inst.debut ?? 480;
+    item.inst.fin = item.inst.debut + (h * 60 + m);
+    item.inst.confirme = true;
+  });
+  saveDB();
+  notify(`${list.length} férié(s) confirmé(s)`);
+  renderFeriesConfirmationList();
+  refreshCongesAlerts();
+  renderPlanning();
 }
 
 // ===================================================
@@ -6419,6 +6588,7 @@ function assurerTachesFerie(annees) {
         const objectifMin = getObjectifJourMin(emp, dayIdx);
         if (objectifMin <= 0) return; // ne travaille normalement pas ce jour-là — rien à neutraliser
         if (emp.dateDebutContrat && d < isoToDate(emp.dateDebutContrat)) return; // pas encore en contrat
+        if (db.params.pointageDateDebut && dk < db.params.pointageDateDebut) return; // avant activation pointeuse
         if (!db.planning[emp.id]) db.planning[emp.id] = {};
         const existant = db.planning[emp.id][dk] || [];
         const ferieInst = existant.find(i => i.taskId === tache.id);
