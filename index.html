@@ -1976,7 +1976,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.74.6';
+const APP_VERSION = '1.74.8';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1993,6 +1993,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.74.8', items: [
+    'Remplacement de l\'icône 🎉 par 🔶 pour tous les repères fériés (planning, badges du récap paie, palette de tâches, Excel, emails) — plus sobre',
+  ] },
+  { v: '1.74.7', items: [
+    'Récap paie : sélectionne désormais "Tous les employés" par défaut au premier chargement (au lieu du seul premier par ordre alphabétique de prénom, qui donnait toujours Akram)',
+  ] },
   { v: '1.74.6', items: [
     'Correction d\'une incohérence : la colonne "Écart contrat" de la ligne "Semaine" utilisait encore l\'ancienne formule non neutralisée du férié (ex: -5h00 affiché quand le badge global correct indiquait +2h30) — elle utilise désormais la même valeur neutralisée que le reste du récap',
   ] },
@@ -3372,7 +3378,7 @@ function renderPlanningEdition() {
   const feriesAnnee = getJoursFeries(pgWeekMonday.getFullYear());
   const head = '<tr><th></th>' + days.map((d,i) => {
     const nomFerie = feriesAnnee[dateKey(d)];
-    return `<th ${nomFerie ? `style="color:var(--warning);" title="Férié — ${nomFerie}"` : ''}>${DOW[i]}${nomFerie ? ' 🎉' : ''}<br><span style="font-weight:400;">${d.getDate()}/${d.getMonth()+1}</span></th>`;
+    return `<th ${nomFerie ? `style="color:var(--warning);" title="Férié — ${nomFerie}"` : ''}>${DOW[i]}${nomFerie ? ' 🔶' : ''}<br><span style="font-weight:400;">${d.getDate()}/${d.getMonth()+1}</span></th>`;
   }).join('') + '<th>Semaine</th></tr>';
   const nbCols = days.length + 2;
 
@@ -3721,7 +3727,7 @@ function renderGraphiqueSemaine() {
   days.forEach((d, j) => {
     const dkFerie = dateKey(d);
     const nomFerie = feriesAnnee[dkFerie];
-    cells += `<div class="grw-cell grw-head-cell" style="grid-row:1;grid-column:${j+2};${nomFerie ? 'color:var(--warning);' : ''}" ${nomFerie ? `title="Férié — ${nomFerie}"` : ''}>${DOW[j]}${nomFerie ? ' 🎉' : ''}<br><span>${d.getDate()}/${d.getMonth()+1}</span></div>`;
+    cells += `<div class="grw-cell grw-head-cell" style="grid-row:1;grid-column:${j+2};${nomFerie ? 'color:var(--warning);' : ''}" ${nomFerie ? `title="Férié — ${nomFerie}"` : ''}>${DOW[j]}${nomFerie ? ' 🔶' : ''}<br><span>${d.getDate()}/${d.getMonth()+1}</span></div>`;
   });
   cells += `<div class="grw-cell grw-head-cell" style="grid-row:1;grid-column:9;">Semaine</div>`;
 
@@ -3911,7 +3917,7 @@ function renderPalette() {
   const estJourFerie = djCurrentDate && !!getJoursFeries(isoToDate(djCurrentDate).getFullYear())[djCurrentDate];
   const tacheFerie = db.tasks.find(t => t.ferie);
   if (estJourFerie && tacheFerie && !catFilter && (!q || tacheFerie.nom.toLowerCase().includes(q))) {
-    ferieHtml = `<div class="dj-cat-label" style="color:var(--warning);">🎉 Jour férié</div>` +
+    ferieHtml = `<div class="dj-cat-label" style="color:var(--warning);">🔶 Jour férié</div>` +
       `<div class="dj-task-chip" draggable="true" ondragstart="onChipDragStart(event,'${tacheFerie.id}')" ondblclick="onChipDoubleClick('${tacheFerie.id}')" title="Ne nécessite aucun pointage — sert au Compteur & modulation et au Récap paie">
         <span class="dot" style="background:${tacheFerie.color}"></span>${tacheFerie.nom}
       </div>`;
@@ -6099,10 +6105,13 @@ let _rpEmpIds = []; // employés sélectionnés (multi)
 let _rpOffset = 0;  // offset de navigation (semaines/mois/jours)
 
 function initRecapPaie() {
-  // Par défaut, sélectionne le premier employé si rien n'est encore choisi
+  // Par défaut, sélectionne TOUS les employés si rien n'est encore choisi (au lieu du seul premier
+  // par ordre alphabétique) — cohérent avec le filtre "sans pointage" déjà appliqué ailleurs (vue
+  // Globale), pour ne pas proposer par défaut des employés dont l'équipe ne pointe pas.
   if (!_rpEmpIds.length) {
-    const first = getEmployesTries()[0];
-    if (first) _rpEmpIds = [first.id];
+    _rpEmpIds = getEmployesTries()
+      .filter(e => !db.equipes.find(eq => eq.id === e.equipeId)?.sansPointage)
+      .map(e => e.id);
   }
   rpUpdateEmpBtnLabel();
 
@@ -6863,8 +6872,8 @@ function formatDateFR(d) { return d.toLocaleDateString('fr-FR'); }
 // emails — priorité au congé posé (explicite), sinon signale un jour férié (travaillé ou non).
 function libelleCongeJour(l) {
   if (l.congeLabel) return l.congeLabel + (l.congeFerieMin > 0 ? ` (${minToHM(l.congeFerieMin)})` : '');
-  if (l.ferieTravaille) return `🎉 Férié travaillé${l.pctMajoration > 0 ? ` (+${l.pctMajoration}%)` : ''}`;
-  if (l.nomFerie) return `🎉 Férié`;
+  if (l.ferieTravaille) return `🔶 Férié travaillé${l.pctMajoration > 0 ? ` (+${l.pctMajoration}%)` : ''}`;
+  if (l.nomFerie) return `🔶 Férié`;
   return '';
 }
 function nomFichierPeriode() {
@@ -6968,7 +6977,7 @@ async function construireClasseurExcel(donnees, contenu) {
     ['Heures de nuit', minToHM(g.gtNuit)],
     ['🔒 Heures sup validées (réglées)', g.gtHSValidees ? '+' + minToHM(g.gtHSValidees) : '—'],
     ['⚠️ Heures sup non validées', g.gtHSNonValidees ? '+' + minToHM(g.gtHSNonValidees) : '—'],
-    ['🎉 Fériés travaillés', g.gtFerieTravailleJours ? `${g.gtFerieTravailleJours} j.${g.gtHeuresMajorees ? ' (majoration +' + minToHM(g.gtHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
+    ['🔶 Fériés travaillés', g.gtFerieTravailleJours ? `${g.gtFerieTravailleJours} j.${g.gtHeuresMajorees ? ' (majoration +' + minToHM(g.gtHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
     ['Primes', g.gtPrimes ? g.gtPrimes.toFixed(2) + ' €' : '—'],
     ['Découchages', g.gtDecouchage || '—'],
     ['Paniers', g.gtPanier ? g.gtPanier.toFixed(2) + ' €' : '—'],
@@ -7088,7 +7097,7 @@ async function construireClasseurExcel(donnees, contenu) {
         ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '-') + minToHM(Math.abs(d.ecartTotal)) : '—'],
         ['Écart contrat', d.empSemainesComptees > 0 ? (d.empEcartContrat >= 0 ? '+' : '-') + minToHM(Math.abs(d.empEcartContrat)) : '—'],
         [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non validées', hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—')],
-        ['🎉 Fériés travaillés', d.empFerieTravailleJours ? `${d.empFerieTravailleJours} j.${d.empHeuresMajorees ? ' (majoration +' + minToHM(d.empHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
+        ['🔶 Fériés travaillés', d.empFerieTravailleJours ? `${d.empFerieTravailleJours} j.${d.empHeuresMajorees ? ' (majoration +' + minToHM(d.empHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
         ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
         ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
         ['Découchages', d.empDecouchage || '—'],
@@ -7427,10 +7436,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       </tr>`;
       if (!l.hasWork) return `<tr style="background:${rowBg};">
         <td style="padding:6px 8px;font-size:12px;color:${l.nomFerie ? 'var(--warning)' : (isWE ? 'var(--warning)' : 'var(--text-dim)')};">${DOW[l.dow]} ${l.d.getDate()}/${l.d.getMonth()+1}</td>
-        <td colspan="${totalCols - 1}" style="padding:6px 8px;font-size:12px;color:${l.nomFerie ? 'var(--warning)' : 'var(--text-dim)'};" title="${l.nomFerie || ''}">${l.nomFerie ? `🎉 Férié — ${l.nomFerie}` : 'Repos'}</td>
+        <td colspan="${totalCols - 1}" style="padding:6px 8px;font-size:12px;color:${l.nomFerie ? 'var(--warning)' : 'var(--text-dim)'};" title="${l.nomFerie || ''}">${l.nomFerie ? `🔶 Férié — ${l.nomFerie}` : 'Repos'}</td>
       </tr>`;
       return `<tr style="background:${rowBg};border-top:1px solid var(--border);">
-        <td style="padding:6px 8px;font-size:12px;color:${isWE ? 'var(--warning)' : 'var(--text)'};">${DOW[l.dow]} ${l.d.getDate()}/${l.d.getMonth()+1}${l.pointeHorsPlanning > 0 ? ' <span title="Comprend du hors planning / dépannage" style="color:var(--warning);">🔧</span>' : ''}${l.ferieTravaille ? ` <span title="Férié travaillé — ${l.nomFerie}${l.pctMajoration > 0 ? ` — majoration ${l.pctMajoration}% (+${minToHM(l.heuresMajorees)})` : ' — aucune majoration paramétrée'}" style="color:var(--warning);">🎉</span>` : ''}</td>
+        <td style="padding:6px 8px;font-size:12px;color:${isWE ? 'var(--warning)' : 'var(--text)'};">${DOW[l.dow]} ${l.d.getDate()}/${l.d.getMonth()+1}${l.pointeHorsPlanning > 0 ? ' <span title="Comprend du hors planning / dépannage" style="color:var(--warning);">🔧</span>' : ''}${l.ferieTravaille ? ` <span title="Férié travaillé — ${l.nomFerie}${l.pctMajoration > 0 ? ` — majoration ${l.pctMajoration}% (+${minToHM(l.heuresMajorees)})` : ' — aucune majoration paramétrée'}" style="color:var(--warning);">🔶</span>` : ''}</td>
         <td style="padding:6px 8px;font-size:12px;color:var(--text-muted);">${l.embInfo?.prevu || '?'}${l.embInfo?.veille ? '(v)' : ''} – ${l.debInfo?.prevu || '?'}${l.debInfo?.lendemain ? '(l)' : ''}</td>
         <td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${minToHM(l.planMin)}</td>
         ${colonnesActives.map(c => celluleColonne(c.id, l)).join('')}
@@ -7457,7 +7466,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     }
 
     const badgeFerie = empFerieTravailleJours > 0
-      ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="${empHeuresMajorees > 0 ? `Majoration calculée : +${minToHM(empHeuresMajorees)}` : 'Aucune majoration paramétrée (Paramètres > Congés) — signalement uniquement'}">🎉 ${empFerieTravailleJours} férié${empFerieTravailleJours > 1 ? 's' : ''} travaillé${empFerieTravailleJours > 1 ? 's' : ''}${empHeuresMajorees > 0 ? ` (+${minToHM(empHeuresMajorees)})` : ''}</span>`
+      ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="${empHeuresMajorees > 0 ? `Majoration calculée : +${minToHM(empHeuresMajorees)}` : 'Aucune majoration paramétrée (Paramètres > Congés) — signalement uniquement'}">🔶 ${empFerieTravailleJours} férié${empFerieTravailleJours > 1 ? 's' : ''} travaillé${empFerieTravailleJours > 1 ? 's' : ''}${empHeuresMajorees > 0 ? ` (+${minToHM(empHeuresMajorees)})` : ''}</span>`
       : '';
 
     // Décompte des jours de congé par type (noms de tâches réellement configurés dans l'appli —
@@ -7478,7 +7487,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
         <div style="font-size:16px;font-weight:800;">${emp.prenom} ${emp.nom}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <span style="background:rgba(79,124,255,.12);color:var(--accent);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="${empFerieChomeMin > 0 ? `dont ${minToHM(empFerieChomeMin)} de férié chômé` : ''}">Planifié ${minToHM(empPlannifie)}${empFerieChomeMin > 0 ? ` <span style="font-weight:400;opacity:.85;">(dont 🎉 ${minToHM(empFerieChomeMin)} férié)</span>` : ''}</span>
+          <span style="background:rgba(79,124,255,.12);color:var(--accent);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="${empFerieChomeMin > 0 ? `dont ${minToHM(empFerieChomeMin)} de férié chômé` : ''}">Planifié ${minToHM(empPlannifie)}${empFerieChomeMin > 0 ? ` <span style="font-weight:400;opacity:.85;">(dont 🔶 ${minToHM(empFerieChomeMin)} férié)</span>` : ''}</span>
           ${empPointe > 0 ? `<span style="background:rgba(46,204,113,.12);color:var(--success);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Retenue ${minToHM(empPointe)}</span>` : ''}
           ${ecartTotal !== null ? `<span style="background:${ecartTotal >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${ecartTotal >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au planning prévu${empFerieChomeMin > 0 ? ` — neutralisé de ${minToHM(empFerieChomeMin)} de férié chômé` : ''}">Écart planning ${ecartTotal >= 0 ? '+' : ''}${minToHM(Math.abs(ecartTotal))}${empFerieChomeMin > 0 ? ` <span style="font-weight:400;opacity:.85;">(férié neutralisé)</span>` : ''}</span>` : ''}
           ${empSemainesComptees > 0 ? `<span style="background:${empEcartContrat >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${empEcartContrat >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au contrat de ${minToHM(contratMin)}/sem (${empSemainesComptees} semaine${empSemainesComptees > 1 ? 's' : ''})">Écart contrat ${empEcartContrat >= 0 ? '+' : ''}${minToHM(Math.abs(empEcartContrat))}</span>` : ''}
@@ -7511,7 +7520,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
   document.getElementById('rp-summary').innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px;">
     <div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;" title="${gtFerieChomeMin > 0 ? `dont ${minToHM(gtFerieChomeMin)} de férié chômé` : ''}">
       <div class="meta">Planifié</div><div style="font-size:18px;font-weight:800;color:var(--accent);">${minToHM(gtPlannifie)}</div>
-      ${gtFerieChomeMin > 0 ? `<div style="font-size:10px;color:var(--warning);margin-top:2px;">dont 🎉 ${minToHM(gtFerieChomeMin)} férié</div>` : ''}
+      ${gtFerieChomeMin > 0 ? `<div style="font-size:10px;color:var(--warning);margin-top:2px;">dont 🔶 ${minToHM(gtFerieChomeMin)} férié</div>` : ''}
     </div>
     ${gtPointe > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
       <div class="meta">Pointé</div><div style="font-size:18px;font-weight:800;color:var(--success);">${minToHM(gtPointe)}</div>
@@ -7526,7 +7535,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       <div class="meta">⚠️ HS non validées</div><div style="font-size:18px;font-weight:800;color:var(--warning);">+${minToHM(gtHSNonValidees)}</div>
     </div>` : ''}
     ${gtFerieTravailleJours > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;border:1px solid rgba(245,166,35,.3);">
-      <div class="meta">🎉 Fériés travaillés</div><div style="font-size:18px;font-weight:800;color:var(--warning);">${gtFerieTravailleJours} j.${gtHeuresMajorees > 0 ? ` (+${minToHM(gtHeuresMajorees)})` : ''}</div>
+      <div class="meta">🔶 Fériés travaillés</div><div style="font-size:18px;font-weight:800;color:var(--warning);">${gtFerieTravailleJours} j.${gtHeuresMajorees > 0 ? ` (+${minToHM(gtHeuresMajorees)})` : ''}</div>
     </div>` : ''}
     ${gtNuit > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
       <div class="meta">Heures de nuit</div><div style="font-size:18px;font-weight:800;color:#9d8fff;">${minToHM(gtNuit)}</div>
@@ -9732,7 +9741,7 @@ function construireHTMLRecapFragmentEmploye(d, debut, fin) {
     ['Total pointé (net)', d.empPointe ? minToHM(d.empPointe) : '—'],
     ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '-') + minToHM(Math.abs(d.ecartTotal)) : '—'],
     [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non validées', hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—')],
-    ['🎉 Fériés travaillés', d.empFerieTravailleJours ? `${d.empFerieTravailleJours} j.${d.empHeuresMajorees ? ' (majoration +' + minToHM(d.empHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
+    ['🔶 Fériés travaillés', d.empFerieTravailleJours ? `${d.empFerieTravailleJours} j.${d.empHeuresMajorees ? ' (majoration +' + minToHM(d.empHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
     ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
     ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
     ['Découchages', d.empDecouchage || '—'],
@@ -9774,7 +9783,7 @@ function construireHTMLRecapGroupe(donnees, debut, fin, g) {
     ['Heures de nuit', minToHM(g.gtNuit)],
     ['🔒 Heures sup validées (réglées)', g.gtHSValidees ? '+' + minToHM(g.gtHSValidees) : '—'],
     ['⚠️ Heures sup non validées', g.gtHSNonValidees ? '+' + minToHM(g.gtHSNonValidees) : '—'],
-    ['🎉 Fériés travaillés', g.gtFerieTravailleJours ? `${g.gtFerieTravailleJours} j.${g.gtHeuresMajorees ? ' (majoration +' + minToHM(g.gtHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
+    ['🔶 Fériés travaillés', g.gtFerieTravailleJours ? `${g.gtFerieTravailleJours} j.${g.gtHeuresMajorees ? ' (majoration +' + minToHM(g.gtHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
     ['Primes', g.gtPrimes ? g.gtPrimes.toFixed(2) + ' €' : '—'],
     ['Découchages', g.gtDecouchage || '—'],
     ['Paniers', g.gtPanier ? g.gtPanier.toFixed(2) + ' €' : '—'],
