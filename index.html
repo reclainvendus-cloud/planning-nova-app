@@ -1976,7 +1976,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.74.8';
+const APP_VERSION = '1.74.9';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1993,6 +1993,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.74.9', items: [
+    'Correction : "Écart contrat" affichait un faux déficit énorme (ex: -28h00) sur la première/dernière semaine d\'une période sélectionnée quand celle-ci est à cheval sur le bord (ex: "Août" alors que la semaine commence le 27 juillet) — une semaine partiellement hors de la période affiche désormais "—" au lieu d\'être comparée à tort à un contrat hebdomadaire complet',
+  ] },
   { v: '1.74.8', items: [
     'Remplacement de l\'icône 🎉 par 🔶 pour tous les repères fériés (planning, badges du récap paie, palette de tâches, Excel, emails) — plus sobre',
   ] },
@@ -7295,8 +7298,14 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       // Flush total semaine si on change de semaine
       if (weekKey !== null && dayWeekKey !== weekKey) {
         const cls = badgeClass(weekPlan, contratMin);
-        if (weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
-        lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol, weekFerieChomeMin });
+        // Une semaine à cheval sur le bord de la période sélectionnée (ex: "Août" alors que la
+        // semaine commence le 27/07) ne contient qu'une partie de ses jours dans "jours" — la
+        // comparer à un contrat hebdomadaire COMPLET produirait un faux déficit énorme. On ne
+        // compte "Écart contrat" que pour une semaine entièrement comprise dans la période choisie.
+        const weekMondayFlush = isoToDate(weekKey);
+        const weekCompleteFlush = weekMondayFlush >= debut && addDays(weekMondayFlush, 6) <= fin;
+        if (weekCompleteFlush && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
+        lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush });
         weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0;
       }
       weekKey = dayWeekKey;
@@ -7343,8 +7352,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     // Dernier total semaine
     if (weekKey !== null) {
       const cls = badgeClass(weekPlan, contratMin);
-      if (weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
-      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol, weekFerieChomeMin });
+      const weekMondayLast = isoToDate(weekKey);
+      const weekCompleteLast = weekMondayLast >= debut && addDays(weekMondayLast, 6) <= fin;
+      if (weekCompleteLast && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
+      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteLast });
     }
 
     gtPlannifie += empPlannifie; gtPointe += empPointe; gtNuit += empNuit;
@@ -7416,8 +7427,9 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
           if (c.id === 'pause') return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:var(--text-dim);">${l.weekPause > 0 ? '-' + minToHM(l.weekPause) : '—'}</td>`;
           if (c.id === 'ecartTotal') return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:${ecartColor(ecartW)};">${ecartFmt(ecartW)}</td>`;
           if (c.id === 'ecartContrat') {
-            const ecartC = l.weekPtContrat > 0 ? l.weekPtContrat - l.contratMin : null;
-            return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:${ecartColor(ecartC)};" title="Par rapport au contrat de ${minToHM(l.contratMin)}/sem${l.weekFerieChomeMin ? ` — férié neutralisé (+${minToHM(l.weekFerieChomeMin)})` : ''}">${ecartFmt(ecartC)}</td>`;
+            const ecartC = (l.weekComplete && l.weekPtContrat > 0) ? l.weekPtContrat - l.contratMin : null;
+            const titreIncomplet = !l.weekComplete ? ' — semaine partiellement hors de la période affichée, non comparable au contrat complet' : '';
+            return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:${ecartColor(ecartC)};" title="Par rapport au contrat de ${minToHM(l.contratMin)}/sem${l.weekFerieChomeMin ? ` — férié neutralisé (+${minToHM(l.weekFerieChomeMin)})` : ''}${titreIncomplet}">${ecartFmt(ecartC)}</td>`;
           }
           if (c.id === 'nuit') return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:#9d8fff;">${l.weekNuit > 0 ? minToHM(l.weekNuit) : '—'}</td>`;
           return '<td></td>';
