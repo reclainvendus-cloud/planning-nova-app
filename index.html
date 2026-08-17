@@ -151,6 +151,28 @@ label { display: block; font-size: 11px; font-weight: 700; text-transform: upper
 .view { display: none; }
 .view.active { display: block; }
 
+/* ===== MODE D'EMPLOI ===== */
+#view-aide { max-width: 980px; }
+.aide-toc { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 22px; padding: 14px; background: var(--surface2); border-radius: var(--radius); }
+.aide-toc a { font-size: 12px; padding: 5px 10px; border-radius: 20px; background: var(--surface3); color: var(--text-muted); text-decoration: none; }
+.aide-toc a:hover { background: var(--accent); color: #fff; }
+.aide-section { margin-bottom: 10px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface); scroll-margin-top: 16px; }
+.aide-section > summary { padding: 14px 18px; font-size: 15px; font-weight: 800; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 10px; background: var(--surface2); }
+.aide-section > summary::-webkit-details-marker { display: none; }
+.aide-section > summary::before { content: '▸'; color: var(--accent); transition: transform .15s; }
+.aide-section[open] > summary::before { transform: rotate(90deg); }
+.aide-body { padding: 4px 22px 20px; font-size: 13.5px; line-height: 1.65; color: var(--text-muted); }
+.aide-body h4 { color: var(--text); font-size: 13.5px; margin: 16px 0 6px; }
+.aide-body h4:first-child { margin-top: 4px; }
+.aide-body ul { margin: 4px 0 10px 18px; padding: 0; }
+.aide-body li { margin-bottom: 4px; }
+.aide-body table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 12.5px; }
+.aide-body th, .aide-body td { border: 1px solid var(--border); padding: 6px 9px; text-align: left; vertical-align: top; }
+.aide-body th { background: var(--surface2); color: var(--text); font-weight: 700; }
+.aide-body code { background: var(--surface3); padding: 1px 6px; border-radius: 4px; font-family: var(--mono); font-size: 12px; color: var(--accent2); }
+.aide-body .astuce { background: rgba(46,204,113,.08); border-left: 3px solid var(--success); padding: 8px 12px; border-radius: 6px; margin: 10px 0; }
+.aide-body .attention { background: rgba(245,166,35,.08); border-left: 3px solid var(--warning); padding: 8px 12px; border-radius: 6px; margin: 10px 0; }
+
 /* ===== PLANNING ===== */
 .week-nav { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
 .week-nav .label { font-family: var(--mono); font-size: 13px; color: var(--text-muted); min-width: 190px; text-align: center; }
@@ -460,6 +482,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
     <div class="nav-item" onclick="showView('distribution')"><span class="ico">📦</span> Distribution</div>
     <div class="nav-item" onclick="showView('competences')"><span class="ico">🎯</span> Compétences</div>
     <div class="nav-item" onclick="showView('parametres')"><span class="ico">🔧</span> Paramètres</div>
+    <div class="nav-item" onclick="showView('aide')"><span class="ico">📖</span> Mode d'emploi</div>
   </nav>
 
   <div id="main">
@@ -1119,6 +1142,29 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <div class="hint" style="margin-bottom:14px;">Historique des mises à jour de l'appli — la plus récente en premier.</div>
           <div id="nouveautes-wrap" style="max-width:720px;"></div>
         </div>
+      </div>
+
+      <!-- ===== VUE MODE D'EMPLOI ===== -->
+      <div class="view" id="view-aide">
+        <div class="hint" style="margin-bottom:16px;">Notice complète de l'application — clique sur une section pour la déplier, ou utilise les raccourcis ci-dessous pour y aller directement.</div>
+        <div class="aide-toc">
+          <a href="#aide-dashboard">🏠 Tableau de bord</a>
+          <a href="#aide-planning">📅 Planning</a>
+          <a href="#aide-pointages">🕐 Pointages</a>
+          <a href="#aide-validation">✅ Validation</a>
+          <a href="#aide-taches">🧩 Tâches</a>
+          <a href="#aide-employes">👥 Employés</a>
+          <a href="#aide-equipes">🫂 Équipes</a>
+          <a href="#aide-conges">🏖️ Congés</a>
+          <a href="#aide-recap">💶 Récap paie</a>
+          <a href="#aide-compteur">⚖️ Compteur & modulation</a>
+          <a href="#aide-rapports">📊 Rapports</a>
+          <a href="#aide-historique">📜 Historique</a>
+          <a href="#aide-distribution">📦 Distribution</a>
+          <a href="#aide-competences">🎯 Compétences</a>
+          <a href="#aide-parametres">🔧 Paramètres</a>
+        </div>
+        <div id="aide-content"></div>
       </div>
 
     </div>
@@ -1976,7 +2022,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.74.9';
+const APP_VERSION = '1.75.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -1993,6 +2039,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.75.0', items: [
+    'Nouveau menu "📖 Mode d\'emploi" — notice complète de l\'application : chaque menu expliqué en détail (Planning et ses 6 modes, Pointages, Validation, Tâches, Employés, Équipes, Congés et la tâche Férié, Récap paie colonne par colonne, Compteur & modulation, Paramètres...), avec des raccourcis de navigation en haut de page',
+  ] },
   { v: '1.74.9', items: [
     'Correction : "Écart contrat" affichait un faux déficit énorme (ex: -28h00) sur la première/dernière semaine d\'une période sélectionnée quand celle-ci est à cheval sur le bord (ex: "Août" alors que la semaine commence le 27 juillet) — une semaine partiellement hors de la période affiche désormais "—" au lieu d\'être comparée à tort à un contrat hebdomadaire complet',
   ] },
@@ -2620,7 +2669,7 @@ function notify(msg, type = 'success') {
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
-const viewTitles = { planning: 'Planning', taches: 'Bibliothèque de tâches', employes: 'Employés', equipes: 'Équipes', tournees: 'Tournées', conges: 'Congés', recap: 'Récap paie', compteur: 'Compteur & modulation', rapports: 'Rapports', dashboard: 'Tableau de bord', parametres: 'Paramètres', pointages: 'Pointages', validation: 'Validation', historique: 'Historique', distribution: 'Distribution', competences: 'Compétences' };
+const viewTitles = { planning: 'Planning', taches: 'Bibliothèque de tâches', employes: 'Employés', equipes: 'Équipes', tournees: 'Tournées', conges: 'Congés', recap: 'Récap paie', compteur: 'Compteur & modulation', rapports: 'Rapports', dashboard: 'Tableau de bord', parametres: 'Paramètres', pointages: 'Pointages', validation: 'Validation', historique: 'Historique', distribution: 'Distribution', competences: 'Compétences', aide: 'Mode d\'emploi' };
 const viewActions = {
   planning: '<button class="btn btn-secondary btn-sm" onclick="openEmailModal()">✉️ Envoyer</button>',
   taches: '<button class="btn btn-primary btn-sm" onclick="openTaskModal()">+ Nouvelle tâche</button>',
@@ -2658,6 +2707,7 @@ function showView(name) {
   if (name === 'tournees') renderTournees();
   if (name === 'conges') renderConges();
   if (name === 'recap') initRecapPaie();
+  if (name === 'aide') renderAide();
   if (name === 'compteur') initCompteurModulation();
   if (name === 'rapports') initRapports();
   if (name === 'dashboard') renderDashboard();
@@ -6480,6 +6530,345 @@ function getOrCreateTacheFerie() {
 function calculerFerieMinJour(empId, dk) {
   const insts = (db.planning[empId]?.[dk] || []).filter(i => db.tasks.find(t => t.id === i.taskId)?.ferie);
   return insts.reduce((s, i) => s + ownDayMinutes(i), 0); // pause éventuelle déduite, cohérent avec "Planifié"
+}
+
+const AIDE_HTML = `
+<details class="aide-section" id="aide-dashboard" open>
+<summary>🏠 Tableau de bord</summary>
+<div class="aide-body">
+<p>Page d'accueil de l'appli — vue d'ensemble rapide de l'activité en cours.</p>
+<h4>Ce que tu y trouves</h4>
+<ul>
+<li><b>Alertes congés en attente</b> — bandeau rouge cliquable listant les demandes de congé posées par les employés qui attendent ta confirmation (accepter/refuser).</li>
+<li><b>Alertes qualité planning</b> — signale les sous-effectifs (tâche habituellement couverte mais personne d'affecté) et les chevauchements (un employé sur deux tâches en même temps).</li>
+<li><b>Congés à venir sous 7 jours</b> — liste rapide des absences prévues prochainement, par équipe.</li>
+<li><b>Espace Firebase</b> — jauge d'estimation de l'espace de stockage utilisé (voir Paramètres > Connexions pour le détail).</li>
+</ul>
+<div class="astuce">Le tableau de bord se met à jour automatiquement à chaque fois que tu y reviens — pas besoin de rafraîchir manuellement.</div>
+</div>
+</details>
+
+<details class="aide-section" id="aide-planning">
+<summary>📅 Planning</summary>
+<div class="aide-body">
+<p>Le cœur de l'appli : c'est ici que tu construis les horaires de chaque employé, jour par jour. Il existe <b>6 façons différentes d'afficher</b> le même planning — chaque mode a un usage différent, mais toutes les modifications faites dans l'un se répercutent partout ailleurs.</p>
+
+<h4>Les 6 modes d'affichage</h4>
+<table>
+<tr><th>Mode</th><th>À quoi il sert</th></tr>
+<tr><td><b>Édition</b></td><td>Le mode de travail principal : chaque employé est une colonne verticale style agenda, avec les heures en fond. C'est ici que tu glisses-déposes les tâches depuis la palette, que tu les redimensionnes, et que tu les édites précisément.</td></tr>
+<tr><td><b>Lecture</b></td><td>Vue simplifiée, non modifiable, pour un aperçu rapide et lisible (utile en impression ou pour un affichage passif).</td></tr>
+<tr><td><b>Graphique</b></td><td>Vue en grille horizontale, une ligne par employé, une colonne par jour — les tâches apparaissent comme des barres colorées positionnées proportionnellement à leur horaire. C'est la vue par défaut, la plus visuelle pour un coup d'œil sur toute une équipe.</td></tr>
+<tr><td><b>Individuel</b></td><td>Focus sur un seul employé à la fois, avec le détail complet de sa semaine.</td></tr>
+<tr><td><b>Récap tâches</b></td><td>Regroupe par tâche plutôt que par employé — utile pour vérifier que chaque tournée/poste est bien couvert chaque jour.</td></tr>
+<tr><td><b>🗓️ Semaine type</b></td><td>Un planning "modèle", indépendant de toute vraie date — sert de trame réutilisable (voir plus bas "Copier la semaine").</td></tr>
+</table>
+
+<h4>Naviguer dans le temps</h4>
+<ul>
+<li><b>◀ / ▶</b> — semaine précédente / suivante.</li>
+<li><b>Aujourd'hui</b> — revient directement à la semaine en cours.</li>
+<li>Le libellé "Semaine n°X de Lun JJ/MM à Dim JJ/MM/AAAA" peut être rendu <b>toujours visible en haut de l'écran</b> pendant le défilement (Paramètres > Général > Affichage) — pratique avec beaucoup d'employés.</li>
+</ul>
+
+<h4>Créer une tâche sur le planning (glisser-déposer)</h4>
+<ol>
+<li>Clique sur la case du jour/employé que tu veux remplir (mode Édition) pour ouvrir le détail du jour.</li>
+<li>Dans la palette à droite, trouve la tâche voulue (recherche ou filtre par catégorie), puis <b>glisse-la</b> sur la zone horaire, ou double-clique dessus pour l'ajouter directement.</li>
+<li>Redimensionne le bloc en tirant sur ses bords haut/bas pour ajuster l'heure de début et de fin.</li>
+<li>Un ✕ apparaît sur chaque bloc pour le supprimer.</li>
+</ol>
+<div class="attention">La tâche "🔶 Férié" n'apparaît dans la palette QUE lorsque tu édites un jour férié — jamais un jour normal. Voir la section Congés plus bas pour son fonctionnement complet.</div>
+
+<h4>Autres actions du planning</h4>
+<ul>
+<li><b>🖨️ Imprimer</b> — génère une version imprimable de la semaine affichée.</li>
+<li><b>📋 Copier la semaine</b> — duplique le contenu d'une semaine (ou du modèle "Semaine type") vers une ou plusieurs autres semaines, en cochant les employés/équipes à inclure.</li>
+<li><b>🔒 Verrou</b> — verrouille une semaine passée contre toute modification accidentelle (à activer une fois la semaine validée/payée).</li>
+<li><b>Mode toggle Édition/Lecture/Graphique/etc.</b> — bascule instantanément entre les vues sans perdre ta position dans le temps.</li>
+</ul>
+
+<h4>Envoyer le planning par email</h4>
+<p>Bouton <b>✉️ Envoyer</b> en haut du planning : choisis "Individuel" (chaque employé reçoit uniquement son propre planning) ou groupé. Coche les destinataires, puis envoie — nécessite que Brevo soit configuré (Paramètres > Connexions).</p>
+</div>
+</details>
+
+<details class="aide-section" id="aide-pointages">
+<summary>🕐 Pointages</summary>
+<div class="aide-body">
+<p>Liste chronologique de tous les événements de pointage (embauche/débauche) enregistrés par la pointeuse pour chaque employé, jour par jour.</p>
+<h4>Ce que tu y vois</h4>
+<ul>
+<li><b>Horaires planifiés</b> vs <b>heures réellement pointées</b> (E = embauche, D = débauche), avec l'écart en minutes coloré (vert = dans la tolérance, orange/rouge = hors tolérance).</li>
+<li><b>Heure retenue</b> — la valeur finale qui sera utilisée pour tous les calculs (Récap paie, Compteur & modulation). Peut être automatique (dans la tolérance), ou fixée manuellement par un admin.</li>
+<li><b>Mode de validation</b> — "Auto" (dans la tolérance, validé sans intervention), "Admin — modifiée" (tu as corrigé la valeur), "Admin — heure planning" (tu as choisi de retenir l'heure prévue plutôt que pointée).</li>
+<li>Statut <b>"Complet"</b> quand embauche et débauche sont toutes les deux retenues.</li>
+</ul>
+<h4>Actions possibles</h4>
+<ul>
+<li><b>✏️ Modifier</b> — corriger une heure retenue manuellement.</li>
+<li><b>🗑️ Supprimer</b> — retire un événement de pointage précis, ou (icône sur la ligne complète) <b>tous les pointages du jour</b> pour repartir de zéro.</li>
+</ul>
+<div class="attention">Supprimer un pointage ne supprime jamais la tâche du planning elle-même — seulement l'événement de pointage. Pour ressaisir une heure après suppression, passe par le menu <b>Validation</b> (voir ci-dessous), pas par un nouvel ajout ici.</div>
+</div>
+</details>
+
+<details class="aide-section" id="aide-validation">
+<summary>✅ Validation</summary>
+<div class="aide-body">
+<p>Liste les <b>anomalies de pointage</b> à traiter : pointages manquants (oublis) ou hors tolérance, qui nécessitent une décision de ta part avant d'être pris en compte dans les calculs.</p>
+<h4>Réglages en haut de l'écran</h4>
+<ul>
+<li><b>Depuis</b> — fenêtre de recherche des anomalies : Aujourd'hui / 7 derniers jours / 30 derniers jours. Si un pointage supprimé récemment n'apparaît pas, élargis cette fenêtre.</li>
+<li><b>Tolérance (min)</b> — l'écart, en minutes, en dessous duquel un pointage est validé automatiquement sans intervention.</li>
+</ul>
+<h4>Pour chaque anomalie</h4>
+<p>Un champ <b>Heure retenue</b> te permet de saisir/choisir l'heure à valider (souvent pré-rempli avec l'heure pointée ou prévue). Valide ligne par ligne, ou utilise les actions groupées si disponibles.</p>
+<div class="astuce">C'est aussi ici qu'on ressaisit un pointage totalement supprimé — la tâche apparaît en anomalie "oubli" tant que rien n'est retenu.</div>
+</div>
+</details>
+
+<details class="aide-section" id="aide-taches">
+<summary>🧩 Bibliothèque de tâches</summary>
+<div class="aide-body">
+<p>La liste de tout ce qui peut être placé sur un planning : tournées, postes de travail, congés, la tâche spéciale Férié, etc. Chaque "tâche" est un modèle réutilisable — tu ne la crées qu'une fois, puis tu la places autant de fois que nécessaire sur le planning.</p>
+
+<h4>Créer une tâche</h4>
+<ol>
+<li>Clique sur <b>+ Nouvelle tâche</b>.</li>
+<li>Renseigne un <b>nom</b> (et une abréviation courte, utilisée dans les vues compactes du planning).</li>
+<li>Choisis une <b>couleur</b> de fond et de texte — c'est cette couleur qui identifie la tâche partout dans l'appli.</li>
+<li>Coche les <b>options</b> pertinentes (voir tableau ci-dessous).</li>
+<li>Enregistre.</li>
+</ol>
+
+<h4>Les options d'une tâche</h4>
+<table>
+<tr><th>Option</th><th>Effet</th></tr>
+<tr><td><b>Congé / absence</b></td><td>Marque la tâche comme une absence — elle n'est jamais comptée comme du "planifié travaillé", apparaît distinctement dans le Récap paie, et n'attend aucun pointage.</td></tr>
+<tr><td><b>Repos</b></td><td>Jour de repos habituel (pas un vrai congé, juste un jour off récurrent).</td></tr>
+<tr><td><b>Nuit</b></td><td>Comptabilise les heures de cette tâche dans les statistiques "Nuit" du Récap paie.</td></tr>
+<tr><td><b>Panier</b></td><td>Déclenche une prime panier-repas (montant paramétrable) quand cette tâche est travaillée.</td></tr>
+<tr><td><b>Compteur (pour un congé)</b></td><td>Active le suivi d'un solde de droits (ex: jours de RTT), avec cycle d'acquisition paramétrable.</td></tr>
+</table>
+<div class="attention">La tâche "Férié" est une tâche système à part, gérée différemment — voir la section Congés.</div>
+</div>
+</details>
+
+<details class="aide-section" id="aide-employes">
+<summary>👥 Employés</summary>
+<div class="aide-body">
+<p>La fiche de chaque membre de ton équipe. C'est la base de tous les calculs (heures, majorations, compteurs).</p>
+
+<h4>Créer un employé</h4>
+<ol>
+<li>Clique sur <b>+ Nouvel employé</b>.</li>
+<li>Renseigne <b>Prénom / Nom</b>, un <b>code PIN</b> (utilisé pour se connecter à la pointeuse), l'<b>équipe</b> d'appartenance.</li>
+<li>Renseigne <b>Email</b> et <b>Téléphone</b> si tu veux pouvoir lui envoyer planning/récap par email.</li>
+</ol>
+
+<h4>Les champs "Contrat"</h4>
+<table>
+<tr><th>Champ</th><th>À quoi il sert</th></tr>
+<tr><td><b>Contrat (h/semaine)</b></td><td>Le volume horaire contractuel (ex: 35h) — référence pour le Compteur & modulation et l'"Écart contrat" du Récap paie.</td></tr>
+<tr><td><b>Objectif d'heures par jour</b></td><td>7 cases (Lun à Dim) — combien d'heures cet employé travaille normalement chaque jour de la semaine. Utilisé notamment comme durée par défaut suggérée pour la tâche Férié, et pour neutraliser les congés isolés dans le Compteur & modulation.</td></tr>
+<tr><td><b>Mode / seuil déclenchement HS</b></td><td>Définit à partir de combien d'heures les heures supplémentaires se déclenchent.</td></tr>
+<tr><td><b>Solde initial du compteur & modulation</b></td><td>Heures déjà accumulées (+) ou dues (−) avant que tu utilises l'appli — s'ajoute au cumul calculé automatiquement.</td></tr>
+<tr><td><b>Date de début de contrat</b></td><td>Si l'employé a commencé en cours de semaine, empêche le Compteur & modulation de compter à tort un déficit sur les jours d'avant son embauche.</td></tr>
+</table>
+
+<h4>Autres réglages</h4>
+<ul>
+<li><b>Repos hebdomadaire</b> — jour de repos fixe habituel.</li>
+<li><b>Production chaud/froid</b> — objectifs de production spécifiques à certains métiers.</li>
+</ul>
+</div>
+</details>
+
+<details class="aide-section" id="aide-equipes">
+<summary>🫂 Équipes</summary>
+<div class="aide-body">
+<p>Regroupe les employés par service/pôle — sert à filtrer le planning, le Récap paie, le Compteur & modulation, et à organiser les bandeaux de séparation visuels sur le planning.</p>
+<h4>Créer une équipe</h4>
+<ol>
+<li><b>+ Nouvelle équipe</b>, donne-lui un nom et une couleur (utilisée pour le petit point coloré affiché devant son nom partout dans l'appli).</li>
+<li>L'<b>ordre</b> définit dans quel ordre les équipes apparaissent (glisser-déposer pour réorganiser).</li>
+<li>Option <b>"Sans pointage"</b> — coche-la pour une équipe dont les membres n'utilisent pas la pointeuse (ex: équipe administrative) : elle sera exclue des vues "Global" du Récap paie.</li>
+</ol>
+<p>Affecte ensuite chaque employé à son équipe depuis sa fiche (menu Employés).</p>
+</div>
+</details>
+
+<details class="aide-section" id="aide-conges">
+<summary>🏖️ Congés</summary>
+<div class="aide-body">
+<p>Gère les absences (congés payés, maladie, etc.) et les jours fériés.</p>
+
+<h4>Poser un congé pour un employé</h4>
+<ol>
+<li>Sélectionne l'employé, choisis le <b>type de congé</b> (parmi les tâches de la Bibliothèque marquées "Congé/absence").</li>
+<li>Sélectionne la ou les dates concernées sur le calendrier.</li>
+<li>Valide — la période apparaît immédiatement sur le planning de l'employé.</li>
+</ol>
+
+<h4>Congés en attente de confirmation</h4>
+<p>Une demande posée par un employé (via son espace, si activé) apparaît en rouge sur le tableau de bord et dans ce menu tant qu'elle n'a pas été traitée. Tu peux l'<b>accepter</b> ou la <b>refuser</b> — dans les deux cas une attestation est générée, imprimable et à faire signer.</p>
+
+<h4>La tâche "Férié" — fonctionnement complet</h4>
+<p>Les jours fériés légaux français sont calculés automatiquement chaque année (visible en Paramètres > Congés) — mais rien n'est posé automatiquement sur le planning. C'est à toi de le faire, comme pour n'importe quelle tâche :</p>
+<ol>
+<li>Ouvre le détail d'un jour férié dans le planning. La palette affiche alors, en tout premier, une section spéciale <b>"🔶 Jour férié"</b> avec la tâche Férié (jamais proposée un jour normal).</li>
+<li>Glisse-la sur la plage horaire, et redimensionne-la pour indiquer <b>la durée que l'employé aurait normalement dû travailler ce jour précis</b> (pas une moyenne — vérifie l'objectif du jour dans sa fiche, ou l'horaire réel de cette semaine-là si irrégulier).</li>
+<li><b>Si le férié reste chômé</b> (rien d'autre placé, aucun pointage) : cette durée devient la référence légale pour neutraliser le Compteur & modulation et l'Écart planning/contrat du Récap paie — l'employé n'est jamais pénalisé pour ce jour.</li>
+<li><b>Si le férié est finalement travaillé</b> : remplace la tâche Férié par la/les vraie(s) tâche(s) de travail. Le Récap paie détecte alors un "férié travaillé" et calcule la majoration si un taux est renseigné (voir Paramètres > Congés).</li>
+</ol>
+<div class="attention">Une pause ajoutée sur le bloc Férié est bien déduite du calcul (comme pour une tâche normale) — indique la durée totale, la pause se soustrait automatiquement.</div>
+<div class="astuce">Si tu supprimes la tâche Férié par erreur, tu peux la reposer directement depuis ce menu Congés comme n'importe quel autre congé.</div>
+</div>
+</details>
+
+<details class="aide-section" id="aide-recap">
+<summary>💶 Récap paie</summary>
+<div class="aide-body">
+<p>Le tableau détaillé jour par jour, semaine par semaine, servant à transmettre les heures à la comptabilité. C'est l'écran le plus riche de l'appli.</p>
+
+<h4>Filtres en haut</h4>
+<ul>
+<li><b>Vue</b> — Par employé / Par équipe / Global (tous, hors équipes "sans pointage").</li>
+<li><b>Employés</b> — bouton "👥 Sélectionner…" pour choisir précisément qui inclure (tous sélectionnés par défaut).</li>
+<li><b>Période</b> — Jour / Semaine / Mois / Plage libre, avec navigation ◀ ▶.</li>
+<li><b>Affichage</b> — "Tous les jours" ou seulement les jours travaillés.</li>
+<li>Le bouton d'engrenage permet de choisir quelles <b>colonnes</b> afficher.</li>
+</ul>
+
+<h4>Colonnes du tableau</h4>
+<table>
+<tr><th>Colonne</th><th>Signification</th></tr>
+<tr><td>Planifié</td><td>Heures prévues par le planning ce jour-là (inclut les heures de férié chômé, avec la mention "(dont Xh férié)" si concerné).</td></tr>
+<tr><td>Emb./Déb. Prévue / Pointée / Retenue</td><td>Heure d'embauche/débauche prévue au planning, réellement pointée, et finalement retenue pour le calcul (voir menu Pointages).</td></tr>
+<tr><td>Écart Emb./Déb.</td><td>Différence entre l'heure retenue et l'heure prévue.</td></tr>
+<tr><td>Durée brute</td><td>Temps de présence total, pause incluse.</td></tr>
+<tr><td>Pause</td><td>Temps de pause déduit.</td></tr>
+<tr><td>Durée nette (retenue)</td><td>Les heures réellement travaillées, pause déduite — c'est le "pointé" au sens strict.</td></tr>
+<tr><td>Écart planning</td><td>Pointé moins Planifié. Neutralisé sur un férié chômé légitime (n'affiche pas de faux déficit).</td></tr>
+<tr><td>Écart contrat</td><td>Comparaison hebdomadaire au contrat de l'employé, neutralisée des fériés/congés isolés. Affiche "—" si la semaine est à cheval sur le bord de la période choisie (comparaison impossible à faire équitablement).</td></tr>
+<tr><td>Nuit</td><td>Heures de nuit cumulées.</td></tr>
+<tr><td>Congé</td><td>Nom du congé posé ce jour-là, avec sa durée entre parenthèses s'il s'agit d'un férié.</td></tr>
+</table>
+
+<h4>Badges en haut de chaque bloc employé / résumé global</h4>
+<ul>
+<li><b>Heures sup validées 🔒</b> — un règlement a été enregistré dans Compteur & modulation pour ce mois, montant définitif.</li>
+<li><b>Heures sup non validées ⚠️</b> — pas encore réglé, chiffre encore susceptible d'évoluer.</li>
+<li><b>Fériés travaillés</b> — nombre de jours + majoration calculée si un taux est paramétré.</li>
+</ul>
+
+<h4>Exporter (bouton 📊 Exporter)</h4>
+<ul>
+<li><b>Format</b> — Excel, CSV, ou les deux.</li>
+<li><b>Contenu Excel</b> — un onglet détaillé par employé, un tableau de synthèse condensé, ou les deux.</li>
+<li>Sélection des employés à inclure, avec tout cocher/décocher rapide.</li>
+<li>Le fichier inclut une feuille "Résumé" avec les totaux globaux et un décompte par type de congé.</li>
+</ul>
+
+<h4>Envoyer par email (bouton ✉️ Envoyer le récap paie)</h4>
+<ul>
+<li><b>Individuel</b> — chaque employé sélectionné reçoit uniquement SON récap, dans un email tableau clair lisible sur mobile.</li>
+<li><b>Groupé</b> — un destinataire unique (ex: comptable) reçoit le récap complet affiché, avec un résumé global en tête.</li>
+</ul>
+</div>
+</details>
+
+<details class="aide-section" id="aide-compteur">
+<summary>⚖️ Compteur & modulation</summary>
+<div class="aide-body">
+<p>Suit, semaine complète par semaine complète, l'écart cumulé entre les heures réellement pointées et le contrat de chaque employé — jamais comparé au planning (voir Récap paie pour ça). Une semaine en cours n'est jamais comptée tant qu'elle n'est pas terminée.</p>
+
+<h4>Filtres</h4>
+<ul>
+<li><b>Équipe</b> — une équipe précise, "Sans équipe", ou toutes (regroupement automatique par équipe si aucun filtre).</li>
+<li><b>Calculer depuis le</b> — date de départ du calcul (par défaut le 1er janvier de l'année en cours).</li>
+</ul>
+
+<h4>Lecture de la liste</h4>
+<p>Chaque ligne : nom, jauge visuelle colorée (verte si positif, rouge si négatif), le solde en heures, et en petit : le contrat hebdomadaire, le nombre de semaines comptées, un éventuel solde initial, et le nombre de jours fériés/congés neutralisés.</p>
+
+<h4>Régler les heures sup</h4>
+<ul>
+<li><b>Bouton "Régler"</b> (solde positif uniquement) — enregistre un règlement daté, avec un montant modifiable (tu peux ne régler qu'une partie), qui se déduit définitivement du compteur.</li>
+<li><b>📅 Clôture mensuelle</b> — traite plusieurs employés d'un coup, montant pré-rempli au solde actuel de chacun, ajustable ligne par ligne.</li>
+<li>Un règlement déjà fait est verrouillé (icône 🔒) — clique dessus pour voir le détail et le déverrouiller si besoin de correction.</li>
+</ul>
+<div class="astuce">Les compteurs négatifs n'ont pas de bouton "Régler" — ils se traitent différemment (rattrapage d'heures, pas un paiement).</div>
+</div>
+</details>
+
+<details class="aide-section" id="aide-rapports">
+<summary>📊 Rapports</summary>
+<div class="aide-body">
+<p>Statistiques et graphiques d'ensemble sur l'activité (répartition des heures, charges par équipe/tâche selon les indicateurs disponibles). Utile pour une vue macro plutôt que le détail individuel du Récap paie.</p>
+</div>
+</details>
+
+<details class="aide-section" id="aide-historique">
+<summary>📜 Historique</summary>
+<div class="aide-body">
+<p>Journal d'audit : qui a fait quoi et quand dans l'appli (modification de planning, validation de congé, changement de paramètre...). S'auto-archive automatiquement après une durée paramétrable (Paramètres > Général) pour ne pas alourdir la base de données indéfiniment.</p>
+</div>
+</details>
+
+<details class="aide-section" id="aide-distribution">
+<summary>📦 Distribution</summary>
+<div class="aide-body">
+<p>Suivi des volumes/quantités à distribuer par tournée ou par employé (chaud/froid), en lien avec les objectifs de production renseignés dans la fiche employé.</p>
+</div>
+</details>
+
+<details class="aide-section" id="aide-competences">
+<summary>🎯 Compétences</summary>
+<div class="aide-body">
+<p>Renseigne quelles tâches/tournées chaque employé est habilité à effectuer — utile pour ne pas planifier quelqu'un sur un poste qu'il ne maîtrise pas, et pour filtrer la palette de tâches en conséquence lors de l'édition du planning.</p>
+</div>
+</details>
+
+<details class="aide-section" id="aide-parametres">
+<summary>🔧 Paramètres</summary>
+<div class="aide-body">
+<h4>Général</h4>
+<ul>
+<li><b>Identité</b> — nom de la société, signature email.</li>
+<li><b>Affichage</b> — garder la date de semaine toujours visible en haut du Planning pendant le défilement.</li>
+<li><b>Note d'information</b> — message libre affiché aux employés dans l'appli.</li>
+<li><b>Sauvegarde / archivage automatique</b> — fréquence des sauvegardes, archivage du planning et de l'historique.</li>
+</ul>
+<h4>Connexions</h4>
+<ul>
+<li><b>Firebase</b> — base de données temps réel (obligatoire pour que l'appli fonctionne à plusieurs). Statut de connexion visible en direct.</li>
+<li><b>GitHub</b> — dépôt utilisé pour l'hébergement de l'appli et les sauvegardes/archives.</li>
+<li><b>Brevo</b> — service d'envoi d'emails (planning, récap paie, notifications de congé).</li>
+<li><b>Espace Firebase</b> — estimation de l'espace utilisé, rafraîchissable manuellement.</li>
+</ul>
+<h4>Règles horaires</h4>
+<p>Tolérances de pointage, seuils de déclenchement des heures supplémentaires, règles de pause par défaut.</p>
+<h4>Congés</h4>
+<ul>
+<li>Liste des jours fériés calculés automatiquement pour l'année.</li>
+<li><b>Majoration jour férié travaillé</b> — le 1er mai applique toujours +100% (légal, automatique) ; pour les autres fériés, renseigne ton taux de convention collective, ou laisse vide pour n'avoir qu'un signalement visuel sans calcul.</li>
+<li>Vacances scolaires (zones/périodes).</li>
+<li><b>🧹 Purger les anciens fériés auto-générés</b> — nettoyage ponctuel, à usage unique (voir la note en bas de cette page si besoin).</li>
+</ul>
+<h4>Admins</h4>
+<p>Gère les comptes administrateurs ayant accès à l'appli — création, suppression, droits.</p>
+<h4>Distribution</h4>
+<p>Paramètres liés aux objectifs de production (chaud/froid) utilisés dans les fiches employés et le menu Distribution.</p>
+<h4>Nouveautés</h4>
+<p>Historique complet des mises à jour de l'appli, version par version.</p>
+</div>
+</details>
+`;
+function renderAide() {
+  const el = document.getElementById('aide-content');
+  if (el && !el.dataset.loaded) { el.innerHTML = AIDE_HTML; el.dataset.loaded = '1'; }
 }
 
 function getPremiereSemaineExploitable() {
