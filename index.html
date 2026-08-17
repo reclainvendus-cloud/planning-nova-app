@@ -2022,7 +2022,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.75.0';
+const APP_VERSION = '1.75.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2039,6 +2039,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.75.1', items: [
+    'Compteur & modulation et Récap paie : une semaine ENTIÈREMENT absente (congé/férié couvrant toute la semaine, aucune heure réellement travaillée) neutralise désormais "Écart contrat" en se basant directement sur le Contrat/semaine exact de la fiche employé, au lieu de la somme des 7 objectifs journaliers — ces derniers restent un simple outil de planification et n\'ont plus besoin d\'être calibrés au centime près pour que le calcul de paie soit juste',
+    'Les objectifs journaliers continuent d\'être utilisés (faute de meilleure référence) uniquement pour neutraliser un jour de congé/férié ISOLÉ au sein d\'une semaine par ailleurs travaillée',
+  ] },
   { v: '1.75.0', items: [
     'Nouveau menu "📖 Mode d\'emploi" — notice complète de l\'application : chaque menu expliqué en détail (Planning et ses 6 modes, Pointages, Validation, Tâches, Employés, Équipes, Congés et la tâche Férié, Récap paie colonne par colonne, Compteur & modulation, Paramètres...), avec des raccourcis de navigation en haut de page',
   ] },
@@ -7110,7 +7114,7 @@ function calculerCompteurModulation() {
 
     const cartes = emps.map(emp => {
       const contratMin = Math.round((emp.contratH || 35) * 60);
-      let weekKey = null, weekPt = 0;
+      let weekKey = null, weekPtReel = 0, weekCredit = 0, weekAUnJourAbsence = false;
       let totalBrut = Math.round((emp.soldeInitial || 0) * 60);
       let semainesComptees = 0;
 
@@ -7123,39 +7127,52 @@ function calculerCompteurModulation() {
 
       let jourNeutralise = 0; // compteur de jours neutralisés (fériés/congés isolés), pour affichage
 
+      // Flush du total de la semaine en cours — factorisé ici car appelé à deux endroits (au
+      // changement de semaine, et à la toute fin de la période). Deux cas de figure :
+      //  - Semaine ENTIÈREMENT absente (aucune heure réellement pointée, couverte par au moins un
+      //    congé/férié) : on crédite directement le contrat hebdomadaire EXACT (écart nul garanti),
+      //    sans dépendre de la précision des objectifs journaliers — qui ne sont qu'un outil de
+      //    planification, pas une donnée de paie fiable au jour près.
+      //  - Semaine partiellement travaillée avec un jour isolé de congé/férié au milieu : là, faute
+      //    de mieux, l'objectif journalier reste la seule estimation disponible pour ce jour précis.
+      function flushSemaine() {
+        if (weekKey === null) return;
+        if (weekPtReel === 0 && weekAUnJourAbsence) {
+          semainesComptees++; // écart nul pour cette semaine, mais bien comptée
+        } else if (weekPtReel + weekCredit > 0) {
+          totalBrut += (weekPtReel + weekCredit) - contratMin;
+          semainesComptees++;
+        }
+      }
+
       jours.forEach(dk => {
         const d = isoToDate(dk);
         if (jourDebutEmp && d < jourDebutEmp) return; // avant le début de contrat effectif
         const dayWeekKey = dateKey(getMonday(d));
         if (weekKey !== null && dayWeekKey !== weekKey) {
-          if (weekPt > 0) { totalBrut += weekPt - contratMin; semainesComptees++; }
-          weekPt = 0;
+          flushSemaine();
+          weekPtReel = 0; weekCredit = 0; weekAUnJourAbsence = false;
         }
         weekKey = dayWeekKey;
         const { pointeMin } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
         if (pointeMin === 0) {
           // Jour férié chômé ou congé posé isolément (même s'il tombe au milieu d'une semaine par
           // ailleurs travaillée) : légalement rémunéré, ne doit jamais compter comme un déficit.
-          // Référence légale : les heures qui étaient RÉELLEMENT PRÉVUES ce jour précis (et non
-          // une moyenne générique) — un jour férié ne vaut pas systématiquement 7h, il vaut ce que
-          // le salarié aurait dû travailler CE jour-là, particulièrement important pour des
-          // horaires irréguliers qui varient d'une semaine à l'autre. On se base donc en priorité
-          // sur le planning réellement posé ce jour (même férié), et seulement à défaut (rien de
-          // planifié du tout) sur l'objectif générique du jour de semaine comme repli raisonnable.
           const estFerie = !!getJoursFeries(d.getFullYear())[dk];
           const estConge = estJourCongePose(emp.id, dk);
           if (estFerie || estConge) {
+            weekAUnJourAbsence = true;
             const ferieMinJour = calculerFerieMinJour(emp.id, dk);
             const creditMin = ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
-            if (creditMin > 0) { weekPt += creditMin; jourNeutralise++; }
+            if (creditMin > 0) { weekCredit += creditMin; jourNeutralise++; }
           }
         } else {
-          weekPt += pointeMin;
+          weekPtReel += pointeMin;
         }
       });
       const dernierJour = isoToDate(jours[jours.length - 1]);
       const dernierDimancheSemaine = addDays(getMonday(dernierJour), 6);
-      if (weekKey !== null && dernierDimancheSemaine <= hier && weekPt > 0) { totalBrut += weekPt - contratMin; semainesComptees++; }
+      if (dernierDimancheSemaine <= hier) flushSemaine();
 
       // Le total AFFICHÉ (et utilisé pour "Régler") est net des règlements déjà effectués — un
       // règlement déduit définitivement du compteur, quelles que soient les semaines concernées.
@@ -7571,7 +7588,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     const contratMin = Math.round((emp.contratH || 35) * 60);
     let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPrimes = 0, empDecouchage = 0, empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
     let weekFerieChomeMin = 0;
-    let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekNuit = 0, weekPause = 0;
+    let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0, weekPause = 0;
     const badgeBg = { ok: 'rgba(46,204,113,.12)', under: 'rgba(245,166,35,.12)', over: 'rgba(255,77,106,.12)', empty: 'transparent' };
     const badgeCol = { ok: 'var(--success)', under: 'var(--warning)', over: 'var(--danger)', empty: 'var(--text-dim)' };
 
@@ -7693,9 +7710,14 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         // compte "Écart contrat" que pour une semaine entièrement comprise dans la période choisie.
         const weekMondayFlush = isoToDate(weekKey);
         const weekCompleteFlush = weekMondayFlush >= debut && addDays(weekMondayFlush, 6) <= fin;
+        // Semaine ENTIÈREMENT absente (aucune heure réellement pointée, couverte par au moins un
+        // congé/férié) : on crédite directement le contrat hebdomadaire EXACT (écart nul garanti)
+        // plutôt que la somme des objectifs journaliers — ces derniers ne sont qu'un outil de
+        // planification, pas une donnée de paie fiable au jour près (voir Employés > Contrat).
+        if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
         if (weekCompleteFlush && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
         lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush });
-        weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0;
+        weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0;
       }
       weekKey = dayWeekKey;
       weekPlan += planMin; weekPt += pointeMin; weekNuit += nuitMin; weekPause += pauseJourMin;
@@ -7710,12 +7732,16 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       // (fiche employé > objectif du jour par défaut, ajustable par l'admin sur le planning) plutôt
       // qu'une moyenne générique — un férié ne vaut pas systématiquement 7h, particulièrement
       // important pour des horaires irréguliers qui varient d'une semaine à l'autre. Repli sur
-      // l'objectif générique si la tâche a été supprimée sans être remplacée par du travail.
+      // l'objectif générique si la tâche a été supprimée sans être remplacée par du travail — sauf
+      // si TOUTE la semaine est absente, auquel cas c'est le contrat exact qui prime (voir plus
+      // haut) et cette valeur par-jour ne sert alors qu'à titre interne, jamais affichée seule.
       if (pointeMin === 0 && (!!getJoursFeries(d.getFullYear())[dk] || congeInsts.length > 0)) {
+        weekAUnJourAbsence = true;
         const ferieMinJour = calculerFerieMinJour(emp.id, dk);
         weekPtContrat += ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(dow));
       } else {
         weekPtContrat += pointeMin;
+        weekPtReel += pointeMin;
       }
       empPlannifie += planMin; empPointe += pointeMin; empNuit += nuitMin;
       empPanier += panierJour; empPrimes += primesJour; empDecouchage += decouchageJour;
@@ -7743,6 +7769,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const cls = badgeClass(weekPlan, contratMin);
       const weekMondayLast = isoToDate(weekKey);
       const weekCompleteLast = weekMondayLast >= debut && addDays(weekMondayLast, 6) <= fin;
+      if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
       if (weekCompleteLast && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
       lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteLast });
     }
