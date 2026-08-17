@@ -2022,7 +2022,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.75.1';
+const APP_VERSION = '1.75.2';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2039,6 +2039,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.75.2', items: [
+    'Récap paie (écran, résumé global, Excel, emails) : le décompte des jours de congé par type utilise désormais la vraie règle de décompte définie sur chaque tâche (Bibliothèque de tâches > jours ouvrables/ouvrés/calendaires) au lieu d\'un simple comptage de jours calendaires — respecte notamment la règle légale des congés payés (samedi décompté, dimanche jamais, jours fériés tombant dans la période jamais décomptés)',
+  ] },
   { v: '1.75.1', items: [
     'Compteur & modulation et Récap paie : une semaine ENTIÈREMENT absente (congé/férié couvrant toute la semaine, aucune heure réellement travaillée) neutralise désormais "Écart contrat" en se basant directement sur le Contrat/semaine exact de la fiche employé, au lieu de la somme des 7 objectifs journaliers — ces derniers restent un simple outil de planification et n\'ont plus besoin d\'être calibrés au centime près pour que le calcul de paie soit juste',
     'Les objectifs journaliers continuent d\'être utilisés (faute de meilleure référence) uniquement pour neutraliser un jour de congé/férié ISOLÉ au sein d\'une semaine par ailleurs travaillée',
@@ -7750,6 +7753,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       if (!afficherTous && !hasWork) return;
 
       const congeLabel = congeInsts.length ? db.tasks.find(t => t.id === congeInsts[0].taskId)?.nom || 'Congé' : null;
+      const congeTaskId = congeInsts.length ? congeInsts[0].taskId : null;
 
       // Férié travaillé : 1er mai toujours +100% (légal), les autres selon le taux paramétré dans
       // Paramètres > Congés — s'il n'est pas renseigné, seul un signalement visuel est affiché,
@@ -7761,7 +7765,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const heuresMajorees = pctMajoration > 0 ? Math.round(pointeMin * pctMajoration / 100) : 0;
       if (ferieTravaille) { empFerieTravailleJours++; empHeuresMajorees += heuresMajorees; }
 
-      lignes.push({ type: 'jour', dk, d, dow, planMin, pointeMin, ecartMin, nuitMin, panierJour, primesJour, decouchageJour, congeLabel, congeFerieMin, hasWork, pointeHorsPlanning, embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin, nomFerie, ferieTravaille, pctMajoration, heuresMajorees });
+      lignes.push({ type: 'jour', dk, d, dow, planMin, pointeMin, ecartMin, nuitMin, panierJour, primesJour, decouchageJour, congeLabel, congeTaskId, congeFerieMin, hasWork, pointeHorsPlanning, embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin, nomFerie, ferieTravaille, pctMajoration, heuresMajorees });
     });
 
     // Dernier total semaine
@@ -7897,11 +7901,23 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="${empHeuresMajorees > 0 ? `Majoration calculée : +${minToHM(empHeuresMajorees)}` : 'Aucune majoration paramétrée (Paramètres > Congés) — signalement uniquement'}">🔶 ${empFerieTravailleJours} férié${empFerieTravailleJours > 1 ? 's' : ''} travaillé${empFerieTravailleJours > 1 ? 's' : ''}${empHeuresMajorees > 0 ? ` (+${minToHM(empHeuresMajorees)})` : ''}</span>`
       : '';
 
-    // Décompte des jours de congé par type (noms de tâches réellement configurés dans l'appli —
-    // voir Bibliothèque de tâches — pas de liste figée) pour le récapitulatif de l'export.
+    // Décompte des jours de congé par type — réutilise la vraie règle de décompte déjà définie
+    // pour chaque tâche (Bibliothèque de tâches > Méthode de décompte : jours ouvrables/ouvrés/
+    // calendaires), au lieu d'un simple comptage de jours calendaires. Ça respecte notamment la
+    // règle légale des congés payés (samedi décompté, dimanche jamais, fériés chômés dans la
+    // période jamais décomptés) — un "Congés Payés" posé du lundi au dimanche avec un jour férié
+    // dedans comptera le bon nombre de jours ouvrables, pas 7 jours bruts. La tâche "Férié" elle-
+    // même est exclue (déjà comptabilisée séparément via le badge "Fériés travaillés/chômés").
     const congesParType = {};
-    lignes.filter(l => l.type === 'jour' && l.congeLabel).forEach(l => {
-      congesParType[l.congeLabel] = (congesParType[l.congeLabel] || 0) + 1;
+    const congeTaskIdsVus = new Set();
+    lignes.filter(l => l.type === 'jour' && l.congeLabel && l.congeTaskId).forEach(l => {
+      if (!db.tasks.find(t => t.id === l.congeTaskId)?.ferie) congeTaskIdsVus.add(l.congeTaskId);
+    });
+    congeTaskIdsVus.forEach(taskId => {
+      const task = db.tasks.find(t => t.id === taskId);
+      const label = task?.nom || 'Congé';
+      const nbJours = computeJoursDecomptes(emp.id, taskId, debut, fin);
+      if (nbJours > 0) congesParType[label] = (congesParType[label] || 0) + nbJours;
     });
 
     donneesExport.push({
