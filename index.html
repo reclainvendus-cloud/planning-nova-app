@@ -1730,6 +1730,13 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
         <button class="btn btn-secondary btn-sm" onclick="rendreApercuCloturePaie()">🔄 Recalculer</button>
       </div>
       <div id="cp-apercu"></div>
+
+      <div id="cp-regul-section" style="display:none;">
+        <div class="section-label" style="margin-top:22px;">3️⃣ Régularisation du mois précédent</div>
+        <div class="hint" style="margin-bottom:10px;">Comparaison entre ce qui avait été anticipé et ce qui a réellement été pointé depuis — l'écart sera intégré à cette clôture.</div>
+        <div id="cp-regul"></div>
+      </div>
+
       <div id="cp-resume" style="margin-top:10px;"></div>
 
       <div style="display:flex;gap:10px;margin-top:18px;align-items:center;flex-wrap:wrap;">
@@ -2070,7 +2077,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.77.5';
+const APP_VERSION = '1.78.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2087,6 +2094,11 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.78.0', items: [
+    'Clôture Paie (Brique 3/3 — complet) : régularisation automatique à l\'ouverture d\'une nouvelle clôture, si le mois précédent a des jours anticipés pas encore régularisés — compare chaque jour anticipé à ce qui est réellement connu aujourd\'hui (pointage réel si disponible, planning actuel sinon) et affiche l\'écart clairement (heures, nuit, panier, primes, découchage) par employé',
+    'La régularisation est figée dans la nouvelle clôture au moment de valider, et le mois précédent est marqué comme "régularisé" pour ne jamais être traité deux fois — la suppression d\'une clôture libère automatiquement la régularisation du mois précédent si besoin',
+    'Le résumé récapitulatif avant validation inclut désormais le total de la régularisation en plus des jours anticipés du mois en cours',
+  ] },
   { v: '1.77.5', items: [
     'Correction d\'un plantage silencieux dans Clôture Paie : l\'aperçu restait bloqué sur "Calcul en cours…" (et les boutons de simulation restaient inactifs) dès qu\'une semaine touchée par l\'anticipation n\'avait aucun planning renseigné — un bug de type sur la date de fin de semaine faisait planter le calcul avant qu\'il puisse afficher le message d\'alerte prévu',
   ] },
@@ -7189,6 +7201,12 @@ function supprimerDerniereCloture() {
   }
   if (!confirm(`Supprimer la clôture de ${derniere.mois} ?\n\nLes données anticipées de fin de mois seront perdues. Le mois suivant redeviendra clôturable comme une toute première clôture (sans régularisation).`)) return;
   db.clotures = db.clotures.filter(c => c.mois !== derniere.mois);
+  // Si cette clôture avait régularisé le mois précédent, on le "libère" pour qu'il puisse être
+  // régularisé à nouveau lors d'une prochaine clôture — sinon il resterait bloqué pour toujours.
+  if (derniere.regularisation) {
+    const precedente = db.clotures.find(c => c.mois === derniere.regularisation.mois);
+    if (precedente) delete precedente.regularisationAppliquee;
+  }
   saveDB();
   logAudit('Clôture paie supprimée', derniere.mois);
   notify(`Clôture de ${derniere.mois} supprimée`);
@@ -7248,6 +7266,60 @@ function calculerAnticipationJour(empId, dk, splitSeuil, utiliserSemaineType) {
   return { planMin, nuitMin, panierJour, primesJour, decouchageJour, source, estConge: congeInsts.length > 0 };
 }
 
+// Estimation "réelle" d'un jour désormais passé (utilisée pour la régularisation) : reprend les
+// heures réellement pointées si elles existent (avec la nuit calculée sur le pointage réel comme
+// partout ailleurs), et retombe sur le planning ACTUEL (potentiellement modifié depuis
+// l'anticipation) si jamais rien n'a été pointé — panier/primes/découchage restent toujours issus
+// du planning (comme partout dans l'appli), donc automatiquement à jour si le planning a changé.
+function calculerReelPourRegularisation(empId, dk, splitSeuil, pointagesParAnnee) {
+  const base = calculerAnticipationJour(empId, dk, splitSeuil, false);
+  const { pointeMin, nuitReelMin } = calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil);
+  return {
+    planMin: pointeMin > 0 ? pointeMin : base.planMin,
+    nuitMin: pointeMin > 0 ? nuitReelMin : base.nuitMin,
+    panierJour: base.panierJour, primesJour: base.primesJour, decouchageJour: base.decouchageJour,
+    estConge: base.estConge,
+  };
+}
+
+// Compare les jours anticipés de la clôture PRÉCÉDENTE à ce qui est réellement connu aujourd'hui,
+// jour par jour, employé par employé — l'écart devient la régularisation à intégrer à la clôture
+// en cours. Ne s'applique jamais deux fois (voir regularisationAppliquee).
+async function calculerRegularisationMoisPrecedent(clotureAReguler) {
+  const joursAnnees = new Set();
+  Object.values(clotureAReguler.parEmploye).forEach(e => Object.keys(e.joursAnticipes).forEach(dk => joursAnnees.add(dk.slice(0, 4))));
+  const results = await Promise.all([...joursAnnees].map(an =>
+    fbDb ? fbDb.ref(`pointages/${an}`).once('value').then(snap => ({ an, data: snap.val() || {} })).catch(() => ({ an, data: {} })) : Promise.resolve({ an, data: {} })
+  ));
+  const pointagesParAnnee = {};
+  results.forEach(r => { pointagesParAnnee[r.an] = r.data; });
+
+  const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
+  const parEmploye = {};
+  Object.entries(clotureAReguler.parEmploye).forEach(([empId, data]) => {
+    let deltaPlanMin = 0, deltaNuitMin = 0, deltaPanier = 0, deltaPrimes = 0, deltaDecouchage = 0;
+    const details = [];
+    Object.entries(data.joursAnticipes).forEach(([dk, anticipe]) => {
+      const reel = calculerReelPourRegularisation(empId, dk, splitSeuil, pointagesParAnnee);
+      const dPlan = reel.planMin - anticipe.planMin;
+      const dNuit = reel.nuitMin - anticipe.nuitMin;
+      const dPanier = reel.panierJour - anticipe.panierJour;
+      const dPrimes = reel.primesJour - anticipe.primesJour;
+      const dDecouchage = reel.decouchageJour - anticipe.decouchageJour;
+      deltaPlanMin += dPlan; deltaNuitMin += dNuit; deltaPanier += dPanier; deltaPrimes += dPrimes; deltaDecouchage += dDecouchage;
+      details.push({ dk, anticipe, reel, dPlan, dNuit, dPanier, dPrimes, dDecouchage });
+    });
+    parEmploye[empId] = { deltaPlanMin, deltaNuitMin, deltaPanier, deltaPrimes, deltaDecouchage, details };
+  });
+  return { mois: clotureAReguler.mois, parEmploye };
+}
+
+function moisPrecedent(mois) {
+  const [an, m] = mois.split('-').map(Number);
+  const prec = new Date(an, m - 2, 1);
+  return prec.getFullYear() + '-' + String(prec.getMonth() + 1).padStart(2, '0');
+}
+
 function ouvrirModalCloturePaie() {
   const inactifEl = document.getElementById('cp-inactif');
   const actifEl = document.getElementById('cp-actif');
@@ -7274,8 +7346,71 @@ function ouvrirModalCloturePaie() {
   document.getElementById('cp-status').textContent = '';
   window._cpMois = mois;
   window._cpApercu = null;
+  window._cpRegul = null;
+  document.getElementById('cp-regul-section').style.display = 'none';
+  document.getElementById('cp-regul').innerHTML = '';
   openModal('modal-cloture-paie');
   rendreApercuCloturePaie(); // calcul automatique dès l'ouverture, plus besoin de cliquer d'abord
+  chargerRegularisationSiApplicable(mois);
+}
+
+// Ne s'affiche que si la clôture du mois immédiatement précédent existe et n'a pas déjà servi à
+// une régularisation — la toute première clôture, ou celles déjà régularisées, n'ont rien à
+// comparer (voir Brique 1 : "la toute première clôture n'aura forcément pas de jours anticipés").
+async function chargerRegularisationSiApplicable(mois) {
+  const precedent = moisPrecedent(mois);
+  const clotureAReguler = getClotureMois(precedent);
+  if (!clotureAReguler || clotureAReguler.regularisationAppliquee || !Object.keys(clotureAReguler.parEmploye || {}).length) return;
+
+  const section = document.getElementById('cp-regul-section');
+  const wrap = document.getElementById('cp-regul');
+  section.style.display = '';
+  wrap.innerHTML = '<div class="hint">Calcul de la régularisation en cours…</div>';
+
+  try {
+    const regul = await calculerRegularisationMoisPrecedent(clotureAReguler);
+    window._cpRegul = regul;
+    const emps = getEmployesTries();
+    const lignes = emps
+      .map(emp => ({ emp, d: regul.parEmploye[emp.id] }))
+      .filter(x => x.d && (x.d.deltaPlanMin !== 0 || x.d.deltaNuitMin !== 0 || x.d.deltaPanier !== 0 || x.d.deltaPrimes !== 0 || x.d.deltaDecouchage !== 0));
+
+    if (!lignes.length) {
+      wrap.innerHTML = '<div class="hint" style="color:var(--success);">✅ Aucun écart entre l\'anticipé et le réel — rien à régulariser.</div>';
+      return;
+    }
+    wrap.innerHTML = `<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
+      <thead><tr>
+        <th style="padding:5px 8px;text-align:left;font-size:11px;color:var(--text-dim);">Employé</th>
+        <th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">Heures</th>
+        <th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">Nuit</th>
+        <th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">Panier</th>
+        <th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">Primes</th>
+        <th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">Découchage</th>
+      </tr></thead>
+      <tbody>${lignes.map(({ emp, d }) => `
+        <tr>
+          <td style="padding:5px 8px;font-size:12px;font-weight:700;">${emp.prenom} ${emp.nom}</td>
+          <td style="padding:5px 8px;text-align:center;font-family:var(--mono);font-size:12px;color:${d.deltaPlanMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaPlanMin >= 0 ? '+' : ''}${minToHM(d.deltaPlanMin)}</td>
+          <td style="padding:5px 8px;text-align:center;font-family:var(--mono);font-size:12px;color:${d.deltaNuitMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaNuitMin >= 0 ? '+' : ''}${minToHM(d.deltaNuitMin)}</td>
+          <td style="padding:5px 8px;text-align:center;font-family:var(--mono);font-size:12px;">${d.deltaPanier ? (d.deltaPanier >= 0 ? '+' : '') + d.deltaPanier.toFixed(2) + '€' : '—'}</td>
+          <td style="padding:5px 8px;text-align:center;font-family:var(--mono);font-size:12px;">${d.deltaPrimes ? (d.deltaPrimes >= 0 ? '+' : '') + d.deltaPrimes.toFixed(2) + '€' : '—'}</td>
+          <td style="padding:5px 8px;text-align:center;font-family:var(--mono);font-size:12px;">${d.deltaDecouchage ? (d.deltaDecouchage >= 0 ? '+' : '') + d.deltaDecouchage : '—'}</td>
+        </tr>`).join('')}</tbody>
+    </table></div>`;
+
+    const totalDeltaMin = lignes.reduce((s, x) => s + x.d.deltaPlanMin, 0);
+    const resumeEl = document.getElementById('cp-resume');
+    if (resumeEl) {
+      resumeEl.innerHTML += `<div class="task-card" style="cursor:default;background:var(--surface2);margin-top:8px;">
+        <div class="section-label" style="margin-top:0;">🔁 Régularisation de ${regul.mois}</div>
+        <div style="font-size:13px;color:var(--text-muted);">${lignes.length} employé(s) concerné(s), ${totalDeltaMin >= 0 ? '+' : ''}${minToHM(totalDeltaMin)} d'heures au total à régulariser — sera figé avec cette clôture.</div>
+      </div>`;
+    }
+  } catch (e) {
+    wrap.innerHTML = '<div class="hint" style="color:var(--danger);">Erreur lors du calcul de la régularisation — réessaie.</div>';
+    console.error('Régularisation:', e);
+  }
 }
 
 // Semaines (lundi-dimanche) touchées par une liste de jours — sert à vérifier que le planning de
@@ -7485,7 +7620,9 @@ function validerCloturePaie() {
   if (!apercu || !apercu.complet) { notify('Complète l\'aperçu avant de clôturer', 'warning'); return; }
   const mois = apercu.mois;
   if (getClotureMois(mois)) { notify(`${mois} est déjà clôturé`, 'warning'); return; }
-  if (!confirm(`Clôturer ${mois} ?\n\nLes jours anticipés seront figés tels quels. Cette action pourra être annulée uniquement tant qu'aucune clôture plus récente n'existe.`)) return;
+  const regul = window._cpRegul;
+  const messageRegul = regul ? `\n\nLa régularisation du mois précédent (${regul.mois}) sera intégrée et figée avec cette clôture.` : '';
+  if (!confirm(`Clôturer ${mois} ?\n\nLes jours anticipés seront figés tels quels. Cette action pourra être annulée uniquement tant qu'aucune clôture plus récente n'existe.${messageRegul}`)) return;
 
   const reglementsHS = {};
   db.employes.forEach(emp => {
@@ -7497,10 +7634,19 @@ function validerCloturePaie() {
     id: 'clot_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
     mois, dateCloture: new Date().toISOString(), verrouille: true,
     parEmploye: apercu.parEmploye, reglementsHS,
+    regularisation: regul || null,
   };
   db.clotures.push(cloture);
+
+  // Marque la clôture précédente comme régularisée — empêche de la régulariser deux fois, et
+  // avertit désormais si on tente de la modifier/supprimer (voir Brique 1).
+  if (regul) {
+    const precedente = db.clotures.find(c => c.mois === regul.mois);
+    if (precedente) precedente.regularisationAppliquee = true;
+  }
+
   saveDB();
-  logAudit('Clôture paie', `${mois} — ${Object.keys(apercu.parEmploye).length} employé(s)`);
+  logAudit('Clôture paie', `${mois} — ${Object.keys(apercu.parEmploye).length} employé(s)${regul ? ` — régularisation de ${regul.mois} intégrée` : ''}`);
   notify(`Clôture de ${mois} enregistrée`);
   closeModal('modal-cloture-paie');
   renderClotureListe();
