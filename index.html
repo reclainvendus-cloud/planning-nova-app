@@ -2063,7 +2063,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.77.0';
+const APP_VERSION = '1.77.2';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2080,6 +2080,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.77.2', items: [
+    'Clôture Paie : simplification de la vérification "planning manquant" — au lieu de deviner jour par jour si une case vide est un repos ou un oubli, l\'appli vérifie maintenant que chaque semaine complète touchée par l\'anticipation contient bien quelque chose (tâche ou congé) pour chaque employé ; si une semaine entière est totalement vide pour quelqu\'un, la clôture est bloquée avec la liste précise à compléter',
+  ] },
+  { v: '1.77.1', items: [
+    'Clôture Paie : correction — un jour anticipé sans aucune tâche planifiée n\'est plus systématiquement signalé "⚠️ vide". Si c\'est le jour de repos habituel de l\'employé, ou que son objectif d\'heures est à 0 ce jour de semaine (couvre notamment les deux jours d\'un week-end complet, même si un seul est déclaré comme "jour de repos habituel"), il est reconnu comme un vrai repos et ne bloque plus la clôture',
+  ] },
   { v: '1.77.0', items: [
     'Clôture Paie (Brique 2/3) — nouveau bouton "📅 Clôture Paie" dans le Récap paie (visible si le mode est activé) : propose le mois à clôturer dans l\'ordre strict, centralise la validation des heures sup (renvoi vers le Compteur & modulation), puis affiche un aperçu jour par jour des heures à anticiper (aujourd\'hui inclus jusqu\'à la fin du mois) basé sur le planning',
     'Secours "Semaine type" activable pour les jours sans aucun planning renseigné — clairement signalé (⚠️) partout où c\'est utilisé',
@@ -7189,7 +7195,11 @@ function calculerAnticipationJour(empId, dk, splitSeuil, utiliserSemaineType) {
   const d = isoToDate(dk);
   let insts = (db.planning[empId]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge);
   const congeInsts = (db.planning[empId]?.[dk] || []).filter(i => db.tasks.find(t => t.id === i.taskId)?.conge);
-  let source = insts.length ? 'planning' : (congeInsts.length ? 'conge' : 'aucun');
+  let source = insts.length ? 'planning' : (congeInsts.length ? 'conge' : 'repos');
+  // La semaine entière a déjà été vérifiée comme renseignée avant d'arriver ici (voir
+  // semaineEntierementVide) — un jour vide isolé au sein d'une semaine par ailleurs renseignée est
+  // donc un simple repos, pas besoin de le deviner au cas par cas. Le secours Semaine type ne sert
+  // ici qu'en complément facultatif, si activé, pour affiner un jour resté vide.
   if (!insts.length && !congeInsts.length && utiliserSemaineType) {
     const dayIdx = jsDayToIndex(d.getDay());
     const modele = (db.semaineType[empId]?.[dayIdx] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge);
@@ -7233,6 +7243,30 @@ function ouvrirModalCloturePaie() {
   openModal('modal-cloture-paie');
 }
 
+// Semaines (lundi-dimanche) touchées par une liste de jours — sert à vérifier que le planning de
+// CHAQUE semaine concernée a bien été renseigné avant d'anticiper quoi que ce soit dedans.
+function getSemainesTouchees(joursAAnticiper) {
+  const semaines = new Map();
+  joursAAnticiper.forEach(dk => {
+    const lundi = dateKey(getMonday(isoToDate(dk)));
+    if (!semaines.has(lundi)) semaines.set(lundi, addDays(isoToDate(lundi), 6));
+  });
+  return [...semaines.entries()].map(([lundi, dimanche]) => ({ lundi, dimanche }));
+}
+
+// Un employé a-t-il STRICTEMENT RIEN (aucune tâche, aucun congé) sur toute la semaine ? — signal
+// simple et fiable qu'une semaine n'a jamais été planifiée pour lui, plutôt que d'essayer de
+// deviner jour par jour si une case vide est un repos légitime ou un oubli.
+function semaineEntierementVide(empId, lundi, dimanche) {
+  let d = isoToDate(lundi);
+  const fin = isoToDate(dimanche);
+  while (d <= fin) {
+    if ((db.planning[empId]?.[dateKey(d)] || []).length > 0) return false;
+    d = addDays(d, 1);
+  }
+  return true;
+}
+
 function rendreApercuCloturePaie() {
   const mois = window._cpMois;
   if (!mois) return;
@@ -7255,11 +7289,38 @@ function rendreApercuCloturePaie() {
     return;
   }
 
+  const emps = getEmployesTries();
+
+  // ---------- Étape préalable : chaque semaine touchée est-elle bien renseignée ? ----------
+  // Une semaine ENTIÈREMENT vide (aucune tâche, aucun congé, pas même un jour) pour un employé
+  // signale presque à coup sûr un planning jamais fait pour cette semaine-là — bien plus fiable
+  // que d'essayer de deviner jour par jour si une case vide est un repos normal ou un oubli.
+  const semaines = getSemainesTouchees(joursAAnticiper);
+  const manquants = [];
+  emps.forEach(emp => {
+    semaines.forEach(({ lundi, dimanche }) => {
+      if (semaineEntierementVide(emp.id, lundi, dimanche)) {
+        manquants.push({ emp, lundi, dimanche });
+      }
+    });
+  });
+
+  if (manquants.length) {
+    wrap.innerHTML = `
+      <div class="hint" style="color:var(--danger);margin-bottom:10px;">⚠️ Le planning de ${manquants.length > 1 ? 'ces semaines' : 'cette semaine'} n'a pas l'air d'avoir été fait pour ${manquants.length > 1 ? 'ces employés' : 'cet employé'} — complète-le avant de pouvoir clôturer :</div>
+      <ul style="margin:0 0 4px 18px;">
+        ${manquants.map(x => `<li>${x.emp.prenom} ${x.emp.nom} — semaine du ${formatDateFR(isoToDate(x.lundi))} au ${formatDateFR(addDays(isoToDate(x.lundi), 6))}</li>`).join('')}
+      </ul>
+    `;
+    window._cpApercu = null;
+    document.getElementById('cp-btn-cloturer').disabled = true;
+    return;
+  }
+
+  // ---------- Aperçu jour par jour (une fois les semaines confirmées comme renseignées) ----------
   const utiliserSemaineType = document.getElementById('cp-secours-semaine-type').checked;
   const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
-  const emps = getEmployesTries();
   const parEmploye = {};
-  let manqueDuContenu = false;
 
   const lignesHtml = emps.map(emp => {
     const jours = {};
@@ -7270,7 +7331,6 @@ function rendreApercuCloturePaie() {
       const label = String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
       let contenu, couleur;
       if (r.estConge) { contenu = 'Congé'; couleur = 'var(--text-dim)'; }
-      else if (r.source === 'aucun') { contenu = '⚠️ vide'; couleur = 'var(--danger)'; manqueDuContenu = true; }
       else if (r.planMin === 0) { contenu = 'Repos'; couleur = 'var(--text-dim)'; }
       else { contenu = minToHM(r.planMin) + (r.source === 'semaineType' ? ' ⚠️' : ''); couleur = r.source === 'semaineType' ? 'var(--warning)' : 'var(--text)'; }
       return `<td style="padding:5px 8px;text-align:center;color:${couleur};font-family:var(--mono);font-size:12px;" title="${label}${r.source === 'semaineType' ? ' — estimé depuis la Semaine type' : ''}">${contenu}</td>`;
@@ -7285,15 +7345,15 @@ function rendreApercuCloturePaie() {
   }).join('');
 
   wrap.innerHTML = `
-    ${manqueDuContenu ? `<div class="hint" style="color:var(--danger);margin-bottom:8px;">⚠️ Certains jours n'ont aucun planning (ni Semaine type disponible). Renseigne le planning manquant, ou active le secours Semaine type ci-dessus, avant de pouvoir clôturer.</div>` : ''}
+    <div class="hint" style="color:var(--success);margin-bottom:8px;">✅ Planning renseigné pour toutes les semaines concernées.</div>
     <div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
       <thead><tr><th style="padding:5px 8px;"></th>${headHtml}</tr></thead>
       <tbody>${lignesHtml}</tbody>
     </table></div>
   `;
 
-  window._cpApercu = { mois, parEmploye, complet: !manqueDuContenu, joursAAnticiper };
-  document.getElementById('cp-btn-cloturer').disabled = manqueDuContenu;
+  window._cpApercu = { mois, parEmploye, complet: true, joursAAnticiper };
+  document.getElementById('cp-btn-cloturer').disabled = false;
 }
 
 function validerCloturePaie() {
