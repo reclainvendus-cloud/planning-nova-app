@@ -720,6 +720,10 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
             <label style="visibility:hidden;">_</label>
             <button class="btn btn-secondary btn-sm" onclick="ouvrirExportRecapModal()">📊 Exporter</button>
           </div>
+          <div class="form-group" style="margin:0;" id="rp-cloture-btn-wrap">
+            <label style="visibility:hidden;">_</label>
+            <button class="btn btn-primary btn-sm" onclick="ouvrirModalCloturePaie()">📅 Clôture Paie</button>
+          </div>
         </div>
         <div id="rp-summary" style="margin:18px 0;"></div>
         <div id="rp-cols-bar" style="display:flex;flex-wrap:wrap;gap:4px 14px;margin-bottom:14px;padding:10px 12px;background:var(--surface2);border-radius:var(--radius-sm);font-size:12px;"></div>
@@ -1704,6 +1708,38 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
   </div>
 </div>
 
+<!-- ===== MODAL CLÔTURE PAIE (mode Estimation + régularisation) ===== -->
+<div class="modal-overlay" id="modal-cloture-paie">
+  <div class="modal" style="width:760px;max-width:94vw;max-height:90vh;overflow-y:auto;">
+    <button class="modal-close" onclick="closeModal('modal-cloture-paie')">✕</button>
+    <h2>📅 Clôture Paie</h2>
+    <div id="cp-inactif" style="display:none;">
+      <div class="hint">Le mode Clôture Paie n'est pas activé. Va dans <b>Paramètres > Général > Clôture paie</b> pour l'activer d'abord.</div>
+    </div>
+    <div id="cp-actif">
+      <div class="hint" style="margin-bottom:14px;">Mois à clôturer : <b id="cp-mois-label"></b> — un relevé envoyé avant la fin du mois anticipe les derniers jours sur la base du planning, et sera automatiquement régularisé lors de la clôture du mois suivant.</div>
+
+      <div class="section-label" style="margin-top:0;">1️⃣ Valider les heures supplémentaires</div>
+      <div class="hint" style="margin-bottom:10px;">Passe d'abord par le Compteur & modulation pour régler les heures sup du mois — ce montant sera figé dans cette clôture.</div>
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('modal-cloture-paie'); showView('compteur');">⚖️ Aller au Compteur & modulation</button>
+
+      <div class="section-label" style="margin-top:22px;">2️⃣ Aperçu des jours à anticiper</div>
+      <div class="hint" style="margin-bottom:10px;">À partir d'aujourd'hui inclus jusqu'à la fin du mois — ces jours seront estimés sur la base du planning (comme s'ils avaient été pointés exactement comme prévu).</div>
+      <label class="checkbox-row"><input type="checkbox" id="cp-secours-semaine-type" onchange="rendreApercuCloturePaie()"><span>Utiliser la Semaine type en secours pour les jours sans aucun planning</span></label>
+      <div style="display:flex;gap:8px;margin:10px 0;">
+        <button class="btn btn-secondary btn-sm" onclick="rendreApercuCloturePaie()">🔄 Calculer l'aperçu</button>
+      </div>
+      <div id="cp-apercu"></div>
+
+      <div style="display:flex;gap:10px;margin-top:18px;align-items:center;">
+        <button class="btn btn-primary" id="cp-btn-cloturer" onclick="validerCloturePaie()" disabled>🔒 Clôturer <span id="cp-mois-btn-label"></span></button>
+        <button class="btn btn-secondary" onclick="closeModal('modal-cloture-paie')">Annuler</button>
+        <span id="cp-status" style="font-size:12px;color:var(--text-dim);"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ===== MODAL RÈGLEMENT HEURES SUP (individuel) ===== -->
 <div class="modal-overlay" id="modal-reglement-hs">
   <div class="modal" style="width:480px;">
@@ -2027,7 +2063,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.76.0';
+const APP_VERSION = '1.77.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2044,6 +2080,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.77.0', items: [
+    'Clôture Paie (Brique 2/3) — nouveau bouton "📅 Clôture Paie" dans le Récap paie (visible si le mode est activé) : propose le mois à clôturer dans l\'ordre strict, centralise la validation des heures sup (renvoi vers le Compteur & modulation), puis affiche un aperçu jour par jour des heures à anticiper (aujourd\'hui inclus jusqu\'à la fin du mois) basé sur le planning',
+    'Secours "Semaine type" activable pour les jours sans aucun planning renseigné — clairement signalé (⚠️) partout où c\'est utilisé',
+    'La clôture est bloquée tant qu\'un jour reste sans aucune donnée (ni planning, ni secours) ; une fois validée, les jours anticipés et le règlement d\'heures sup du mois sont figés dans un nouveau journal dédié',
+    'La régularisation automatique le mois suivant (comparaison anticipé vs réel) arrive dans une prochaine mise à jour',
+  ] },
   { v: '1.76.0', items: [
     'Nouveau : "Clôture Paie" (Brique 1/3) — Paramètres > Général propose désormais le mode "Estimation + régularisation" pour les relevés envoyés à la compta avant la fin du mois, avec confirmation à l\'activation/désactivation',
     'Journal des clôtures mensuelles mis en place (stockage dédié, jamais mélangé aux vraies données de pointage) avec suppression possible de la dernière clôture uniquement (protégée si une clôture plus récente existe déjà)',
@@ -7133,6 +7175,151 @@ function renderClotureListe() {
       ${c.mois === derniereMois ? `<button class="btn btn-danger btn-sm" onclick="supprimerDerniereCloture()">🗑️ Supprimer</button>` : ''}
     </div>
   `).join('');
+}
+
+// ===================================================
+// CLÔTURE PAIE — Brique 2 : calcul et pose des jours anticipés
+// ===================================================
+
+// Estimation d'un jour à partir du planning (ou de la Semaine type en secours) — nuit/panier/
+// primes/découchage sont DÉJÀ calculés à partir du planning dans le reste de l'appli (jamais du
+// pointage), donc identiques qu'un jour soit réel ou anticipé ; seul "pointeMin" doit être simulé
+// comme si l'employé avait pointé exactement à l'heure prévue.
+function calculerAnticipationJour(empId, dk, splitSeuil, utiliserSemaineType) {
+  const d = isoToDate(dk);
+  let insts = (db.planning[empId]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge);
+  const congeInsts = (db.planning[empId]?.[dk] || []).filter(i => db.tasks.find(t => t.id === i.taskId)?.conge);
+  let source = insts.length ? 'planning' : (congeInsts.length ? 'conge' : 'aucun');
+  if (!insts.length && !congeInsts.length && utiliserSemaineType) {
+    const dayIdx = jsDayToIndex(d.getDay());
+    const modele = (db.semaineType[empId]?.[dayIdx] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge);
+    if (modele.length) { insts = modele; source = 'semaineType'; }
+  }
+  const dkHier = dateKey(addDays(d, -1));
+  const instsHierCross = buildChaineHierCross(empId, dkHier, splitSeuil);
+  const planMinHier = instsHierCross.reduce((s, i) => s + postMinuitWorkMinutes(i), 0);
+  const planMin = insts.reduce((s, i) => s + ownDayMinutes(i), 0) + planMinHier;
+  const nuitMin = insts.reduce((s, i) => s + preMinuitNuitMinutes(i), 0) + instsHierCross.reduce((s, i) => s + postMinuitNuitMinutes(i), 0);
+  const panierJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.panier || 0); }, 0);
+  const primesJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.primeMontant || 0); }, 0);
+  const decouchageJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.decouchage || 0); }, 0);
+  return { planMin, nuitMin, panierJour, primesJour, decouchageJour, source, estConge: congeInsts.length > 0 };
+}
+
+function ouvrirModalCloturePaie() {
+  const inactifEl = document.getElementById('cp-inactif');
+  const actifEl = document.getElementById('cp-actif');
+  if (!db.params.clotureActive) {
+    inactifEl.style.display = '';
+    actifEl.style.display = 'none';
+    openModal('modal-cloture-paie');
+    return;
+  }
+  inactifEl.style.display = 'none';
+  actifEl.style.display = '';
+  const mois = getMoisACloturer();
+  if (getClotureMois(mois)) {
+    notify(`${mois} est déjà clôturé`, 'warning');
+    return;
+  }
+  document.getElementById('cp-mois-label').textContent = mois;
+  document.getElementById('cp-mois-btn-label').textContent = mois;
+  document.getElementById('cp-secours-semaine-type').checked = false;
+  document.getElementById('cp-apercu').innerHTML = '';
+  document.getElementById('cp-btn-cloturer').disabled = true;
+  document.getElementById('cp-status').textContent = '';
+  window._cpMois = mois;
+  window._cpApercu = null;
+  openModal('modal-cloture-paie');
+}
+
+function rendreApercuCloturePaie() {
+  const mois = window._cpMois;
+  if (!mois) return;
+  const wrap = document.getElementById('cp-apercu');
+  wrap.innerHTML = '<div class="hint">Calcul en cours…</div>';
+
+  const [an, m] = mois.split('-').map(Number);
+  const aujourdhui = new Date(); aujourdhui.setHours(0, 0, 0, 0);
+  const dernierJourMois = new Date(an, m, 0); // jour 0 du mois suivant = dernier jour de ce mois
+  // Le jour de clôture LUI-MÊME (pas encore forcément entièrement pointé) est déjà anticipé, comme
+  // tous les jours suivants — seuls les jours strictement avant sont considérés réels.
+  let curseur = new Date(Math.max(aujourdhui.getTime(), new Date(an, m - 1, 1).getTime()));
+  const joursAAnticiper = [];
+  while (curseur <= dernierJourMois) { joursAAnticiper.push(dateKey(curseur)); curseur = addDays(curseur, 1); }
+
+  if (!joursAAnticiper.length) {
+    wrap.innerHTML = '<div class="hint">Aucun jour à anticiper — le mois est déjà entièrement écoulé.</div>';
+    window._cpApercu = { mois, parEmploye: {}, complet: true };
+    document.getElementById('cp-btn-cloturer').disabled = false;
+    return;
+  }
+
+  const utiliserSemaineType = document.getElementById('cp-secours-semaine-type').checked;
+  const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
+  const emps = getEmployesTries();
+  const parEmploye = {};
+  let manqueDuContenu = false;
+
+  const lignesHtml = emps.map(emp => {
+    const jours = {};
+    const cellsHtml = joursAAnticiper.map(dk => {
+      const r = calculerAnticipationJour(emp.id, dk, splitSeuil, utiliserSemaineType);
+      jours[dk] = r;
+      const d = isoToDate(dk);
+      const label = String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
+      let contenu, couleur;
+      if (r.estConge) { contenu = 'Congé'; couleur = 'var(--text-dim)'; }
+      else if (r.source === 'aucun') { contenu = '⚠️ vide'; couleur = 'var(--danger)'; manqueDuContenu = true; }
+      else if (r.planMin === 0) { contenu = 'Repos'; couleur = 'var(--text-dim)'; }
+      else { contenu = minToHM(r.planMin) + (r.source === 'semaineType' ? ' ⚠️' : ''); couleur = r.source === 'semaineType' ? 'var(--warning)' : 'var(--text)'; }
+      return `<td style="padding:5px 8px;text-align:center;color:${couleur};font-family:var(--mono);font-size:12px;" title="${label}${r.source === 'semaineType' ? ' — estimé depuis la Semaine type' : ''}">${contenu}</td>`;
+    }).join('');
+    parEmploye[emp.id] = { joursAnticipes: jours };
+    return `<tr><td style="padding:5px 8px;font-size:12px;font-weight:700;white-space:nowrap;">${emp.prenom} ${emp.nom}</td>${cellsHtml}</tr>`;
+  }).join('');
+
+  const headHtml = joursAAnticiper.map(dk => {
+    const d = isoToDate(dk);
+    return `<th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}</th>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    ${manqueDuContenu ? `<div class="hint" style="color:var(--danger);margin-bottom:8px;">⚠️ Certains jours n'ont aucun planning (ni Semaine type disponible). Renseigne le planning manquant, ou active le secours Semaine type ci-dessus, avant de pouvoir clôturer.</div>` : ''}
+    <div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
+      <thead><tr><th style="padding:5px 8px;"></th>${headHtml}</tr></thead>
+      <tbody>${lignesHtml}</tbody>
+    </table></div>
+  `;
+
+  window._cpApercu = { mois, parEmploye, complet: !manqueDuContenu, joursAAnticiper };
+  document.getElementById('cp-btn-cloturer').disabled = manqueDuContenu;
+}
+
+function validerCloturePaie() {
+  const apercu = window._cpApercu;
+  if (!apercu || !apercu.complet) { notify('Complète l\'aperçu avant de clôturer', 'warning'); return; }
+  const mois = apercu.mois;
+  if (getClotureMois(mois)) { notify(`${mois} est déjà clôturé`, 'warning'); return; }
+  if (!confirm(`Clôturer ${mois} ?\n\nLes jours anticipés seront figés tels quels. Cette action pourra être annulée uniquement tant qu'aucune clôture plus récente n'existe.`)) return;
+
+  const reglementsHS = {};
+  db.employes.forEach(emp => {
+    const r = getReglementMois(emp.id, mois);
+    if (r) reglementsHS[emp.id] = r.montantMin;
+  });
+
+  const cloture = {
+    id: 'clot_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+    mois, dateCloture: new Date().toISOString(), verrouille: true,
+    parEmploye: apercu.parEmploye, reglementsHS,
+  };
+  db.clotures.push(cloture);
+  saveDB();
+  logAudit('Clôture paie', `${mois} — ${Object.keys(apercu.parEmploye).length} employé(s)`);
+  notify(`Clôture de ${mois} enregistrée`);
+  closeModal('modal-cloture-paie');
+  renderClotureListe();
 }
 
 function initCompteurModulation() {
