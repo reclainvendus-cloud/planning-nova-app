@@ -1732,7 +1732,13 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <div id="cp-apercu"></div>
       <div id="cp-resume" style="margin-top:10px;"></div>
 
-      <div style="display:flex;gap:10px;margin-top:18px;align-items:center;">
+      <div style="display:flex;gap:10px;margin-top:18px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" id="cp-btn-simu-xlsx" onclick="telechargerSimulationCloturePaie('xlsx')" disabled>👁️ Aperçu Excel (simulation)</button>
+        <button class="btn btn-secondary btn-sm" id="cp-btn-simu-csv" onclick="telechargerSimulationCloturePaie('csv')" disabled>👁️ Aperçu CSV (simulation)</button>
+      </div>
+      <div class="hint" style="margin:4px 0 0;">Ces fichiers ne sont que des simulations — rien n'est enregistré tant que tu ne cliques pas "Clôturer".</div>
+
+      <div style="display:flex;gap:10px;margin-top:14px;align-items:center;">
         <button class="btn btn-primary" id="cp-btn-cloturer" onclick="validerCloturePaie()" disabled>🔒 Clôturer <span id="cp-mois-btn-label"></span></button>
         <button class="btn btn-secondary" onclick="closeModal('modal-cloture-paie')">Annuler</button>
         <span id="cp-status" style="font-size:12px;color:var(--text-dim);"></span>
@@ -2064,7 +2070,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.77.3';
+const APP_VERSION = '1.77.4';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2081,6 +2087,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.77.4', items: [
+    'Correction importante (touche tout le Récap paie, pas seulement la Clôture Paie) : les heures de nuit se basaient uniquement sur le planning prévu, jamais sur l\'heure réellement pointée — un service prévu jusqu\'à 3h00 mais pointé jusqu\'à 4h00 ne comptait pas cette heure de nuit supplémentaire. Elles se basent désormais sur le pointage réel dès qu\'il existe, et ne retombent sur le planning que pour un jour pas encore pointé (ex: jour anticipé en Clôture Paie)',
+    'Clôture Paie : nouveaux boutons "👁️ Aperçu Excel/CSV (simulation)" — téléchargent un fichier de simulation à partir de l\'aperçu déjà calculé, sans jamais rien enregistrer, pour vérifier les chiffres avant de clôturer pour de vrai',
+  ] },
   { v: '1.77.3', items: [
     'Clôture Paie : l\'aperçu se calcule désormais automatiquement à l\'ouverture de la fenêtre (plus besoin de cliquer "Calculer" en premier) — le bouton devient "🔄 Recalculer", utile après une modification du planning pendant que la fenêtre est ouverte',
     'Nouveau résumé récapitulatif juste avant le bouton final ("📋 Ce qui sera figé") : nombre d\'employés et de jours concernés, total d\'heures anticipées, et le règlement d\'heures sup qui sera capturé — pour valider en connaissance de cause avant l\'enregistrement définitif',
@@ -6442,6 +6452,10 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
   }
 
   let pointeMin = 0;
+  // Heures de nuit calculées sur les horaires RÉELLEMENT RETENUS (dMin/fMin ci-dessous), pas sur
+  // le planning prévu — si une tâche prévue jusqu'à 3h00 est pointée jusqu'à 4h00, cette heure
+  // supplémentaire doit compter en nuit, et inversement si le pointage s'arrête plus tôt que prévu.
+  let nuitReelMin = 0;
 
   if (instsHierCross.length) {
     const evtsHier = Object.values(pointagesParAnnee[dkHier.slice(0, 4)]?.[dkHier]?.[empId]?.evenements || {});
@@ -6457,6 +6471,9 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
       const apresMinuitBrut = Math.max(0, fMin - 1440);
       const pointeApresMinuit = Math.max(0, apresMinuitBrut - pauseApres);
       pointeMin += pointeApresMinuit;
+      // Portion "après minuit" uniquement (le "avant minuit" a déjà été comptée sur hier) : la
+      // fenêtre de nuit s'évalue sur [1440, fMin], jamais sur toute la chaîne depuis dMin.
+      nuitReelMin += computeNuitMinutes(1440, fMin, false);
     }
   }
 
@@ -6502,10 +6519,14 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
           if (curDk === dk) {
             const pauseTotaleChaine = chaine.reduce((s, i) => s + (i.pauseDuree || 0), 0);
             pointeMin += Math.max(0, fMin2 - dMin2 - pauseTotaleChaine);
+            nuitReelMin += computeNuitMinutes(dMin2, fMin2, false);
           } else {
             const pauseAvant = srv.reduce((s, i) => s + prePauseMinutes(i), 0);
             const avantMinuitBrut = Math.max(0, Math.min(fMin2, 1440) - dMin2);
             pointeMin += Math.max(0, avantMinuitBrut - pauseAvant);
+            // Seule la portion AVANT minuit revient à aujourd'hui (le reste sera compté demain,
+            // par la branche instsHierCross de ce jour suivant, sur son propre appel).
+            nuitReelMin += computeNuitMinutes(dMin2, Math.min(fMin2, 1440), false);
           }
         }
         return;
@@ -6518,6 +6539,7 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
         if (fMin <= dMin) fMin += 1440;
         const pauseTotal = srv.reduce((s, i) => s + (i.pauseDuree || 0), 0);
         pointeMin += Math.max(0, fMin - dMin - pauseTotal);
+        nuitReelMin += computeNuitMinutes(dMin, fMin, false);
       }
     });
   }
@@ -6535,12 +6557,13 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
         let fMin = timeToMin(debHP.heureRetenue);
         if (fMin <= dMin) fMin += 1440;
         pointeHorsPlanning += fMin - dMin;
+        nuitReelMin += computeNuitMinutes(dMin, fMin, false);
       }
     });
     pointeMin += pointeHorsPlanning;
   }
 
-  return { pointeMin, pointeHorsPlanning };
+  return { pointeMin, pointeHorsPlanning, nuitReelMin };
 }
 
 // ===================================================
@@ -7243,6 +7266,8 @@ function ouvrirModalCloturePaie() {
   document.getElementById('cp-secours-semaine-type').checked = false;
   document.getElementById('cp-apercu').innerHTML = '';
   document.getElementById('cp-btn-cloturer').disabled = true;
+  document.getElementById('cp-btn-simu-xlsx').disabled = true;
+  document.getElementById('cp-btn-simu-csv').disabled = true;
   document.getElementById('cp-status').textContent = '';
   window._cpMois = mois;
   window._cpApercu = null;
@@ -7294,6 +7319,8 @@ function rendreApercuCloturePaie() {
     document.getElementById('cp-resume').innerHTML = '';
     window._cpApercu = { mois, parEmploye: {}, complet: true };
     document.getElementById('cp-btn-cloturer').disabled = false;
+  document.getElementById('cp-btn-simu-xlsx').disabled = false;
+  document.getElementById('cp-btn-simu-csv').disabled = false;
     return;
   }
 
@@ -7323,6 +7350,8 @@ function rendreApercuCloturePaie() {
     window._cpApercu = null;
     document.getElementById('cp-resume').innerHTML = '';
     document.getElementById('cp-btn-cloturer').disabled = true;
+  document.getElementById('cp-btn-simu-xlsx').disabled = true;
+  document.getElementById('cp-btn-simu-csv').disabled = true;
     return;
   }
 
@@ -7382,6 +7411,70 @@ function rendreApercuCloturePaie() {
 
   window._cpApercu = { mois, parEmploye, complet: true, joursAAnticiper };
   document.getElementById('cp-btn-cloturer').disabled = false;
+  document.getElementById('cp-btn-simu-xlsx').disabled = false;
+  document.getElementById('cp-btn-simu-csv').disabled = false;
+}
+
+// Export de SIMULATION — utilise les données déjà calculées dans l'aperçu (window._cpApercu),
+// sans jamais rien enregistrer. Format volontairement simple (une ligne par jour anticipé par
+// employé) : l'objectif est de vérifier les chiffres avant de s'engager, pas de reproduire tout le
+// luxe de l'export Récap paie habituel.
+async function telechargerSimulationCloturePaie(format) {
+  const apercu = window._cpApercu;
+  if (!apercu || !apercu.joursAAnticiper) { notify('Calcule d\'abord l\'aperçu', 'warning'); return; }
+  const { mois, parEmploye, joursAAnticiper } = apercu;
+  const emps = getEmployesTries();
+
+  const lignes = [];
+  emps.forEach(emp => {
+    const jours = parEmploye[emp.id]?.joursAnticipes || {};
+    joursAAnticiper.forEach(dk => {
+      const j = jours[dk];
+      if (!j) return;
+      lignes.push({
+        emp: `${emp.nom} ${emp.prenom}`, date: formatDateFR(isoToDate(dk)),
+        planMin: j.planMin, nuitMin: j.nuitMin, panierJour: j.panierJour, primesJour: j.primesJour,
+        decouchageJour: j.decouchageJour, source: j.source, estConge: j.estConge,
+      });
+    });
+  });
+
+  if (format === 'csv') {
+    const sep = ';';
+    const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const rows = [['SIMULATION — NON CLÔTURÉ', mois, '', '', '', '', ''].map(esc).join(sep)];
+    rows.push(['Employé', 'Date', 'Heures anticipées', 'Nuit', 'Panier (€)', 'Primes (€)', 'Découchage', 'Statut'].map(esc).join(sep));
+    lignes.forEach(l => rows.push([
+      l.emp, l.date, l.estConge ? 'Congé' : minToHM(l.planMin), l.nuitMin ? minToHM(l.nuitMin) : '',
+      l.panierJour ? l.panierJour.toFixed(2) : '', l.primesJour ? l.primesJour.toFixed(2) : '',
+      l.decouchageJour ? 'Oui' : '', l.source === 'semaineType' ? 'Semaine type' : (l.estConge ? 'Congé' : 'Planning'),
+    ].map(esc).join(sep)));
+    downloadBlob(new Blob(['\uFEFF' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' }), `simulation-cloture-${mois}.csv`);
+  } else {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Simulation');
+    ws.columns = [{ width: 22 }, { width: 12 }, { width: 14 }, { width: 10 }, { width: 12 }, { width: 12 }, { width: 12 }, { width: 14 }];
+    ws.mergeCells('A1:H1');
+    ws.getCell('A1').value = `⚠️ SIMULATION — ${mois} — rien n'est clôturé, ce fichier est indicatif uniquement`;
+    ws.getCell('A1').font = { bold: true, size: 13, color: { argb: 'FFFFFFFF' } };
+    ws.getCell('A1').fill = xlsFill('FFB4750D');
+    ws.getRow(1).height = 24;
+    const entetes = ['Employé', 'Date', 'Heures anticipées', 'Nuit', 'Panier (€)', 'Primes (€)', 'Découchage', 'Statut'];
+    const headerRow = ws.addRow(entetes);
+    headerRow.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } }; cell.fill = xlsFill(XLS_COULEURS.entete); cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' }; });
+    lignes.forEach((l, i) => {
+      const row = ws.addRow([
+        l.emp, l.date, l.estConge ? 'Congé' : minToHM(l.planMin), l.nuitMin ? minToHM(l.nuitMin) : '—',
+        l.panierJour ? l.panierJour.toFixed(2) : '—', l.primesJour ? l.primesJour.toFixed(2) : '—',
+        l.decouchageJour ? 'Oui' : '—', l.source === 'semaineType' ? '⚠️ Semaine type' : (l.estConge ? 'Congé' : 'Planning'),
+      ]);
+      row.eachCell(cell => { cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' }; if (i % 2 === 1) cell.fill = xlsFill(XLS_COULEURS.ligneAlt); });
+      if (l.source === 'semaineType') row.getCell(8).font = { color: { argb: XLS_COULEURS.orangeTxt }, bold: true };
+    });
+    ws.views = [{ state: 'frozen', ySplit: 2 }];
+    const buffer = await wb.xlsx.writeBuffer();
+    downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `simulation-cloture-${mois}.xlsx`);
+  }
 }
 
 function validerCloturePaie() {
@@ -8006,8 +8099,9 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       // Répartition symétrique à planMin : la portion de nuit d'AUJOURD'HUI est celle d'avant
       // minuit pour les tâches propres à ce jour, plus la portion après minuit de la continuation
       // d'hier — sinon les heures de nuit d'un service à cheval sur minuit restent toutes
-      // attribuées au jour de départ, disparaissant de la semaine calendaire suivante.
-      const nuitMin = insts.reduce((s, i) => s + preMinuitNuitMinutes(i), 0) + instsHierCross.reduce((s, i) => s + postMinuitNuitMinutes(i), 0);
+      // attribuées au jour de départ, disparaissant de la semaine calendaire suivante. Valeur de
+      // repli uniquement (voir plus bas) : dès qu'un pointage réel existe, c'est LUI qui fait foi.
+      const nuitPlanMin = insts.reduce((s, i) => s + preMinuitNuitMinutes(i), 0) + instsHierCross.reduce((s, i) => s + postMinuitNuitMinutes(i), 0);
       // Pause prévue (donc décomptée pour calculer la durée retenue) — affichée pour aider la
       // compréhension des écarts entre planifié/pointé et durée retenue.
       const pauseJourMin = insts.reduce((s, i) => s + prePauseMinutes(i), 0) + instsHierCross.reduce((s, i) => s + postPauseMinutes(i), 0);
@@ -8017,7 +8111,12 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
       // Calcule les heures pointées depuis les événements Firebase (moteur partagé avec le
       // Compteur & modulation — voir calculerPointeMinJour)
-      const { pointeMin, pointeHorsPlanning } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
+      const { pointeMin, pointeHorsPlanning, nuitReelMin } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
+      // Dès qu'un pointage réel existe, les heures de nuit se basent dessus (pas sur le planning) —
+      // si une tâche prévue jusqu'à 3h00 est pointée jusqu'à 4h00, cette heure de plus compte en
+      // nuit, et inversement si le pointage s'arrête plus tôt que prévu. Le planning ne sert de
+      // repli que tant qu'aucun pointage n'existe encore (jour futur, ou anticipé en Clôture Paie).
+      const nuitMin = pointeMin > 0 ? nuitReelMin : nuitPlanMin;
 
       const ecartMin = pointeMin > 0 ? pointeMin - planMin : null;
       const dayWeekKey = dateKey(getMonday(d));
