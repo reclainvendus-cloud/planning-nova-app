@@ -1724,12 +1724,13 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <button class="btn btn-secondary btn-sm" onclick="closeModal('modal-cloture-paie'); showView('compteur');">⚖️ Aller au Compteur & modulation</button>
 
       <div class="section-label" style="margin-top:22px;">2️⃣ Aperçu des jours à anticiper</div>
-      <div class="hint" style="margin-bottom:10px;">À partir d'aujourd'hui inclus jusqu'à la fin du mois — ces jours seront estimés sur la base du planning (comme s'ils avaient été pointés exactement comme prévu).</div>
-      <label class="checkbox-row"><input type="checkbox" id="cp-secours-semaine-type" onchange="rendreApercuCloturePaie()"><span>Utiliser la Semaine type en secours pour les jours sans aucun planning</span></label>
+      <div class="hint" style="margin-bottom:10px;">À partir d'aujourd'hui inclus jusqu'à la fin du mois — ces jours seront estimés sur la base du planning (comme s'ils avaient été pointés exactement comme prévu). Calculé automatiquement ci-dessous.</div>
+      <label class="checkbox-row"><input type="checkbox" id="cp-secours-semaine-type" onchange="rendreApercuCloturePaie()"><span>Utiliser la Semaine type en secours pour un jour isolé resté vide au sein d'une semaine par ailleurs renseignée</span></label>
       <div style="display:flex;gap:8px;margin:10px 0;">
-        <button class="btn btn-secondary btn-sm" onclick="rendreApercuCloturePaie()">🔄 Calculer l'aperçu</button>
+        <button class="btn btn-secondary btn-sm" onclick="rendreApercuCloturePaie()">🔄 Recalculer</button>
       </div>
       <div id="cp-apercu"></div>
+      <div id="cp-resume" style="margin-top:10px;"></div>
 
       <div style="display:flex;gap:10px;margin-top:18px;align-items:center;">
         <button class="btn btn-primary" id="cp-btn-cloturer" onclick="validerCloturePaie()" disabled>🔒 Clôturer <span id="cp-mois-btn-label"></span></button>
@@ -2063,7 +2064,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.77.2';
+const APP_VERSION = '1.77.3';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2080,6 +2081,11 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.77.3', items: [
+    'Clôture Paie : l\'aperçu se calcule désormais automatiquement à l\'ouverture de la fenêtre (plus besoin de cliquer "Calculer" en premier) — le bouton devient "🔄 Recalculer", utile après une modification du planning pendant que la fenêtre est ouverte',
+    'Nouveau résumé récapitulatif juste avant le bouton final ("📋 Ce qui sera figé") : nombre d\'employés et de jours concernés, total d\'heures anticipées, et le règlement d\'heures sup qui sera capturé — pour valider en connaissance de cause avant l\'enregistrement définitif',
+    'La case "Semaine type en secours" garde un rôle plus ciblé : elle ne sert plus qu\'à combler un jour isolé resté vide au sein d\'une semaine par ailleurs renseignée',
+  ] },
   { v: '1.77.2', items: [
     'Clôture Paie : simplification de la vérification "planning manquant" — au lieu de deviner jour par jour si une case vide est un repos ou un oubli, l\'appli vérifie maintenant que chaque semaine complète touchée par l\'anticipation contient bien quelque chose (tâche ou congé) pour chaque employé ; si une semaine entière est totalement vide pour quelqu\'un, la clôture est bloquée avec la liste précise à compléter',
   ] },
@@ -7241,6 +7247,7 @@ function ouvrirModalCloturePaie() {
   window._cpMois = mois;
   window._cpApercu = null;
   openModal('modal-cloture-paie');
+  rendreApercuCloturePaie(); // calcul automatique dès l'ouverture, plus besoin de cliquer d'abord
 }
 
 // Semaines (lundi-dimanche) touchées par une liste de jours — sert à vérifier que le planning de
@@ -7284,6 +7291,7 @@ function rendreApercuCloturePaie() {
 
   if (!joursAAnticiper.length) {
     wrap.innerHTML = '<div class="hint">Aucun jour à anticiper — le mois est déjà entièrement écoulé.</div>';
+    document.getElementById('cp-resume').innerHTML = '';
     window._cpApercu = { mois, parEmploye: {}, complet: true };
     document.getElementById('cp-btn-cloturer').disabled = false;
     return;
@@ -7313,6 +7321,7 @@ function rendreApercuCloturePaie() {
       </ul>
     `;
     window._cpApercu = null;
+    document.getElementById('cp-resume').innerHTML = '';
     document.getElementById('cp-btn-cloturer').disabled = true;
     return;
   }
@@ -7350,6 +7359,25 @@ function rendreApercuCloturePaie() {
       <thead><tr><th style="padding:5px 8px;"></th>${headHtml}</tr></thead>
       <tbody>${lignesHtml}</tbody>
     </table></div>
+  `;
+
+  // Résumé récapitulatif — ce qui sera exactement figé si tu cliques "Clôturer", pour que tu
+  // valides en connaissance de cause avant l'enregistrement définitif.
+  let totalMinAnticipe = 0, totalReglementHS = 0, nbEmployesAvecReglement = 0;
+  emps.forEach(emp => {
+    Object.values(parEmploye[emp.id].joursAnticipes).forEach(j => { totalMinAnticipe += j.planMin; });
+    const r = getReglementMois(emp.id, mois);
+    if (r) { totalReglementHS += r.montantMin; nbEmployesAvecReglement++; }
+  });
+  document.getElementById('cp-resume').innerHTML = `
+    <div class="task-card" style="cursor:default;background:var(--surface2);">
+      <div class="section-label" style="margin-top:0;">📋 Résumé — ce qui sera figé dans cette clôture</div>
+      <ul style="margin:6px 0 0 18px;padding:0;font-size:13px;color:var(--text-muted);">
+        <li>${emps.length} employé(s), ${joursAAnticiper.length} jour(s) anticipé(s) chacun (du ${formatDateFR(isoToDate(joursAAnticiper[0]))} au ${formatDateFR(isoToDate(joursAAnticiper[joursAAnticiper.length-1]))})</li>
+        <li>${minToHM(totalMinAnticipe)} d'heures anticipées au total, sur la base du planning</li>
+        <li>${nbEmployesAvecReglement > 0 ? `Règlement d'heures sup déjà validé pour ${nbEmployesAvecReglement} employé(s) (${minToHM(totalReglementHS)} au total) — sera figé avec cette clôture` : '⚠️ Aucun règlement d\'heures sup validé pour ce mois — vérifie l\'étape 1 si ce n\'est pas volontaire'}</li>
+      </ul>
+    </div>
   `;
 
   window._cpApercu = { mois, parEmploye, complet: true, joursAAnticiper };
