@@ -2087,7 +2087,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.78.2';
+const APP_VERSION = '1.79.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2104,6 +2104,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.79.0', items: [
+    'Clôture Paie : l\'export (simulation comme définitif) prend désormais le même format que le Récap paie habituel — un onglet par employé, jour par jour, avec toutes les colonnes (planifié, pointé, nuit, panier, primes, découchage, congé), plus une colonne "Statut" (Réel/Anticipé) et une section Régularisation dédiée quand applicable',
+    'À chaque vraie clôture, les fichiers Excel et CSV complets sont désormais générés et téléchargés automatiquement, sans action supplémentaire — l\'aperçu simulation utilise le même format pour une cohérence totale entre ce qu\'on visualise avant et ce qu\'on obtient après',
+  ] },
   { v: '1.78.2', items: [
     'Clôture Paie : le message de succès liste désormais explicitement, semaine par semaine, pourquoi chaque semaine est passée ("validée ✓" ou "uniquement congé/repos, rien à valider") — pour vérifier facilement que le bon motif s\'applique à chaque semaine avant de clôturer',
     'Lisibilité de la fenêtre Clôture Paie améliorée (textes d\'aide, en-têtes de tableau et libellés remontés de 10-11px gris terne à 13px plus contrasté), sans toucher au reste de l\'appli',
@@ -7666,72 +7670,259 @@ function rendreApercuCloturePaie() {
 // sans jamais rien enregistrer. Format volontairement simple (une ligne par jour anticipé par
 // employé) : l'objectif est de vérifier les chiffres avant de s'engager, pas de reproduire tout le
 // luxe de l'export Récap paie habituel.
-async function telechargerSimulationCloturePaie(format) {
-  const apercu = window._cpApercu;
-  if (!apercu || !apercu.joursAAnticiper) { notify('Calcule d\'abord l\'aperçu', 'warning'); return; }
-  const { mois, parEmploye, joursAAnticiper } = apercu;
-  const emps = getEmployesTries();
+// ===================================================
+// EXPORT COMPLET CLÔTURE PAIE — format identique au Récap paie habituel (onglet par employé,
+// mêmes colonnes), enrichi d'une colonne "Statut" (Réel / Anticipé) et d'un onglet Régularisation
+// si applicable. Utilisé aussi bien pour la simulation (aperçu, rien d'enregistré) que pour
+// l'export automatique généré à la vraie clôture.
+function getCongeEtFerieInfoCloture(empId, dk) {
+  const d = isoToDate(dk);
+  const congeInsts = (db.planning[empId]?.[dk] || []).filter(i => db.tasks.find(t => t.id === i.taskId)?.conge);
+  const congeLabel = congeInsts.length ? db.tasks.find(t => t.id === congeInsts[0].taskId)?.nom || 'Congé' : null;
+  const ferieInstJour = congeInsts.find(i => db.tasks.find(t => t.id === i.taskId)?.ferie);
+  const congeFerieMin = ferieInstJour ? ownDayMinutes(ferieInstJour) : 0;
+  const nomFerie = getJoursFeries(d.getFullYear())[dk] || null;
+  return { congeLabel, congeFerieMin, nomFerie };
+}
 
-  const lignes = [];
-  emps.forEach(emp => {
-    const jours = parEmploye[emp.id]?.joursAnticipes || {};
-    joursAAnticiper.forEach(dk => {
-      const j = jours[dk];
-      if (!j) return;
-      lignes.push({
-        emp: `${emp.nom} ${emp.prenom}`, date: formatDateFR(isoToDate(dk)),
-        planMin: j.planMin, nuitMin: j.nuitMin, panierJour: j.panierJour, primesJour: j.primesJour,
-        decouchageJour: j.decouchageJour, source: j.source, estConge: j.estConge,
-      });
+function construireLigneCloture(empId, dk, statutCloture, valeurs) {
+  const d = isoToDate(dk);
+  const info = getCongeEtFerieInfoCloture(empId, dk);
+  const pointeMin = valeurs.planMin; // "pointé" = réel pointé s'il existe, sinon l'estimation (déjà géré par le calcul en amont)
+  const estPremierMai = dk.slice(5) === '05-01';
+  const ferieTravaille = !!info.nomFerie && pointeMin > 0 && !info.congeFerieMin;
+  const pctMajoration = ferieTravaille ? (estPremierMai ? 100 : (db.params.majorationFerieAutrePct || 0)) : 0;
+  const heuresMajorees = pctMajoration > 0 ? Math.round(pointeMin * pctMajoration / 100) : 0;
+  return {
+    type: 'jour', dk, d, dow: d.getDay(),
+    planMin: valeurs.planMin, pointeMin, ecartMin: null,
+    nuitMin: valeurs.nuitMin, panierJour: valeurs.panierJour, primesJour: valeurs.primesJour, decouchageJour: valeurs.decouchageJour,
+    congeLabel: info.congeLabel, congeFerieMin: info.congeFerieMin, nomFerie: info.nomFerie,
+    ferieTravaille, pctMajoration, heuresMajorees, statutCloture,
+  };
+}
+
+// Construit les données complètes du mois (réel jusqu'à la veille de la clôture, anticipé
+// ensuite) pour chaque employé — même forme que "donneesExport" du Récap paie habituel.
+async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnticipesDejaCalcules) {
+  const [an, m] = mois.split('-').map(Number);
+  const premierJour = new Date(an, m - 1, 1);
+  const dernierJour = new Date(an, m, 0);
+  const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
+
+  const annees = new Set();
+  { let d = new Date(premierJour); while (d <= dernierJour) { annees.add(String(d.getFullYear())); d = addDays(d, 32); d.setDate(1); } }
+  annees.add(String(premierJour.getFullYear())); annees.add(String(dernierJour.getFullYear()));
+  const pointagesParAnnee = {};
+  await Promise.all([...annees].map(async an2 => {
+    if (!fbDb) { pointagesParAnnee[an2] = {}; return; }
+    try { const snap = await fbDb.ref(`pointages/${an2}`).once('value'); pointagesParAnnee[an2] = snap.val() || {}; }
+    catch { pointagesParAnnee[an2] = {}; }
+  }));
+
+  return emps.map(emp => {
+    const lignes = [];
+    let d = new Date(premierJour);
+    while (d <= dernierJour) {
+      const dk = dateKey(d);
+      const estAnticipe = dk >= dateClotureKey;
+      let valeurs;
+      if (estAnticipe && joursAnticipesDejaCalcules?.[emp.id]?.joursAnticipes?.[dk]) {
+        valeurs = joursAnticipesDejaCalcules[emp.id].joursAnticipes[dk]; // valeurs déjà figées (vraie clôture)
+      } else if (estAnticipe) {
+        valeurs = calculerAnticipationJour(emp.id, dk, splitSeuil, false);
+      } else {
+        valeurs = calculerReelPourRegularisation(emp.id, dk, splitSeuil, pointagesParAnnee);
+      }
+      lignes.push(construireLigneCloture(emp.id, dk, estAnticipe ? 'Anticipé' : 'Réel', valeurs));
+      d = addDays(d, 1);
+    }
+
+    let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPrimes = 0, empDecouchage = 0;
+    lignes.forEach(l => { empPlannifie += l.planMin; empPointe += l.pointeMin; empNuit += l.nuitMin; empPanier += l.panierJour; empPrimes += l.primesJour; empDecouchage += l.decouchageJour; });
+
+    const congesParType = {};
+    const congeTaskIdsVus = new Set();
+    lignes.forEach(l => {
+      if (!l.congeLabel) return;
+      const inst = (db.planning[emp.id]?.[l.dk] || []).find(i => db.tasks.find(t => t.id === i.taskId)?.conge);
+      if (inst && !db.tasks.find(t => t.id === inst.taskId)?.ferie) congeTaskIdsVus.add(inst.taskId);
     });
+    congeTaskIdsVus.forEach(taskId => {
+      const task = db.tasks.find(t => t.id === taskId);
+      const nb = computeJoursDecomptes(emp.id, taskId, premierJour, dernierJour);
+      if (nb > 0) congesParType[task?.nom || 'Congé'] = (congesParType[task?.nom || 'Congé'] || 0) + nb;
+    });
+
+    const reglementRecap = getReglementMois(emp.id, mois);
+    return {
+      emp, lignes, contratMin: Math.round((emp.contratH || 35) * 60),
+      empPlannifie, empPointe, empNuit, empPanier, empPrimes, empDecouchage,
+      congesParType, reglementRecap,
+    };
   });
+}
+
+async function construireExportCloturePaie(format, { mois, dateClotureKey, donnees, regul, estSimulation }) {
+  const nomFichier = `${estSimulation ? 'simulation-' : ''}cloture-${mois}`;
 
   if (format === 'csv') {
     const sep = ';';
     const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const rows = [['SIMULATION — NON CLÔTURÉ', mois, '', '', '', '', ''].map(esc).join(sep)];
-    rows.push(['Employé', 'Date', 'Heures anticipées', 'Nuit', 'Panier (€)', 'Primes (€)', 'Découchage', 'Statut'].map(esc).join(sep));
-    lignes.forEach(l => rows.push([
-      l.emp, l.date, l.estConge ? 'Congé' : minToHM(l.planMin), l.nuitMin ? minToHM(l.nuitMin) : '',
-      l.panierJour ? l.panierJour.toFixed(2) : '', l.primesJour ? l.primesJour.toFixed(2) : '',
-      l.decouchageJour ? 'Oui' : '', l.source === 'semaineType' ? 'Semaine type' : (l.estConge ? 'Congé' : 'Planning'),
-    ].map(esc).join(sep)));
-    downloadBlob(new Blob(['\uFEFF' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' }), `simulation-cloture-${mois}.csv`);
-  } else {
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('Simulation');
-    ws.columns = [{ width: 22 }, { width: 12 }, { width: 14 }, { width: 10 }, { width: 12 }, { width: 12 }, { width: 12 }, { width: 14 }];
-    ws.mergeCells('A1:H1');
-    ws.getCell('A1').value = `⚠️ SIMULATION — ${mois} — rien n'est clôturé, ce fichier est indicatif uniquement`;
-    ws.getCell('A1').font = { bold: true, size: 13, color: { argb: 'FFFFFFFF' } };
-    ws.getCell('A1').fill = xlsFill('FFB4750D');
-    ws.getRow(1).height = 24;
-    const entetes = ['Employé', 'Date', 'Heures anticipées', 'Nuit', 'Panier (€)', 'Primes (€)', 'Découchage', 'Statut'];
+    const DOW = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+    const rows = [[estSimulation ? 'SIMULATION — NON CLÔTURÉ' : 'CLÔTURE PAIE', mois].map(esc).join(sep)];
+    rows.push(['Employé','Contrat/sem','Jour','Date','Statut','Planifié/Anticipé','Pointé/Estimé net','Nuit','Panier (€)','Primes (€)','Découchage','Congé'].map(esc).join(sep));
+    donnees.forEach(d => {
+      d.lignes.forEach(l => {
+        rows.push([
+          `${d.emp.nom} ${d.emp.prenom}`, (d.contratMin / 60).toFixed(2),
+          DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}/${l.d.getFullYear()}`,
+          l.statutCloture, l.planMin ? minToHM(l.planMin) : '', l.pointeMin ? minToHM(l.pointeMin) : '',
+          l.nuitMin ? minToHM(l.nuitMin) : '', l.panierJour ? l.panierJour.toFixed(2) : '',
+          l.primesJour ? l.primesJour.toFixed(2) : '', l.decouchageJour ? 'Oui' : '', libelleCongeJour(l),
+        ].map(esc).join(sep));
+      });
+    });
+    if (regul) {
+      rows.push(['']);
+      rows.push([`RÉGULARISATION DE ${regul.mois}`].map(esc).join(sep));
+      rows.push(['Employé','Écart heures','Écart nuit','Écart panier (€)','Écart primes (€)','Écart découchage'].map(esc).join(sep));
+      Object.entries(regul.parEmploye).forEach(([empId, r]) => {
+        const emp = getEmpById(empId); if (!emp) return;
+        rows.push([`${emp.nom} ${emp.prenom}`, minToHM(r.deltaPlanMin), minToHM(r.deltaNuitMin), r.deltaPanier.toFixed(2), r.deltaPrimes.toFixed(2), r.deltaDecouchage].map(esc).join(sep));
+      });
+    }
+    downloadBlob(new Blob(['\uFEFF' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' }), `${nomFichier}.csv`);
+    return;
+  }
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Planning Nova';
+  const DOW = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+
+  // ----- Feuille Résumé -----
+  const wsResume = wb.addWorksheet('Résumé');
+  wsResume.columns = [{ width: 30 }, { width: 20 }];
+  wsResume.mergeCells('A1:B1');
+  wsResume.getCell('A1').value = (estSimulation ? '⚠️ SIMULATION — NON CLÔTURÉ — ' : 'Clôture Paie — ') + mois;
+  wsResume.getCell('A1').font = { bold: true, size: 13, color: { argb: 'FFFFFFFF' } };
+  wsResume.getCell('A1').fill = xlsFill(estSimulation ? 'FFB4750D' : XLS_COULEURS.entete);
+  wsResume.getRow(1).height = 24;
+  let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPrimes = 0, gtDecouchage = 0;
+  donnees.forEach(d => { gtPlannifie += d.empPlannifie; gtPointe += d.empPointe; gtNuit += d.empNuit; gtPanier += d.empPanier; gtPrimes += d.empPrimes; gtDecouchage += d.empDecouchage; });
+  const lignesResume = [
+    ['Date de bascule Réel → Anticipé', formatDateFR(isoToDate(dateClotureKey))],
+    ['Nombre d\'employés', donnees.length],
+    ['Total planifié/anticipé', minToHM(gtPlannifie)],
+    ['Total pointé/estimé (net)', minToHM(gtPointe)],
+    ['Heures de nuit', minToHM(gtNuit)],
+    ['Paniers', gtPanier.toFixed(2) + ' €'],
+    ['Primes', gtPrimes.toFixed(2) + ' €'],
+    ['Découchages', gtDecouchage],
+  ];
+  lignesResume.forEach((row, i) => {
+    const r = wsResume.addRow(row);
+    r.eachCell(cell => { cell.border = xlsBordureFine(); if (i % 2 === 1) cell.fill = xlsFill(XLS_COULEURS.ligneAlt); });
+    r.getCell(1).font = { bold: true };
+  });
+
+  if (regul) {
+    wsResume.addRow([]);
+    const titreRegul = wsResume.addRow([`Régularisation de ${regul.mois}`]);
+    titreRegul.getCell(1).font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } };
+    titreRegul.getCell(1).fill = xlsFill(XLS_COULEURS.entete);
+    const wsRegul = wb.addWorksheet('Régularisation');
+    wsRegul.columns = [{ width: 24 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 }];
+    const headRegul = wsRegul.addRow(['Employé', 'Écart heures', 'Écart nuit', 'Panier (€)', 'Primes (€)', 'Découchage']);
+    headRegul.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } }; cell.fill = xlsFill(XLS_COULEURS.entete); cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' }; });
+    Object.entries(regul.parEmploye).forEach(([empId, r], i) => {
+      const emp = getEmpById(empId); if (!emp) return;
+      const row = wsRegul.addRow([`${emp.prenom} ${emp.nom}`, minToHM(r.deltaPlanMin), minToHM(r.deltaNuitMin), r.deltaPanier.toFixed(2), r.deltaPrimes.toFixed(2), r.deltaDecouchage]);
+      row.eachCell(cell => { cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' }; if (i % 2 === 1) cell.fill = xlsFill(XLS_COULEURS.ligneAlt); });
+    });
+  }
+
+  // ----- Un onglet par employé -----
+  donnees.forEach(d => {
+    const nomOnglet = `${d.emp.prenom} ${d.emp.nom}`.slice(0, 31).replace(/[\\/*?:[\]]/g, '');
+    const ws = wb.addWorksheet(nomOnglet || 'Employé');
+    ws.columns = [{ width: 6 }, { width: 11 }, { width: 10 }, { width: 15 }, { width: 15 }, { width: 8 }, { width: 10 }, { width: 10 }, { width: 10 }, { width: 16 }];
+    ws.mergeCells('A1:J1');
+    ws.getCell('A1').value = `${d.emp.prenom} ${d.emp.nom} — ${mois}${estSimulation ? ' (SIMULATION)' : ''}`;
+    ws.getCell('A1').font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+    ws.getCell('A1').fill = xlsFill(XLS_COULEURS.entete);
+    ws.getRow(1).height = 22;
+    const entetes = ['Jour', 'Date', 'Statut', 'Planifié/Anticipé', 'Pointé/Estimé', 'Nuit', 'Panier (€)', 'Primes (€)', 'Découchage', 'Congé'];
     const headerRow = ws.addRow(entetes);
     headerRow.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } }; cell.fill = xlsFill(XLS_COULEURS.entete); cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' }; });
-    lignes.forEach((l, i) => {
+
+    d.lignes.forEach((l, i) => {
       const row = ws.addRow([
-        l.emp, l.date, l.estConge ? 'Congé' : minToHM(l.planMin), l.nuitMin ? minToHM(l.nuitMin) : '—',
-        l.panierJour ? l.panierJour.toFixed(2) : '—', l.primesJour ? l.primesJour.toFixed(2) : '—',
-        l.decouchageJour ? 'Oui' : '—', l.source === 'semaineType' ? '⚠️ Semaine type' : (l.estConge ? 'Congé' : 'Planning'),
+        DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}`,
+        l.statutCloture, l.planMin ? minToHM(l.planMin) : '—', l.pointeMin ? minToHM(l.pointeMin) : '—',
+        l.nuitMin ? minToHM(l.nuitMin) : '—', l.panierJour ? l.panierJour.toFixed(2) : '—',
+        l.primesJour ? l.primesJour.toFixed(2) : '—', l.decouchageJour ? 'Oui' : '—', libelleCongeJour(l) || '—',
       ]);
       row.eachCell(cell => { cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' }; if (i % 2 === 1) cell.fill = xlsFill(XLS_COULEURS.ligneAlt); });
-      if (l.source === 'semaineType') row.getCell(8).font = { color: { argb: XLS_COULEURS.orangeTxt }, bold: true };
+      if (l.statutCloture === 'Anticipé') row.getCell(3).font = { color: { argb: XLS_COULEURS.orangeTxt }, bold: true };
     });
+
+    ws.addRow([]);
+    const recapLignes = [
+      ['Total planifié/anticipé', minToHM(d.empPlannifie)],
+      ['Total pointé/estimé (net)', minToHM(d.empPointe)],
+      ['Heures de nuit', minToHM(d.empNuit)],
+      ['Panier', d.empPanier ? d.empPanier.toFixed(2) + ' €' : '—'],
+      ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
+      ['Découchages', d.empDecouchage || '—'],
+      [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non réglées', d.reglementRecap ? '+' + minToHM(d.reglementRecap.montantMin) : '—'],
+      ...Object.entries(d.congesParType).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
+    ];
+    recapLignes.forEach((row, i) => {
+      const r = ws.addRow(row);
+      r.eachCell(cell => { cell.border = xlsBordureFine(); if (i % 2 === 1) cell.fill = xlsFill(XLS_COULEURS.ligneAlt); });
+      r.getCell(1).font = { bold: true };
+    });
+
+    if (regul?.parEmploye[d.emp.id]) {
+      const r = regul.parEmploye[d.emp.id];
+      ws.addRow([]);
+      const titre = ws.addRow([`Régularisation de ${regul.mois}`]);
+      titre.getCell(1).font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } };
+      titre.getCell(1).fill = xlsFill(XLS_COULEURS.entete);
+      [['Écart heures', minToHM(r.deltaPlanMin)], ['Écart nuit', minToHM(r.deltaNuitMin)],
+       ['Écart panier', r.deltaPanier.toFixed(2) + ' €'], ['Écart primes', r.deltaPrimes.toFixed(2) + ' €'],
+       ['Écart découchage', r.deltaDecouchage]].forEach(row => {
+        const rr = ws.addRow(row);
+        rr.eachCell(cell => cell.border = xlsBordureFine());
+        rr.getCell(1).font = { bold: true };
+      });
+    }
+
     ws.views = [{ state: 'frozen', ySplit: 2 }];
-    const buffer = await wb.xlsx.writeBuffer();
-    downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `simulation-cloture-${mois}.xlsx`);
-  }
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${nomFichier}.xlsx`);
 }
 
-function validerCloturePaie() {
+async function telechargerSimulationCloturePaie(format) {
+  const apercu = window._cpApercu;
+  if (!apercu || !apercu.joursAAnticiper) { notify('Calcule d\'abord l\'aperçu', 'warning'); return; }
+  notify('Génération du fichier…');
+  const emps = getEmployesTries();
+  const donnees = await construireDonneesCloturePaie(apercu.mois, apercu.joursAAnticiper[0], emps, apercu.parEmploye);
+  await construireExportCloturePaie(format, { mois: apercu.mois, dateClotureKey: apercu.joursAAnticiper[0], donnees, regul: window._cpRegul, estSimulation: true });
+}
+
+async function validerCloturePaie() {
   const apercu = window._cpApercu;
   if (!apercu || !apercu.complet) { notify('Complète l\'aperçu avant de clôturer', 'warning'); return; }
   const mois = apercu.mois;
   if (getClotureMois(mois)) { notify(`${mois} est déjà clôturé`, 'warning'); return; }
   const regul = window._cpRegul;
   const messageRegul = regul ? `\n\nLa régularisation du mois précédent (${regul.mois}) sera intégrée et figée avec cette clôture.` : '';
-  if (!confirm(`Clôturer ${mois} ?\n\nLes jours anticipés seront figés tels quels. Cette action pourra être annulée uniquement tant qu'aucune clôture plus récente n'existe.${messageRegul}`)) return;
+  if (!confirm(`Clôturer ${mois} ?\n\nLes jours anticipés seront figés tels quels. Un export Excel et CSV complet sera généré automatiquement. Cette action pourra être annulée uniquement tant qu'aucune clôture plus récente n'existe.${messageRegul}`)) return;
 
   const reglementsHS = {};
   db.employes.forEach(emp => {
@@ -7756,9 +7947,24 @@ function validerCloturePaie() {
 
   saveDB();
   logAudit('Clôture paie', `${mois} — ${Object.keys(apercu.parEmploye).length} employé(s)${regul ? ` — régularisation de ${regul.mois} intégrée` : ''}`);
-  notify(`Clôture de ${mois} enregistrée`);
+  notify(`Clôture de ${mois} enregistrée — génération des fichiers…`);
   closeModal('modal-cloture-paie');
   renderClotureListe();
+
+  // Export automatique et systématique (Excel + CSV), format Récap paie complet, avec la
+  // distinction Réel/Anticipé et la régularisation intégrée — comme demandé, à chaque vraie
+  // clôture, sans action supplémentaire de l'admin.
+  try {
+    const emps = getEmployesTries();
+    const donnees = await construireDonneesCloturePaie(mois, apercu.joursAAnticiper[0], emps, apercu.parEmploye);
+    const contexte = { mois, dateClotureKey: apercu.joursAAnticiper[0], donnees, regul, estSimulation: false };
+    await construireExportCloturePaie('xlsx', contexte);
+    await construireExportCloturePaie('csv', contexte);
+    notify('Fichiers de clôture générés');
+  } catch (e) {
+    console.error('Export clôture paie:', e);
+    notify('Clôture enregistrée, mais échec de la génération des fichiers — réessaie depuis Paramètres si besoin', 'warning');
+  }
 }
 
 function initCompteurModulation() {
