@@ -515,6 +515,9 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
             <button class="btn btn-secondary btn-sm" id="pg-lock-btn" onclick="toggleVerrouSemaine()" style="font-size:16px;padding:4px 10px;" title=""></button>
             <button class="btn btn-secondary btn-sm" onclick="window.print()">🖨️ Imprimer</button>
             <button class="btn btn-secondary btn-sm" onclick="openCopyWeekModal()">📋 Copier la semaine</button>
+            <label class="checkbox-row" id="pg-semaine-complete-wrap" style="margin:0;padding:4px 10px;background:var(--surface2);border-radius:var(--radius-sm);white-space:nowrap;">
+              <input type="checkbox" id="pg-semaine-complete" onchange="toggleSemaineValidee()"><span>Semaine complète</span>
+            </label>
             <div class="mode-toggle">
               <div id="mode-btn-edition" onclick="setPlanningMode('edition')">Édition</div>
             <div id="mode-btn-lecture" onclick="setPlanningMode('lecture')">Lecture</div>
@@ -895,6 +898,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 
       <div class="view" id="view-dashboard">
         <div id="dash-conges-alert"></div>
+        <div id="dash-semaines-alert"></div>
         <div id="dash-planning-qualite-alert"></div>
         <div id="dash-wrap"></div>
       </div>
@@ -2077,7 +2081,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.78.0';
+const APP_VERSION = '1.78.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2094,6 +2098,11 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.78.1', items: [
+    'Nouvelle case "Semaine complète" dans le bandeau du planning (après "Copier la semaine") — l\'admin la coche quand il estime le planning de la semaine entièrement fait',
+    'Nouvelle alerte tableau de bord "🔓 Semaine(s) planifiée(s) non validée(s)" (30 prochains jours) — signale une semaine contenant du travail mais pas encore cochée "Semaine complète" ; les semaines uniquement en congé/repos ne déclenchent jamais cette alerte',
+    'Clôture Paie : le contrôle des semaines s\'appuie désormais sur cette validation — une semaine avec du travail non cochée "Semaine complète" bloque la clôture, tout comme une semaine entièrement vide ; une semaine uniquement en congé reste exemptée',
+  ] },
   { v: '1.78.0', items: [
     'Clôture Paie (Brique 3/3 — complet) : régularisation automatique à l\'ouverture d\'une nouvelle clôture, si le mois précédent a des jours anticipés pas encore régularisés — compare chaque jour anticipé à ce qui est réellement connu aujourd\'hui (pointage réel si disponible, planning actuel sinon) et affiche l\'écart clairement (heures, nuit, panier, primes, découchage) par employé',
     'La régularisation est figée dans la nouvelle clôture au moment de valider, et le mois précédent est marqué comme "régularisé" pour ne jamais être traité deux fois — la suppression d\'une clôture libère automatiquement la régularisation du mois précédent si besoin',
@@ -3193,6 +3202,40 @@ function buildChaineHierCross(empId, dkJour, splitSeuil) {
 function isoToDate(s) { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); }
 function getWeekDays(monday) { return Array.from({length:7}, (_,i) => addDays(monday, i)); }
 function formatWeekLabel(monday) { const sun = addDays(monday, 6); return `${monday.getDate()}/${monday.getMonth()+1} – ${sun.getDate()}/${sun.getMonth()+1}/${sun.getFullYear()}`; }
+
+// ===================================================
+// VALIDATION "SEMAINE COMPLÈTE" — repère manuel posé par l'admin sur le planning, indépendant de
+// tout employé (une seule case par semaine, pour toute l'équipe) — sert de garde-fou pour la
+// Clôture Paie : une semaine avec du contenu mais jamais marquée complète bloque la clôture.
+function estSemaineValidee(lundiKey) {
+  return !!(db.params.semainesValidees && db.params.semainesValidees[lundiKey]);
+}
+function toggleSemaineValidee() {
+  const lundiKey = dateKey(pgWeekMonday);
+  const coche = document.getElementById('pg-semaine-complete').checked;
+  if (!db.params.semainesValidees) db.params.semainesValidees = {};
+  if (coche) db.params.semainesValidees[lundiKey] = true;
+  else delete db.params.semainesValidees[lundiKey];
+  saveDB();
+  logAudit('Semaine planning', `${lundiKey} marquée ${coche ? 'complète' : 'non complète'}`);
+  refreshCongesAlerts();
+}
+
+// Une semaine a-t-elle au moins une tâche de TRAVAIL (hors congé) pour au moins un employé ? — les
+// semaines entièrement en congé/repos n'ont rien à valider, donc jamais concernées par cette
+// alerte ni par le blocage de clôture, comme demandé.
+function semaineATacheTravail(lundiKey) {
+  const lundi = isoToDate(lundiKey);
+  for (const emp of db.employes) {
+    let d = new Date(lundi);
+    for (let i = 0; i < 7; i++) {
+      const insts = db.planning[emp.id]?.[dateKey(d)] || [];
+      if (insts.some(inst => !db.tasks.find(t => t.id === inst.taskId)?.conge)) return true;
+      d = addDays(d, 1);
+    }
+  }
+  return false;
+}
 function getEmpById(id) { return db.employes.find(e => e.id === id); }
 function getEmployesTries() {
   return [...db.employes].sort((a, b) => `${a.prenom} ${a.nom}`.localeCompare(`${b.prenom} ${b.nom}`, 'fr'));
@@ -3429,6 +3472,7 @@ function renderPlanning() {
   const noSem = getISOWeekNumber(pgWeekMonday);
   document.getElementById('pg-week-num').textContent = `Semaine n°${noSem} de Lun ${String(pgWeekMonday.getDate()).padStart(2,'0')}/${String(pgWeekMonday.getMonth()+1).padStart(2,'0')} à Dim ${String(dimanche.getDate()).padStart(2,'0')}/${String(dimanche.getMonth()+1).padStart(2,'0')}/${dimanche.getFullYear()}`;
   renderVerrouSemaineBtn();
+  document.getElementById('pg-semaine-complete').checked = estSemaineValidee(dateKey(pgWeekMonday));
   document.getElementById('pg-edition-wrap').style.display = pgMode === 'edition' ? 'block' : 'none';
   document.getElementById('pg-lecture-wrap').style.display = pgMode === 'lecture' ? 'block' : 'none';
   document.getElementById('pg-graphique-wrap').style.display = pgMode === 'graphique' ? 'block' : 'none';
@@ -5452,6 +5496,42 @@ function renderCongesAlertWidget(targetId) {
 function refreshCongesAlerts() {
   renderCongesAlertWidget('dash-conges-alert');
   renderCongesAlertWidget('conges-alert-banner');
+  renderSemainesNonValideesWidget('dash-semaines-alert');
+}
+
+// Semaines PROCHES (30 jours, comme pour les fériés) ayant au moins une tâche de travail mais
+// jamais marquées "Semaine complète" — sert d'alerte tableau de bord pour rappeler à l'admin de
+// valider le planning, et de garde-fou pour la Clôture Paie.
+function getSemainesNonValidees(fenetreJours) {
+  const aujourdhui = new Date(); aujourdhui.setHours(0, 0, 0, 0);
+  const dateLimite = addDays(aujourdhui, fenetreJours);
+  const lundiDepart = getMonday(aujourdhui);
+  const resultats = [];
+  let d = new Date(lundiDepart);
+  while (d <= dateLimite) {
+    const lundiKey = dateKey(d);
+    if (!estSemaineValidee(lundiKey) && semaineATacheTravail(lundiKey)) {
+      resultats.push({ lundi: lundiKey, dimanche: dateKey(addDays(d, 6)) });
+    }
+    d = addDays(d, 7);
+  }
+  return resultats;
+}
+
+function renderSemainesNonValideesWidget(targetId) {
+  const el = document.getElementById(targetId);
+  if (!el) return;
+  const liste = getSemainesNonValidees(30);
+  if (!liste.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="task-card" style="cursor:pointer;border:2px solid var(--warning);background:rgba(245,166,35,.08);margin-bottom:16px;" onclick="showView('planning')">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="font-size:24px;">🔓</div>
+      <div>
+        <div style="font-weight:800;color:var(--warning);">${liste.length} semaine${liste.length > 1 ? 's' : ''} planifiée${liste.length > 1 ? 's' : ''} non validée${liste.length > 1 ? 's' : ''}</div>
+        <div style="font-size:13px;color:var(--text-muted);">${liste.map(s => `du ${formatDateFR(isoToDate(s.lundi))} au ${formatDateFR(isoToDate(s.dimanche))}`).join(' · ')} — coche "Semaine complète" sur le planning une fois vérifiée</div>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ===================================================
@@ -7424,9 +7504,12 @@ function getSemainesTouchees(joursAAnticiper) {
   return [...semaines.entries()].map(([lundi, dimanche]) => ({ lundi, dimanche }));
 }
 
-// Un employé a-t-il STRICTEMENT RIEN (aucune tâche, aucun congé) sur toute la semaine ? — signal
-// simple et fiable qu'une semaine n'a jamais été planifiée pour lui, plutôt que d'essayer de
-// deviner jour par jour si une case vide est un repos légitime ou un oubli.
+// Une semaine a-t-elle STRICTEMENT RIEN DU TOUT (aucun employé, aucune tâche ni congé) ? — signal
+// fiable qu'un planning n'a jamais été fait pour cette semaine, indépendamment de la case "Semaine
+// complète" (qui elle ne concerne que les semaines où il y a effectivement du travail à valider).
+function semaineTeamEntierementVide(lundi, dimanche) {
+  return !db.employes.some(emp => !semaineEntierementVide(emp.id, lundi, dimanche));
+}
 function semaineEntierementVide(empId, lundi, dimanche) {
   let d = isoToDate(lundi);
   const fin = isoToDate(dimanche);
@@ -7464,25 +7547,29 @@ function rendreApercuCloturePaie() {
 
   const emps = getEmployesTries();
 
-  // ---------- Étape préalable : chaque semaine touchée est-elle bien renseignée ? ----------
-  // Une semaine ENTIÈREMENT vide (aucune tâche, aucun congé, pas même un jour) pour un employé
-  // signale presque à coup sûr un planning jamais fait pour cette semaine-là — bien plus fiable
-  // que d'essayer de deviner jour par jour si une case vide est un repos normal ou un oubli.
+  // ---------- Étape préalable : chaque semaine touchée est-elle prête pour la clôture ? ----------
+  // Deux cas bloquent la clôture :
+  //  - la semaine est ENTIÈREMENT vide (personne n'a rien, ni tâche ni congé) : planning jamais
+  //    fait, quasi certainement un oubli complet ;
+  //  - la semaine contient au moins une tâche de travail mais n'a PAS été cochée "Semaine
+  //    complète" sur le planning : l'admin n'a pas encore validé que c'est bien terminé.
+  // Une semaine qui ne contient QUE des congés/repos (aucun travail) n'a rien à valider, elle
+  // passe automatiquement — comme demandé, pas d'alerte ni de blocage pour ce cas.
   const semaines = getSemainesTouchees(joursAAnticiper);
   const manquants = [];
-  emps.forEach(emp => {
-    semaines.forEach(({ lundi, dimanche }) => {
-      if (semaineEntierementVide(emp.id, lundi, dimanche)) {
-        manquants.push({ emp, lundi, dimanche });
-      }
-    });
+  semaines.forEach(({ lundi, dimanche }) => {
+    if (semaineTeamEntierementVide(lundi, dimanche)) {
+      manquants.push({ lundi, dimanche, raison: 'vide' });
+    } else if (semaineATacheTravail(lundi) && !estSemaineValidee(lundi)) {
+      manquants.push({ lundi, dimanche, raison: 'non_validee' });
+    }
   });
 
   if (manquants.length) {
     wrap.innerHTML = `
-      <div class="hint" style="color:var(--danger);margin-bottom:10px;">⚠️ Le planning de ${manquants.length > 1 ? 'ces semaines' : 'cette semaine'} n'a pas l'air d'avoir été fait pour ${manquants.length > 1 ? 'ces employés' : 'cet employé'} — complète-le avant de pouvoir clôturer :</div>
+      <div class="hint" style="color:var(--danger);margin-bottom:10px;">⚠️ ${manquants.length > 1 ? 'Ces semaines bloquent' : 'Cette semaine bloque'} la clôture :</div>
       <ul style="margin:0 0 4px 18px;">
-        ${manquants.map(x => `<li>${x.emp.prenom} ${x.emp.nom} — semaine du ${formatDateFR(isoToDate(x.lundi))} au ${formatDateFR(addDays(isoToDate(x.lundi), 6))}</li>`).join('')}
+        ${manquants.map(x => `<li>Semaine du ${formatDateFR(isoToDate(x.lundi))} au ${formatDateFR(isoToDate(x.dimanche))} — ${x.raison === 'vide' ? 'planning jamais fait' : 'contient du travail mais pas encore cochée "Semaine complète" sur le planning'}</li>`).join('')}
       </ul>
     `;
     window._cpApercu = null;
