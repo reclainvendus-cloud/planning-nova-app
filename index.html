@@ -136,6 +136,12 @@ label { display: block; font-size: 11px; font-weight: 700; text-transform: upper
 .checkbox-row input { width: 16px; height: 16px; flex-shrink: 0; }
 .checkbox-row span { font-size: 13px; color: var(--text); }
 .hint { font-size: 10px; color: var(--text-dim); margin-top: 4px; }
+/* Fenêtre Clôture Paie : textes volontairement plus lisibles que le .hint générique de l'appli
+   (souvent consultée pour des décisions importantes, mieux vaut ne pas plisser les yeux). */
+#modal-cloture-paie .hint { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+#modal-cloture-paie .section-label { font-size: 14px; }
+#modal-cloture-paie .checkbox-row span { font-size: 13px; }
+#modal-cloture-paie #cp-status { font-size: 13px !important; }
 
 .prime-row { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }
 .prime-row input { flex: 1; }
@@ -2081,7 +2087,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.78.1';
+const APP_VERSION = '1.78.2';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2098,6 +2104,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.78.2', items: [
+    'Clôture Paie : le message de succès liste désormais explicitement, semaine par semaine, pourquoi chaque semaine est passée ("validée ✓" ou "uniquement congé/repos, rien à valider") — pour vérifier facilement que le bon motif s\'applique à chaque semaine avant de clôturer',
+    'Lisibilité de la fenêtre Clôture Paie améliorée (textes d\'aide, en-têtes de tableau et libellés remontés de 10-11px gris terne à 13px plus contrasté), sans toucher au reste de l\'appli',
+  ] },
   { v: '1.78.1', items: [
     'Nouvelle case "Semaine complète" dans le bandeau du planning (après "Copier la semaine") — l\'admin la coche quand il estime le planning de la semaine entièrement fait',
     'Nouvelle alerte tableau de bord "🔓 Semaine(s) planifiée(s) non validée(s)" (30 prochains jours) — signale une semaine contenant du travail mais pas encore cochée "Semaine complète" ; les semaines uniquement en congé/repos ne déclenchent jamais cette alerte',
@@ -7461,21 +7471,21 @@ async function chargerRegularisationSiApplicable(mois) {
     }
     wrap.innerHTML = `<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
       <thead><tr>
-        <th style="padding:5px 8px;text-align:left;font-size:11px;color:var(--text-dim);">Employé</th>
-        <th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">Heures</th>
-        <th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">Nuit</th>
-        <th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">Panier</th>
-        <th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">Primes</th>
-        <th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">Découchage</th>
+        <th style="padding:6px 9px;text-align:left;font-size:12px;font-weight:700;color:var(--text-muted);">Employé</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Heures</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Nuit</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Panier</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Primes</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Découchage</th>
       </tr></thead>
       <tbody>${lignes.map(({ emp, d }) => `
         <tr>
-          <td style="padding:5px 8px;font-size:12px;font-weight:700;">${emp.prenom} ${emp.nom}</td>
-          <td style="padding:5px 8px;text-align:center;font-family:var(--mono);font-size:12px;color:${d.deltaPlanMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaPlanMin >= 0 ? '+' : ''}${minToHM(d.deltaPlanMin)}</td>
-          <td style="padding:5px 8px;text-align:center;font-family:var(--mono);font-size:12px;color:${d.deltaNuitMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaNuitMin >= 0 ? '+' : ''}${minToHM(d.deltaNuitMin)}</td>
-          <td style="padding:5px 8px;text-align:center;font-family:var(--mono);font-size:12px;">${d.deltaPanier ? (d.deltaPanier >= 0 ? '+' : '') + d.deltaPanier.toFixed(2) + '€' : '—'}</td>
-          <td style="padding:5px 8px;text-align:center;font-family:var(--mono);font-size:12px;">${d.deltaPrimes ? (d.deltaPrimes >= 0 ? '+' : '') + d.deltaPrimes.toFixed(2) + '€' : '—'}</td>
-          <td style="padding:5px 8px;text-align:center;font-family:var(--mono);font-size:12px;">${d.deltaDecouchage ? (d.deltaDecouchage >= 0 ? '+' : '') + d.deltaDecouchage : '—'}</td>
+          <td style="padding:6px 9px;font-size:13px;font-weight:700;color:var(--text);">${emp.prenom} ${emp.nom}</td>
+          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaPlanMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaPlanMin >= 0 ? '+' : ''}${minToHM(d.deltaPlanMin)}</td>
+          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaNuitMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaNuitMin >= 0 ? '+' : ''}${minToHM(d.deltaNuitMin)}</td>
+          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaPanier ? (d.deltaPanier >= 0 ? '+' : '') + d.deltaPanier.toFixed(2) + '€' : '—'}</td>
+          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaPrimes ? (d.deltaPrimes >= 0 ? '+' : '') + d.deltaPrimes.toFixed(2) + '€' : '—'}</td>
+          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaDecouchage ? (d.deltaDecouchage >= 0 ? '+' : '') + d.deltaDecouchage : '—'}</td>
         </tr>`).join('')}</tbody>
     </table></div>`;
 
@@ -7593,24 +7603,36 @@ function rendreApercuCloturePaie() {
       const d = isoToDate(dk);
       const label = String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
       let contenu, couleur;
-      if (r.estConge) { contenu = 'Congé'; couleur = 'var(--text-dim)'; }
-      else if (r.planMin === 0) { contenu = 'Repos'; couleur = 'var(--text-dim)'; }
+      if (r.estConge) { contenu = 'Congé'; couleur = 'var(--text-muted)'; }
+      else if (r.planMin === 0) { contenu = 'Repos'; couleur = 'var(--text-muted)'; }
       else { contenu = minToHM(r.planMin) + (r.source === 'semaineType' ? ' ⚠️' : ''); couleur = r.source === 'semaineType' ? 'var(--warning)' : 'var(--text)'; }
-      return `<td style="padding:5px 8px;text-align:center;color:${couleur};font-family:var(--mono);font-size:12px;" title="${label}${r.source === 'semaineType' ? ' — estimé depuis la Semaine type' : ''}">${contenu}</td>`;
+      return `<td style="padding:6px 9px;text-align:center;color:${couleur};font-family:var(--mono);font-size:13px;" title="${label}${r.source === 'semaineType' ? ' — estimé depuis la Semaine type' : ''}">${contenu}</td>`;
     }).join('');
     parEmploye[emp.id] = { joursAnticipes: jours };
-    return `<tr><td style="padding:5px 8px;font-size:12px;font-weight:700;white-space:nowrap;">${emp.prenom} ${emp.nom}</td>${cellsHtml}</tr>`;
+    return `<tr><td style="padding:6px 9px;font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;">${emp.prenom} ${emp.nom}</td>${cellsHtml}</tr>`;
   }).join('');
 
   const headHtml = joursAAnticiper.map(dk => {
     const d = isoToDate(dk);
-    return `<th style="padding:5px 8px;font-size:11px;color:var(--text-dim);">${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}</th>`;
+    return `<th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}</th>`;
+  }).join('');
+
+  // Détail transparent, semaine par semaine, de POURQUOI chaque semaine est passée — validée
+  // explicitement, ou exemptée car elle ne contient que du congé/repos (rien à valider).
+  const detailSemainesHtml = semaines.map(({ lundi, dimanche }) => {
+    const aDuTravail = semaineATacheTravail(lundi);
+    const label = `Semaine du ${formatDateFR(isoToDate(lundi))} au ${formatDateFR(isoToDate(dimanche))}`;
+    const statut = !aDuTravail
+      ? `<span style="color:var(--text-muted);">— uniquement congé/repos, rien à valider</span>`
+      : `<span style="color:var(--success);">— validée "Semaine complète" ✓</span>`;
+    return `<li style="margin-bottom:2px;">${label} ${statut}</li>`;
   }).join('');
 
   wrap.innerHTML = `
-    <div class="hint" style="color:var(--success);margin-bottom:8px;">✅ Planning renseigné pour toutes les semaines concernées.</div>
+    <div class="hint" style="color:var(--success);font-size:13px;margin-bottom:6px;">✅ Planning renseigné pour toutes les semaines concernées :</div>
+    <ul style="margin:0 0 12px 18px;font-size:13px;color:var(--text-muted);">${detailSemainesHtml}</ul>
     <div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
-      <thead><tr><th style="padding:5px 8px;"></th>${headHtml}</tr></thead>
+      <thead><tr><th style="padding:6px 9px;"></th>${headHtml}</tr></thead>
       <tbody>${lignesHtml}</tbody>
     </table></div>
   `;
