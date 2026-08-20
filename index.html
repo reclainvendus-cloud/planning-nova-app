@@ -2086,7 +2086,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.80.6';
+const APP_VERSION = '1.80.7';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2103,6 +2103,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.80.7', items: [
+    'Vraie cause enfin trouvée pour "Propositions de remplacement" : une règle globale de l\'appli donne 100% de largeur à tous les champs de formulaire, y compris les boutons radio — corrigé en réutilisant la classe ".checkbox-row" déjà existante ailleurs dans l\'appli (largeur fixe 16px), au lieu de styles improvisés qui ne réglaient que des symptômes',
+  ] },
   { v: '1.80.6', items: [
     'Vraie correction du débordement horizontal dans "Propositions de remplacement" : c\'était un piège Flexbox classique (un élément flexible ne rétrécit jamais en dessous de la largeur de son contenu par défaut) qui poussait tout le bloc à déborder sur le côté au lieu de faire retourner le texte à la ligne — corrigé cette fois',
   ] },
@@ -3604,13 +3607,13 @@ function ouvrirPropositionsPourSemaine(empId) {
             const taskDepuis = e.depuisTaskId ? db.tasks.find(t => t.id === e.depuisTaskId) : null;
             return `<strong>${empE?.prenom} ${empE?.nom}</strong> : ${taskDepuis ? taskDepuis.nom + ' → ' : '(libre) → '}${taskVers?.nom}`;
           }).join(' <span style="color:var(--text-dim);">puis</span> ');
-          html += `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;cursor:pointer;">
-            <input type="radio" name="${nomGroupe}" value="${idOption}" onchange="onChoixRemplacement('${nomGroupe}','${idOption}')" ${idx === 0 ? 'checked' : ''} style="margin-top:3px;flex-shrink:0;">
+          html += `<label class="checkbox-row" style="align-items:flex-start;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;">
+            <input type="radio" name="${nomGroupe}" value="${idOption}" onchange="onChoixRemplacement('${nomGroupe}','${idOption}')" ${idx === 0 ? 'checked' : ''} style="margin-top:3px;">
             <div style="flex:1;min-width:0;overflow-wrap:break-word;font-size:13px;line-height:1.5;">${description}</div>
           </label>`;
         });
-        html += `<label style="display:flex;align-items:center;gap:10px;padding:6px 10px;cursor:pointer;">
-          <input type="radio" name="${nomGroupe}" value="" onchange="onChoixRemplacement('${nomGroupe}','')" style="flex-shrink:0;">
+        html += `<label class="checkbox-row" style="padding:6px 10px;">
+          <input type="radio" name="${nomGroupe}" value="" onchange="onChoixRemplacement('${nomGroupe}','')">
           <div style="flex:1;font-size:12px;color:var(--text-dim);">Ne pas remplacer ce jour</div>
         </label>`;
         // Première option retenue par défaut (correspond au radio pré-coché ci-dessus).
@@ -5367,13 +5370,13 @@ function afficherAlertesCopieConge(alertes) {
             const taskDepuis = e.depuisTaskId ? db.tasks.find(t => t.id === e.depuisTaskId) : null;
             return `<strong>${empE?.prenom} ${empE?.nom}</strong> : ${taskDepuis ? taskDepuis.nom + ' → ' : '(libre) → '}${taskVers?.nom}`;
           }).join(' <span style="color:var(--text-dim);">puis</span> ');
-          html += `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;cursor:pointer;">
-            <input type="radio" name="${nomGroupe}" value="${idOption}" onchange="onChoixRemplacement('${nomGroupe}','${idOption}')" ${idx === 0 ? 'checked' : ''} style="margin-top:3px;flex-shrink:0;">
+          html += `<label class="checkbox-row" style="align-items:flex-start;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;">
+            <input type="radio" name="${nomGroupe}" value="${idOption}" onchange="onChoixRemplacement('${nomGroupe}','${idOption}')" ${idx === 0 ? 'checked' : ''} style="margin-top:3px;">
             <div style="flex:1;min-width:0;overflow-wrap:break-word;font-size:13px;line-height:1.5;">${description}</div>
           </label>`;
         });
-        html += `<label style="display:flex;align-items:center;gap:10px;padding:6px 10px;cursor:pointer;">
-          <input type="radio" name="${nomGroupe}" value="" onchange="onChoixRemplacement('${nomGroupe}','')" style="flex-shrink:0;">
+        html += `<label class="checkbox-row" style="padding:6px 10px;">
+          <input type="radio" name="${nomGroupe}" value="" onchange="onChoixRemplacement('${nomGroupe}','')">
           <div style="flex:1;font-size:12px;color:var(--text-dim);">Ne pas remplacer ce jour</div>
         </label>`;
         window._remplacementsSelection.push({ nomGroupe, idOption: `${nomGroupe}-0` });
