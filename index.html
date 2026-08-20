@@ -2086,7 +2086,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.80.2';
+const APP_VERSION = '1.80.3';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2103,6 +2103,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.80.3', items: [
+    'Planning (vues Édition et Graphique semaine) : les noms trop longs pour la largeur de colonne passent désormais sur 2 lignes au lieu d\'être coupés — les lignes s\'adaptent automatiquement en hauteur, sans chevaucher la ligne suivante',
+  ] },
   { v: '1.80.2', items: [
     'Police des chiffres remplacée dans toute l\'appli (DM Mono → JetBrains Mono) — meilleure distinction entre les caractères pour une lecture plus claire des heures, montants et compteurs',
   ] },
@@ -3661,9 +3664,9 @@ function renderPlanningEdition() {
     const boutonRemplacement = joursCongeRemp.length
       ? `<button class="btn btn-secondary btn-sm" style="margin-left:6px;padding:2px 7px;font-size:11px;" title="${joursCongeRemp.length} jour(s) de congé avec tâches à couvrir" onclick="event.stopPropagation();ouvrirPropositionsPourSemaine('${emp.id}')">🔄</button>`
       : '';
-    return `<tr><td class="pg-emp-cell" style="cursor:pointer;" onclick="goEditEmploye('${emp.id}')" title="Cliquer pour modifier cet employé">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
-        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${emp.prenom} ${emp.nom}</span>
+    return `<tr><td class="pg-emp-cell" style="cursor:pointer;white-space:normal;" onclick="goEditEmploye('${emp.id}')" title="Cliquer pour modifier cet employé">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;">
+        <span style="flex:1;min-width:0;">${emp.prenom} ${emp.nom}</span>
         ${boutonRemplacement}
       </div>
       <div style="margin-top:3px;">${badgeCompteurEmploye(emp.id)}</div>
@@ -3989,9 +3992,9 @@ function renderGraphiqueSemaine() {
       const boutonRemplacement = joursCongeRemp.length
         ? `<button class="btn btn-secondary btn-sm" style="margin-left:6px;padding:2px 7px;font-size:11px;" title="${joursCongeRemp.length} jour(s) de congé avec tâches à couvrir" onclick="event.stopPropagation();ouvrirPropositionsPourSemaine('${emp.id}')">🔄</button>`
         : '';
-      cells += `<div class="grw-name-col" style="grid-row:${row};grid-column:1;flex-direction:column;align-items:stretch;gap:3px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%;">
-          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${emp.prenom} ${emp.nom}</span>
+      cells += `<div class="grw-name-col" style="grid-row:${row};grid-column:1;flex-direction:column;align-items:stretch;gap:3px;height:auto;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;width:100%;">
+          <span style="flex:1;min-width:0;">${emp.prenom} ${emp.nom}</span>
           ${boutonRemplacement}
         </div>
         ${badgeCompteurEmploye(emp.id)}
