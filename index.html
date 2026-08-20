@@ -391,6 +391,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
   #content { padding: 0 !important; }
 
   .btn, .mode-toggle, #gr-day-nav, .quick-add-emp { display: none !important; }
+  .pg-badge-compteur { display: none !important; }
   .pg-group-dow { visibility: hidden; }
   .filter-bar select, .filter-bar input, .filter-bar label { display: none !important; }
   .week-nav { margin-bottom: 10px; }
@@ -2086,7 +2087,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.80.7';
+const APP_VERSION = '1.80.8';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2103,6 +2104,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.80.8', items: [
+    'Le badge du Compteur & modulation (affiché sous chaque employé dans le planning depuis la v1.80.0) est désormais masqué automatiquement à l\'impression',
+  ] },
   { v: '1.80.7', items: [
     'Vraie cause enfin trouvée pour "Propositions de remplacement" : une règle globale de l\'appli donne 100% de largeur à tous les champs de formulaire, y compris les boutons radio — corrigé en réutilisant la classe ".checkbox-row" déjà existante ailleurs dans l\'appli (largeur fixe 16px), au lieu de styles improvisés qui ne réglaient que des symptômes',
   ] },
