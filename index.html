@@ -2086,7 +2086,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.80.3';
+const APP_VERSION = '1.80.4';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2103,6 +2103,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.80.4', items: [
+    'Fenêtre "🔄 Propositions de remplacement" (bouton 🔄 sur un employé, comme après une copie de semaine) : remplace le bouton "Appliquer" par proposition (qui fermait la fenêtre au premier clic) par une sélection groupée — un choix par jour via boutons radio (avec option "Ne pas remplacer ce jour"), validée en une seule fois avec un unique bouton "✅ Valider la sélection"',
+  ] },
   { v: '1.80.3', items: [
     'Planning (vues Édition et Graphique semaine) : les noms trop longs pour la largeur de colonne passent désormais sur 2 lignes au lieu d\'être coupés — les lignes s\'adaptent automatiquement en hauteur, sans chevaucher la ligne suivante',
   ] },
@@ -3555,7 +3558,9 @@ function getJoursCongeAvecRemplacement(empId, days) {
 }
 
 // Ouvre le modal de propositions pour tous les jours de congé (avec remplacement en attente)
-// de cet employé sur la semaine actuellement affichée dans le Planning.
+// de cet employé sur la semaine actuellement affichée dans le Planning. Une option (bouton radio)
+// par jour — la sélection se fait librement, puis un seul bouton "Valider" applique tout d'un
+// coup, sans avoir à rouvrir le modal jour par jour.
 function ouvrirPropositionsPourSemaine(empId) {
   const days = getWeekDays(pgWeekMonday);
   const joursConge = getJoursCongeAvecRemplacement(empId, days);
@@ -3565,8 +3570,10 @@ function ouvrirPropositionsPourSemaine(empId) {
   const moisNoms = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
   const fmt = dk => { const d = isoToDate(dk); return `${d.getDate()} ${moisNoms[d.getMonth()]}`; };
 
-  let html = `<div class="hint" style="margin-bottom:14px;">${emp.prenom} ${emp.nom} — ${joursConge.length} jour(s) de congé cette semaine avec des tâches à couvrir.</div>`;
-  let compteurBoutons = 0;
+  window._remplacementsSelection = []; // { dk, schema } par jour retenu pour la validation groupée
+
+  let html = `<div class="hint" style="margin-bottom:14px;">${emp.prenom} ${emp.nom} — ${joursConge.length} jour(s) de congé cette semaine avec des tâches à couvrir. Choisis une option par jour, puis valide tout en une fois.</div>`;
+  let compteurGroupe = 0;
   joursConge.forEach(jc => {
     jc.taches.forEach(tr => {
       const task = db.tasks.find(t => t.id === tr.taskId);
@@ -3581,27 +3588,59 @@ function ouvrirPropositionsPourSemaine(empId) {
       if (!schemas.length) {
         html += `<div class="hint">Aucune solution trouvée automatiquement.</div>`;
       } else {
-        schemas.forEach(schema => {
-          const idBouton = `remp-sem-${compteurBoutons++}`;
-          window['_schema_' + idBouton] = { dk: jc.dk, schema };
+        const nomGroupe = `remp-jour-${compteurGroupe++}`;
+        schemas.forEach((schema, idx) => {
+          const idOption = `${nomGroupe}-${idx}`;
+          window['_schema_' + idOption] = { dk: jc.dk, schema };
           const description = schema.map(e => {
             const empE = getEmpById(e.empId);
             const taskVers = db.tasks.find(t => t.id === e.versTaskId);
             const taskDepuis = e.depuisTaskId ? db.tasks.find(t => t.id === e.depuisTaskId) : null;
             return `<strong>${empE?.prenom} ${empE?.nom}</strong> : ${taskDepuis ? taskDepuis.nom + ' → ' : '(libre) → '}${taskVers?.nom}`;
           }).join(' <span style="color:var(--text-dim);">puis</span> ');
-          html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;">
+          html += `<label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;cursor:pointer;">
+            <input type="radio" name="${nomGroupe}" value="${idOption}" onchange="onChoixRemplacement('${nomGroupe}','${idOption}')" ${idx === 0 ? 'checked' : ''}>
             <div style="flex:1;font-size:13px;">${description}</div>
-            <button class="btn btn-primary btn-sm" onclick="appliquerEtFermerRemplacement('${idBouton}')">Appliquer</button>
-          </div>`;
+          </label>`;
         });
+        html += `<label style="display:flex;align-items:center;gap:10px;padding:6px 10px;cursor:pointer;">
+          <input type="radio" name="${nomGroupe}" value="" onchange="onChoixRemplacement('${nomGroupe}','')">
+          <div style="flex:1;font-size:12px;color:var(--text-dim);">Ne pas remplacer ce jour</div>
+        </label>`;
+        // Première option retenue par défaut (correspond au radio pré-coché ci-dessus).
+        window._remplacementsSelection.push({ nomGroupe, idOption: `${nomGroupe}-0` });
       }
       html += `</div>`;
     });
   });
+  html += `<div style="display:flex;gap:10px;margin-top:6px;">
+    <button class="btn btn-primary" onclick="validerRemplacementsSelection()">✅ Valider la sélection</button>
+    <button class="btn btn-secondary" onclick="closeModal('modal-remplacement')">Annuler</button>
+  </div>`;
   content.innerHTML = html;
   openModal('modal-remplacement');
 }
+
+// Suit quelle option est cochée pour chaque jour (groupe de radios) — permet de valider tout d'un
+// coup sans avoir à ré-interroger le DOM à la validation.
+function onChoixRemplacement(nomGroupe, idOption) {
+  const entree = window._remplacementsSelection.find(x => x.nomGroupe === nomGroupe);
+  if (entree) entree.idOption = idOption;
+  else window._remplacementsSelection.push({ nomGroupe, idOption });
+}
+
+function validerRemplacementsSelection() {
+  const selection = (window._remplacementsSelection || []).filter(x => x.idOption);
+  if (!selection.length) { notify('Aucun remplacement sélectionné', 'warning'); closeModal('modal-remplacement'); return; }
+  selection.forEach(({ idOption }) => {
+    const data = window['_schema_' + idOption];
+    if (data) appliquerSchemaRemplacement(data.dk, data.schema);
+  });
+  notify(`${selection.length} remplacement(s) appliqué(s)`);
+  closeModal('modal-remplacement');
+  renderPlanning();
+}
+
 
 function renderPlanningEdition() {
   const table = document.getElementById('pg-table');
@@ -5296,8 +5335,10 @@ function afficherAlertesCopieConge(alertes) {
   const moisNoms = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
   const fmt = dk => { const d = isoToDate(dk); return `${d.getDate()} ${moisNoms[d.getMonth()]}`; };
 
-  let html = `<div class="hint" style="margin-bottom:14px;">${alertes.length} tâche(s) n'ont pas pu être copiées car un congé était déjà confirmé sur la cible ce jour-là. Voici des propositions pour couvrir ces créneaux :</div>`;
-  let compteurBoutons = 0;
+  window._remplacementsSelection = [];
+
+  let html = `<div class="hint" style="margin-bottom:14px;">${alertes.length} tâche(s) n'ont pas pu être copiées car un congé était déjà confirmé sur la cible ce jour-là. Choisis une option par jour, puis valide tout en une fois.</div>`;
+  let compteurGroupe = 0;
   alertes.forEach(alerte => {
     const emp = getEmpById(alerte.empId);
     alerte.insts.forEach(tr => {
@@ -5310,24 +5351,34 @@ function afficherAlertesCopieConge(alertes) {
       if (!schemas.length) {
         html += `<div class="hint">Aucune solution trouvée automatiquement.</div>`;
       } else {
-        schemas.forEach(schema => {
-          const idBouton = `remp-cw-${compteurBoutons++}`;
-          window['_schema_' + idBouton] = { dk: alerte.dk, schema };
+        const nomGroupe = `remp-cw-${compteurGroupe++}`;
+        schemas.forEach((schema, idx) => {
+          const idOption = `${nomGroupe}-${idx}`;
+          window['_schema_' + idOption] = { dk: alerte.dk, schema };
           const description = schema.map(e => {
             const empE = getEmpById(e.empId);
             const taskVers = db.tasks.find(t => t.id === e.versTaskId);
             const taskDepuis = e.depuisTaskId ? db.tasks.find(t => t.id === e.depuisTaskId) : null;
             return `<strong>${empE?.prenom} ${empE?.nom}</strong> : ${taskDepuis ? taskDepuis.nom + ' → ' : '(libre) → '}${taskVers?.nom}`;
           }).join(' <span style="color:var(--text-dim);">puis</span> ');
-          html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;">
+          html += `<label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;cursor:pointer;">
+            <input type="radio" name="${nomGroupe}" value="${idOption}" onchange="onChoixRemplacement('${nomGroupe}','${idOption}')" ${idx === 0 ? 'checked' : ''}>
             <div style="flex:1;font-size:13px;">${description}</div>
-            <button class="btn btn-primary btn-sm" onclick="appliquerEtFermerRemplacement('${idBouton}')">Appliquer</button>
-          </div>`;
+          </label>`;
         });
+        html += `<label style="display:flex;align-items:center;gap:10px;padding:6px 10px;cursor:pointer;">
+          <input type="radio" name="${nomGroupe}" value="" onchange="onChoixRemplacement('${nomGroupe}','')">
+          <div style="flex:1;font-size:12px;color:var(--text-dim);">Ne pas remplacer ce jour</div>
+        </label>`;
+        window._remplacementsSelection.push({ nomGroupe, idOption: `${nomGroupe}-0` });
       }
       html += `</div>`;
     });
   });
+  html += `<div style="display:flex;gap:10px;margin-top:6px;">
+    <button class="btn btn-primary" onclick="validerRemplacementsSelection()">✅ Valider la sélection</button>
+    <button class="btn btn-secondary" onclick="closeModal('modal-remplacement')">Annuler</button>
+  </div>`;
   content.innerHTML = html;
   openModal('modal-remplacement');
 }
@@ -5678,15 +5729,6 @@ function refreshPlanningQualiteAlerts() {
 function openCongesConfirmationModal() {
   renderCongesConfirmationList();
   openModal('modal-conges-confirmation');
-}
-
-function appliquerEtFermerRemplacement(idBouton) {
-  const data = window['_schema_' + idBouton];
-  if (!data) return;
-  appliquerSchemaRemplacement(data.dk, data.schema);
-  notify('Remplacement appliqué');
-  closeModal('modal-remplacement');
-  renderPlanning();
 }
 
 function renderCongesConfirmationList() {
