@@ -2086,7 +2086,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.79.3';
+const APP_VERSION = '1.80.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2103,6 +2103,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.80.0', items: [
+    'Nouveau : le solde du Compteur & modulation de chaque employé s\'affiche désormais discrètement sous son nom dans le Planning (vues Édition, Graphique semaine et Individuel), pour aider à équilibrer les heures pendant la construction du planning',
+    'Calculé une seule fois par session (pas à chaque rendu) pour ne jamais ralentir le planning — s\'affiche progressivement ("…" pendant le calcul, puis le vrai solde)',
+  ] },
   { v: '1.79.3', items: [
     'Correction importante : dans l\'export Clôture Paie, "Écart contrat" comparait à tort une semaine seulement PARTIELLEMENT dans le mois (ex: la dernière semaine, qui déborde sur le mois suivant, avec un seul jour réellement traité) à un contrat hebdomadaire complet — faussant lourdement le total (jusqu\'à -30/-40h de faux déficit). Cette semaine est désormais exclue du calcul, comme c\'est déjà le cas dans le Récap paie standard depuis la v1.74.9',
   ] },
@@ -3491,6 +3495,7 @@ function applyPlanningWeekBarFixe() {
 
 function renderPlanning() {
   applyPlanningWeekBarFixe();
+  chargerCompteurPourPlanning();
   renderPlanningQualiteAlertWidget('planning-qualite-alert-banner', pgWeekMonday);
   document.getElementById('pg-week-label').textContent = formatWeekLabel(pgWeekMonday);
   const dimanche = addDays(pgWeekMonday, 6);
@@ -3649,7 +3654,7 @@ function renderPlanningEdition() {
     const boutonRemplacement = joursCongeRemp.length
       ? `<button class="btn btn-secondary btn-sm" style="margin-left:6px;padding:2px 7px;font-size:11px;" title="${joursCongeRemp.length} jour(s) de congé avec tâches à couvrir" onclick="event.stopPropagation();ouvrirPropositionsPourSemaine('${emp.id}')">🔄</button>`
       : '';
-    return `<tr><td class="pg-emp-cell" style="cursor:pointer;" onclick="goEditEmploye('${emp.id}')" title="Cliquer pour modifier cet employé">${emp.prenom} ${emp.nom}${boutonRemplacement}</td>${cells}${weekCell}</tr>`;
+    return `<tr><td class="pg-emp-cell" style="cursor:pointer;" onclick="goEditEmploye('${emp.id}')" title="Cliquer pour modifier cet employé"><div>${emp.prenom} ${emp.nom}${boutonRemplacement}</div>${badgeCompteurEmploye(emp.id)}</td>${cells}${weekCell}</tr>`;
     }).join('');
     return groupHeader + empRows;
   }).join('');
@@ -3971,7 +3976,7 @@ function renderGraphiqueSemaine() {
       const boutonRemplacement = joursCongeRemp.length
         ? `<button class="btn btn-secondary btn-sm" style="margin-left:6px;padding:2px 7px;font-size:11px;" title="${joursCongeRemp.length} jour(s) de congé avec tâches à couvrir" onclick="event.stopPropagation();ouvrirPropositionsPourSemaine('${emp.id}')">🔄</button>`
         : '';
-      cells += `<div class="grw-name-col" style="grid-row:${row};grid-column:1;">${emp.prenom} ${emp.nom}${boutonRemplacement}</div>`;
+      cells += `<div class="grw-name-col" style="grid-row:${row};grid-column:1;flex-direction:column;align-items:flex-start;gap:2px;"><div>${emp.prenom} ${emp.nom}${boutonRemplacement}</div>${badgeCompteurEmploye(emp.id)}</div>`;
       days.forEach((d, j) => {
         const dk = dateKey(d);
         const barsHtml = renderProportionalCell(emp.id, dk, usedTaskIds, 280);
@@ -7964,6 +7969,146 @@ function initCompteurModulation() {
   calculerCompteurModulation();
 }
 
+// Calcul PUR du Compteur & modulation (sans aucune dépendance DOM) — réutilisé à la fois par
+// l'écran Compteur & modulation lui-même et par les petits badges affichés sous les employés dans
+// le Planning (voir chargerCompteurPourPlanning), pour ne jamais dupliquer cette logique.
+// Cache léger du Compteur & modulation, affiché discrètement sous chaque employé dans le
+// Planning pour aider à la construction du planning — calculé UNE FOIS par session (pas à chaque
+// rendu, beaucoup trop coûteux), puis les badges déjà affichés se mettent à jour sans reconstruire
+// tout le planning (pas de perte de scroll/sélection en cours).
+let _compteurPourPlanning = null; // { [empId]: totalMinutes } une fois chargé, sinon null
+let _compteurPourPlanningChargement = false;
+
+async function chargerCompteurPourPlanning() {
+  if (_compteurPourPlanning !== null || _compteurPourPlanningChargement || !fbDb) return;
+  _compteurPourPlanningChargement = true;
+  try {
+    const { cartes } = await calculerCartesCompteurPures(getCompteurDepuis(), '');
+    const map = {};
+    cartes.forEach(c => { map[c.emp.id] = c.total; });
+    _compteurPourPlanning = map;
+    rafraichirBadgesCompteurPlanning();
+  } catch (e) {
+    console.error('Compteur pour planning:', e);
+  } finally {
+    _compteurPourPlanningChargement = false;
+  }
+}
+
+// Petit badge "+5h30" / "-2h15" — vide (avec un data-emp) tant que le calcul n'est pas encore prêt,
+// rempli après coup par rafraichirBadgesCompteurPlanning() une fois le calcul terminé.
+function badgeCompteurEmploye(empId) {
+  if (_compteurPourPlanning && empId in _compteurPourPlanning) {
+    const total = _compteurPourPlanning[empId];
+    const signe = total >= 0 ? '+' : '-';
+    return `<span class="pg-badge-compteur" style="color:${total >= 0 ? 'var(--success)' : 'var(--danger)'};font-size:10px;font-weight:700;" title="Compteur & modulation">${signe}${minToHM(Math.abs(total))}</span>`;
+  }
+  return `<span class="pg-badge-compteur" data-emp="${empId}" style="font-size:10px;color:var(--text-dim);">…</span>`;
+}
+
+function rafraichirBadgesCompteurPlanning() {
+  if (!_compteurPourPlanning) return;
+  document.querySelectorAll('.pg-badge-compteur[data-emp]').forEach(el => {
+    const empId = el.dataset.emp;
+    if (!(empId in _compteurPourPlanning)) return;
+    const total = _compteurPourPlanning[empId];
+    const signe = total >= 0 ? '+' : '-';
+    el.style.color = total >= 0 ? 'var(--success)' : 'var(--danger)';
+    el.style.fontWeight = '700';
+    el.title = 'Compteur & modulation';
+    el.textContent = signe + minToHM(Math.abs(total));
+    el.removeAttribute('data-emp');
+  });
+}
+
+async function calculerCartesCompteurPures(depuisStr, equipeFiltre) {
+  if (!depuisStr) return { cartes: [], debutEffectif: null, hier: null, aucuneSemaineComplete: false };
+
+  const debut = getMonday(isoToDate(depuisStr));
+  const premiereSemExploitable = getPremiereSemaineExploitable();
+  const debutEffectif = premiereSemExploitable && isoToDate(premiereSemExploitable) > debut
+    ? isoToDate(premiereSemExploitable)
+    : debut;
+  const hier = addDays(new Date(), -1);
+  hier.setHours(0, 0, 0, 0);
+  if (hier < debutEffectif) return { cartes: [], debutEffectif, hier, aucuneSemaineComplete: true };
+
+  const jours = [];
+  let cur = new Date(debutEffectif);
+  while (cur <= hier) { jours.push(dateKey(cur)); cur = addDays(cur, 1); }
+
+  const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
+  const annees = [...new Set(jours.map(dk => dk.slice(0, 4)))];
+
+  const results = await Promise.all(annees.map(an =>
+    fbDb ? fbDb.ref(`pointages/${an}`).once('value').then(snap => ({ an, data: snap.val() || {} })).catch(() => ({ an, data: {} })) : Promise.resolve({ an, data: {} })
+  ));
+  const pointagesParAnnee = {};
+  results.forEach(r => { pointagesParAnnee[r.an] = r.data; });
+
+  let emps = [...db.employes];
+  if (equipeFiltre === '__sans__') emps = emps.filter(e => !e.equipeId);
+  else if (equipeFiltre) emps = emps.filter(e => e.equipeId === equipeFiltre);
+  emps.sort((a, b) => `${a.nom} ${a.prenom}`.localeCompare(`${b.nom} ${b.prenom}`, 'fr'));
+
+  const cartes = emps.map(emp => {
+    const contratMin = Math.round((emp.contratH || 35) * 60);
+    let weekKey = null, weekPtReel = 0, weekCredit = 0, weekAUnJourAbsence = false;
+    let totalBrut = Math.round((emp.soldeInitial || 0) * 60);
+    let semainesComptees = 0;
+
+    const premiereSemEmp = emp.dateDebutContrat ? premiereSemaineCompleteApres(emp.dateDebutContrat) : null;
+    const jourDebutEmp = premiereSemEmp ? isoToDate(premiereSemEmp) : null;
+
+    let jourNeutralise = 0;
+
+    function flushSemaine() {
+      if (weekKey === null) return;
+      if (weekPtReel === 0 && weekAUnJourAbsence) {
+        semainesComptees++;
+      } else if (weekPtReel + weekCredit > 0) {
+        totalBrut += (weekPtReel + weekCredit) - contratMin;
+        semainesComptees++;
+      }
+    }
+
+    jours.forEach(dk => {
+      const d = isoToDate(dk);
+      if (jourDebutEmp && d < jourDebutEmp) return;
+      const dayWeekKey = dateKey(getMonday(d));
+      if (weekKey !== null && dayWeekKey !== weekKey) {
+        flushSemaine();
+        weekPtReel = 0; weekCredit = 0; weekAUnJourAbsence = false;
+      }
+      weekKey = dayWeekKey;
+      const { pointeMin } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
+      if (pointeMin === 0) {
+        const estFerie = !!getJoursFeries(d.getFullYear())[dk];
+        const estConge = estJourCongePose(emp.id, dk);
+        if (estFerie || estConge) {
+          weekAUnJourAbsence = true;
+          const ferieMinJour = calculerFerieMinJour(emp.id, dk);
+          const creditMin = ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
+          if (creditMin > 0) { weekCredit += creditMin; jourNeutralise++; }
+        }
+      } else {
+        weekPtReel += pointeMin;
+      }
+    });
+    const dernierJour = isoToDate(jours[jours.length - 1]);
+    const dernierDimancheSemaine = addDays(getMonday(dernierJour), 6);
+    if (dernierDimancheSemaine <= hier) flushSemaine();
+
+    const totalRegle = getTotalRegleEmploye(emp.id);
+    const total = totalBrut - totalRegle;
+    const reglementCeMois = getReglementMois(emp.id, moisActuelKey());
+
+    return { emp, total, totalBrut, totalRegle, semainesComptees, contratMin, reglementCeMois, jourDebutEmp, jourNeutralise };
+  });
+
+  return { cartes, debutEffectif, hier, aucuneSemaineComplete: false };
+}
+
 function calculerCompteurModulation() {
   const depuisInput = document.getElementById('cpt-depuis');
   const depuisStr = depuisInput ? depuisInput.value : getCompteurDepuis();
@@ -7979,105 +8124,8 @@ function calculerCompteurModulation() {
   loadingEl.textContent = 'Calcul en cours…';
   cardsEl.innerHTML = '';
 
-  const debut = getMonday(isoToDate(depuisStr));
-  const premiereSemExploitable = getPremiereSemaineExploitable();
-  const debutEffectif = premiereSemExploitable && isoToDate(premiereSemExploitable) > debut
-    ? isoToDate(premiereSemExploitable)
-    : debut;
-  const hier = addDays(new Date(), -1);
-  hier.setHours(0, 0, 0, 0);
-  if (hier < debutEffectif) { loadingEl.textContent = 'Aucune semaine complète écoulée depuis cette date.'; return; }
-
-  const jours = [];
-  let cur = new Date(debutEffectif);
-  while (cur <= hier) { jours.push(dateKey(cur)); cur = addDays(cur, 1); }
-
-  const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
-  const annees = [...new Set(jours.map(dk => dk.slice(0, 4)))];
-
-  Promise.all(annees.map(an =>
-    fbDb ? fbDb.ref(`pointages/${an}`).once('value').then(snap => ({ an, data: snap.val() || {} })).catch(() => ({ an, data: {} })) : Promise.resolve({ an, data: {} })
-  )).then(results => {
-    const pointagesParAnnee = {};
-    results.forEach(r => { pointagesParAnnee[r.an] = r.data; });
-
-    let emps = [...db.employes];
-    if (equipeFiltre === '__sans__') emps = emps.filter(e => !e.equipeId);
-    else if (equipeFiltre) emps = emps.filter(e => e.equipeId === equipeFiltre);
-    // Tri alphabétique par NOM (puis prénom en cas d'égalité), comme demandé — distinct de
-    // getEmployesTries() qui trie par prénom pour le reste de l'appli.
-    emps.sort((a, b) => `${a.nom} ${a.prenom}`.localeCompare(`${b.nom} ${b.prenom}`, 'fr'));
-
-    const cartes = emps.map(emp => {
-      const contratMin = Math.round((emp.contratH || 35) * 60);
-      let weekKey = null, weekPtReel = 0, weekCredit = 0, weekAUnJourAbsence = false;
-      let totalBrut = Math.round((emp.soldeInitial || 0) * 60);
-      let semainesComptees = 0;
-
-      // Si l'employé a une date de début de contrat renseignée, aucune semaine antérieure à la
-      // première semaine calendaire ENTIÈREMENT postérieure à cette date n'est comptée — sinon un
-      // contrat démarré en cours de semaine (ex: mercredi) ferait apparaître à tort un déficit sur
-      // les jours d'avant son embauche.
-      const premiereSemEmp = emp.dateDebutContrat ? premiereSemaineCompleteApres(emp.dateDebutContrat) : null;
-      const jourDebutEmp = premiereSemEmp ? isoToDate(premiereSemEmp) : null;
-
-      let jourNeutralise = 0; // compteur de jours neutralisés (fériés/congés isolés), pour affichage
-
-      // Flush du total de la semaine en cours — factorisé ici car appelé à deux endroits (au
-      // changement de semaine, et à la toute fin de la période). Deux cas de figure :
-      //  - Semaine ENTIÈREMENT absente (aucune heure réellement pointée, couverte par au moins un
-      //    congé/férié) : on crédite directement le contrat hebdomadaire EXACT (écart nul garanti),
-      //    sans dépendre de la précision des objectifs journaliers — qui ne sont qu'un outil de
-      //    planification, pas une donnée de paie fiable au jour près.
-      //  - Semaine partiellement travaillée avec un jour isolé de congé/férié au milieu : là, faute
-      //    de mieux, l'objectif journalier reste la seule estimation disponible pour ce jour précis.
-      function flushSemaine() {
-        if (weekKey === null) return;
-        if (weekPtReel === 0 && weekAUnJourAbsence) {
-          semainesComptees++; // écart nul pour cette semaine, mais bien comptée
-        } else if (weekPtReel + weekCredit > 0) {
-          totalBrut += (weekPtReel + weekCredit) - contratMin;
-          semainesComptees++;
-        }
-      }
-
-      jours.forEach(dk => {
-        const d = isoToDate(dk);
-        if (jourDebutEmp && d < jourDebutEmp) return; // avant le début de contrat effectif
-        const dayWeekKey = dateKey(getMonday(d));
-        if (weekKey !== null && dayWeekKey !== weekKey) {
-          flushSemaine();
-          weekPtReel = 0; weekCredit = 0; weekAUnJourAbsence = false;
-        }
-        weekKey = dayWeekKey;
-        const { pointeMin } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
-        if (pointeMin === 0) {
-          // Jour férié chômé ou congé posé isolément (même s'il tombe au milieu d'une semaine par
-          // ailleurs travaillée) : légalement rémunéré, ne doit jamais compter comme un déficit.
-          const estFerie = !!getJoursFeries(d.getFullYear())[dk];
-          const estConge = estJourCongePose(emp.id, dk);
-          if (estFerie || estConge) {
-            weekAUnJourAbsence = true;
-            const ferieMinJour = calculerFerieMinJour(emp.id, dk);
-            const creditMin = ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
-            if (creditMin > 0) { weekCredit += creditMin; jourNeutralise++; }
-          }
-        } else {
-          weekPtReel += pointeMin;
-        }
-      });
-      const dernierJour = isoToDate(jours[jours.length - 1]);
-      const dernierDimancheSemaine = addDays(getMonday(dernierJour), 6);
-      if (dernierDimancheSemaine <= hier) flushSemaine();
-
-      // Le total AFFICHÉ (et utilisé pour "Régler") est net des règlements déjà effectués — un
-      // règlement déduit définitivement du compteur, quelles que soient les semaines concernées.
-      const totalRegle = getTotalRegleEmploye(emp.id);
-      const total = totalBrut - totalRegle;
-      const reglementCeMois = getReglementMois(emp.id, moisActuelKey());
-
-      return { emp, total, totalBrut, totalRegle, semainesComptees, contratMin, reglementCeMois, jourDebutEmp, jourNeutralise };
-    });
+  calculerCartesCompteurPures(depuisStr, equipeFiltre).then(({ cartes, debutEffectif, hier, aucuneSemaineComplete }) => {
+    if (aucuneSemaineComplete) { loadingEl.textContent = 'Aucune semaine complète écoulée depuis cette date.'; return; }
     _dernieresCartesCompteur = cartes;
 
     loadingEl.style.display = 'none';
@@ -8096,8 +8144,8 @@ function calculerCompteurModulation() {
       return;
     }
 
-    noteEl.innerHTML = premiereSemExploitable && isoToDate(premiereSemExploitable) > debut
-      ? `<div class="hint" style="margin-bottom:12px;color:var(--warning);">⚠️ Le calcul démarre en réalité le ${isoToDate(premiereSemExploitable).toLocaleDateString('fr-FR')} (première semaine complète après l'activation de la pointeuse le ${isoToDate(db.params.pointageDateDebut).toLocaleDateString('fr-FR')}) plutôt qu'à la date choisie, pour ne pas compter les jours d'avant comme un déficit.</div>`
+    noteEl.innerHTML = getPremiereSemaineExploitable() && isoToDate(getPremiereSemaineExploitable()) > getMonday(isoToDate(depuisStr))
+      ? `<div class="hint" style="margin-bottom:12px;color:var(--warning);">⚠️ Le calcul démarre en réalité le ${debutEffectif.toLocaleDateString('fr-FR')} (première semaine complète après l'activation de la pointeuse le ${isoToDate(db.params.pointageDateDebut).toLocaleDateString('fr-FR')}) plutôt qu'à la date choisie, pour ne pas compter les jours d'avant comme un déficit.</div>`
       : '';
 
     // Regroupement par équipe (dans l'ordre configuré dans Paramètres > Équipes), puis "Sans
@@ -9131,7 +9179,7 @@ function renderGraphiqueSemaineIndividuel(emp, weekMonday) {
   days.forEach((d, j) => {
     cells += `<div class="grw-cell grw-head-cell" style="grid-row:1;grid-column:${j+2};">${DOW[j]}<br><span>${d.getDate()}/${d.getMonth()+1}</span></div>`;
   });
-  cells += `<div class="grw-name-col" style="grid-row:2;grid-column:1;">${emp.prenom} ${emp.nom}</div>`;
+  cells += `<div class="grw-name-col" style="grid-row:2;grid-column:1;flex-direction:column;align-items:flex-start;gap:2px;"><div>${emp.prenom} ${emp.nom}</div>${badgeCompteurEmploye(emp.id)}</div>`;
   days.forEach((d, j) => {
     const dk = dateKey(d);
     const barsHtml = renderProportionalCell(emp.id, dk, usedTaskIds, 280);
