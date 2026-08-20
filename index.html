@@ -2086,7 +2086,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.80.0';
+const APP_VERSION = '1.80.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2103,6 +2103,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.80.1', items: [
+    'Badge du Compteur & modulation dans le planning : agrandi (10px → 13px, plus gras, icône ⚖️) et sécurisé contre la coupure de texte',
+    'Le bouton 🔄 (remplacement congé) est désormais toujours proprement aligné à droite du nom, sur sa propre ligne, séparé du badge du compteur juste en dessous — ne se chevauchent plus',
+  ] },
   { v: '1.80.0', items: [
     'Nouveau : le solde du Compteur & modulation de chaque employé s\'affiche désormais discrètement sous son nom dans le Planning (vues Édition, Graphique semaine et Individuel), pour aider à équilibrer les heures pendant la construction du planning',
     'Calculé une seule fois par session (pas à chaque rendu) pour ne jamais ralentir le planning — s\'affiche progressivement ("…" pendant le calcul, puis le vrai solde)',
@@ -3654,7 +3658,13 @@ function renderPlanningEdition() {
     const boutonRemplacement = joursCongeRemp.length
       ? `<button class="btn btn-secondary btn-sm" style="margin-left:6px;padding:2px 7px;font-size:11px;" title="${joursCongeRemp.length} jour(s) de congé avec tâches à couvrir" onclick="event.stopPropagation();ouvrirPropositionsPourSemaine('${emp.id}')">🔄</button>`
       : '';
-    return `<tr><td class="pg-emp-cell" style="cursor:pointer;" onclick="goEditEmploye('${emp.id}')" title="Cliquer pour modifier cet employé"><div>${emp.prenom} ${emp.nom}${boutonRemplacement}</div>${badgeCompteurEmploye(emp.id)}</td>${cells}${weekCell}</tr>`;
+    return `<tr><td class="pg-emp-cell" style="cursor:pointer;" onclick="goEditEmploye('${emp.id}')" title="Cliquer pour modifier cet employé">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${emp.prenom} ${emp.nom}</span>
+        ${boutonRemplacement}
+      </div>
+      <div style="margin-top:3px;">${badgeCompteurEmploye(emp.id)}</div>
+    </td>${cells}${weekCell}</tr>`;
     }).join('');
     return groupHeader + empRows;
   }).join('');
@@ -3976,7 +3986,13 @@ function renderGraphiqueSemaine() {
       const boutonRemplacement = joursCongeRemp.length
         ? `<button class="btn btn-secondary btn-sm" style="margin-left:6px;padding:2px 7px;font-size:11px;" title="${joursCongeRemp.length} jour(s) de congé avec tâches à couvrir" onclick="event.stopPropagation();ouvrirPropositionsPourSemaine('${emp.id}')">🔄</button>`
         : '';
-      cells += `<div class="grw-name-col" style="grid-row:${row};grid-column:1;flex-direction:column;align-items:flex-start;gap:2px;"><div>${emp.prenom} ${emp.nom}${boutonRemplacement}</div>${badgeCompteurEmploye(emp.id)}</div>`;
+      cells += `<div class="grw-name-col" style="grid-row:${row};grid-column:1;flex-direction:column;align-items:stretch;gap:3px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%;">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${emp.prenom} ${emp.nom}</span>
+          ${boutonRemplacement}
+        </div>
+        ${badgeCompteurEmploye(emp.id)}
+      </div>`;
       days.forEach((d, j) => {
         const dk = dateKey(d);
         const barsHtml = renderProportionalCell(emp.id, dk, usedTaskIds, 280);
@@ -8001,9 +8017,9 @@ function badgeCompteurEmploye(empId) {
   if (_compteurPourPlanning && empId in _compteurPourPlanning) {
     const total = _compteurPourPlanning[empId];
     const signe = total >= 0 ? '+' : '-';
-    return `<span class="pg-badge-compteur" style="color:${total >= 0 ? 'var(--success)' : 'var(--danger)'};font-size:10px;font-weight:700;" title="Compteur & modulation">${signe}${minToHM(Math.abs(total))}</span>`;
+    return `<span class="pg-badge-compteur" style="display:inline-block;color:${total >= 0 ? 'var(--success)' : 'var(--danger)'};font-size:13px;font-weight:800;white-space:nowrap;" title="Compteur & modulation">⚖️ ${signe}${minToHM(Math.abs(total))}</span>`;
   }
-  return `<span class="pg-badge-compteur" data-emp="${empId}" style="font-size:10px;color:var(--text-dim);">…</span>`;
+  return `<span class="pg-badge-compteur" data-emp="${empId}" style="display:inline-block;font-size:13px;color:var(--text-dim);white-space:nowrap;">⚖️ …</span>`;
 }
 
 function rafraichirBadgesCompteurPlanning() {
@@ -8014,9 +8030,9 @@ function rafraichirBadgesCompteurPlanning() {
     const total = _compteurPourPlanning[empId];
     const signe = total >= 0 ? '+' : '-';
     el.style.color = total >= 0 ? 'var(--success)' : 'var(--danger)';
-    el.style.fontWeight = '700';
+    el.style.fontWeight = '800';
     el.title = 'Compteur & modulation';
-    el.textContent = signe + minToHM(Math.abs(total));
+    el.textContent = '⚖️ ' + signe + minToHM(Math.abs(total));
     el.removeAttribute('data-emp');
   });
 }
@@ -9179,7 +9195,7 @@ function renderGraphiqueSemaineIndividuel(emp, weekMonday) {
   days.forEach((d, j) => {
     cells += `<div class="grw-cell grw-head-cell" style="grid-row:1;grid-column:${j+2};">${DOW[j]}<br><span>${d.getDate()}/${d.getMonth()+1}</span></div>`;
   });
-  cells += `<div class="grw-name-col" style="grid-row:2;grid-column:1;flex-direction:column;align-items:flex-start;gap:2px;"><div>${emp.prenom} ${emp.nom}</div>${badgeCompteurEmploye(emp.id)}</div>`;
+  cells += `<div class="grw-name-col" style="grid-row:2;grid-column:1;flex-direction:column;align-items:flex-start;gap:3px;"><div>${emp.prenom} ${emp.nom}</div>${badgeCompteurEmploye(emp.id)}</div>`;
   days.forEach((d, j) => {
     const dk = dateKey(d);
     const barsHtml = renderProportionalCell(emp.id, dk, usedTaskIds, 280);
