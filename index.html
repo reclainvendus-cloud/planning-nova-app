@@ -2086,7 +2086,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.80.4';
+const APP_VERSION = '1.80.5';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2103,6 +2103,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.80.5', items: [
+    'Correction d\'affichage dans "Propositions de remplacement" : le bouton radio restait centré verticalement au milieu du bloc au lieu d\'être aligné en haut du texte, surtout visible sur mobile quand la description passait sur plusieurs lignes — corrigé',
+  ] },
   { v: '1.80.4', items: [
     'Fenêtre "🔄 Propositions de remplacement" (bouton 🔄 sur un employé, comme après une copie de semaine) : remplace le bouton "Appliquer" par proposition (qui fermait la fenêtre au premier clic) par une sélection groupée — un choix par jour via boutons radio (avec option "Ne pas remplacer ce jour"), validée en une seule fois avec un unique bouton "✅ Valider la sélection"',
   ] },
@@ -3598,13 +3601,13 @@ function ouvrirPropositionsPourSemaine(empId) {
             const taskDepuis = e.depuisTaskId ? db.tasks.find(t => t.id === e.depuisTaskId) : null;
             return `<strong>${empE?.prenom} ${empE?.nom}</strong> : ${taskDepuis ? taskDepuis.nom + ' → ' : '(libre) → '}${taskVers?.nom}`;
           }).join(' <span style="color:var(--text-dim);">puis</span> ');
-          html += `<label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;cursor:pointer;">
-            <input type="radio" name="${nomGroupe}" value="${idOption}" onchange="onChoixRemplacement('${nomGroupe}','${idOption}')" ${idx === 0 ? 'checked' : ''}>
-            <div style="flex:1;font-size:13px;">${description}</div>
+          html += `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;cursor:pointer;">
+            <input type="radio" name="${nomGroupe}" value="${idOption}" onchange="onChoixRemplacement('${nomGroupe}','${idOption}')" ${idx === 0 ? 'checked' : ''} style="margin-top:3px;flex-shrink:0;">
+            <div style="flex:1;font-size:13px;line-height:1.5;">${description}</div>
           </label>`;
         });
         html += `<label style="display:flex;align-items:center;gap:10px;padding:6px 10px;cursor:pointer;">
-          <input type="radio" name="${nomGroupe}" value="" onchange="onChoixRemplacement('${nomGroupe}','')">
+          <input type="radio" name="${nomGroupe}" value="" onchange="onChoixRemplacement('${nomGroupe}','')" style="flex-shrink:0;">
           <div style="flex:1;font-size:12px;color:var(--text-dim);">Ne pas remplacer ce jour</div>
         </label>`;
         // Première option retenue par défaut (correspond au radio pré-coché ci-dessus).
@@ -5361,13 +5364,13 @@ function afficherAlertesCopieConge(alertes) {
             const taskDepuis = e.depuisTaskId ? db.tasks.find(t => t.id === e.depuisTaskId) : null;
             return `<strong>${empE?.prenom} ${empE?.nom}</strong> : ${taskDepuis ? taskDepuis.nom + ' → ' : '(libre) → '}${taskVers?.nom}`;
           }).join(' <span style="color:var(--text-dim);">puis</span> ');
-          html += `<label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;cursor:pointer;">
-            <input type="radio" name="${nomGroupe}" value="${idOption}" onchange="onChoixRemplacement('${nomGroupe}','${idOption}')" ${idx === 0 ? 'checked' : ''}>
-            <div style="flex:1;font-size:13px;">${description}</div>
+          html += `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;cursor:pointer;">
+            <input type="radio" name="${nomGroupe}" value="${idOption}" onchange="onChoixRemplacement('${nomGroupe}','${idOption}')" ${idx === 0 ? 'checked' : ''} style="margin-top:3px;flex-shrink:0;">
+            <div style="flex:1;font-size:13px;line-height:1.5;">${description}</div>
           </label>`;
         });
         html += `<label style="display:flex;align-items:center;gap:10px;padding:6px 10px;cursor:pointer;">
-          <input type="radio" name="${nomGroupe}" value="" onchange="onChoixRemplacement('${nomGroupe}','')">
+          <input type="radio" name="${nomGroupe}" value="" onchange="onChoixRemplacement('${nomGroupe}','')" style="flex-shrink:0;">
           <div style="flex:1;font-size:12px;color:var(--text-dim);">Ne pas remplacer ce jour</div>
         </label>`;
         window._remplacementsSelection.push({ nomGroupe, idOption: `${nomGroupe}-0` });
