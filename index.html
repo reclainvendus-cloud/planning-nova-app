@@ -2086,7 +2086,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.79.2';
+const APP_VERSION = '1.79.3';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2103,6 +2103,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.79.3', items: [
+    'Correction importante : dans l\'export Clôture Paie, "Écart contrat" comparait à tort une semaine seulement PARTIELLEMENT dans le mois (ex: la dernière semaine, qui déborde sur le mois suivant, avec un seul jour réellement traité) à un contrat hebdomadaire complet — faussant lourdement le total (jusqu\'à -30/-40h de faux déficit). Cette semaine est désormais exclue du calcul, comme c\'est déjà le cas dans le Récap paie standard depuis la v1.74.9',
+  ] },
   { v: '1.79.2', items: [
     'Correction importante : dans l\'export Clôture Paie, les jours RÉELS affichaient "Planifié" et "Pointé" avec la même valeur (donc un écart toujours à +0h00, faussant tout le récapitulatif) — les deux redeviennent bien deux valeurs distinctes, comme dans le Récap paie habituel. Les jours ANTICIPÉS restent inchangés (pointé = planifié, par construction voulue)',
     'Colonnes élargies (Résumé et onglets par employé) pour ne plus couper "Écart planning" et les valeurs longues du récapitulatif',
@@ -7749,8 +7752,15 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
 
     function flushSemaine() {
       if (weekKey === null) return;
+      // Une semaine seulement PARTIELLEMENT dans le mois (la première si le mois démarre en
+      // milieu de semaine, la dernière si le mois se termine en milieu de semaine — comme ici,
+      // "31/08" seul sur 7 jours d'une semaine qui déborde en septembre) ne doit JAMAIS être
+      // comparée à un contrat hebdomadaire complet, sous peine d'un faux déficit énorme (voir le
+      // même correctif déjà fait sur le Récap paie standard en v1.74.9).
+      const weekMonday = isoToDate(weekKey);
+      const weekComplete = weekMonday >= premierJour && addDays(weekMonday, 6) <= dernierJour;
       if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
-      if (weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
+      if (weekComplete && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
       lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekNuit });
     }
 
