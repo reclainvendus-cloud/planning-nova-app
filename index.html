@@ -2086,7 +2086,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.79.1';
+const APP_VERSION = '1.79.2';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2103,6 +2103,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.79.2', items: [
+    'Correction importante : dans l\'export Clôture Paie, les jours RÉELS affichaient "Planifié" et "Pointé" avec la même valeur (donc un écart toujours à +0h00, faussant tout le récapitulatif) — les deux redeviennent bien deux valeurs distinctes, comme dans le Récap paie habituel. Les jours ANTICIPÉS restent inchangés (pointé = planifié, par construction voulue)',
+    'Colonnes élargies (Résumé et onglets par employé) pour ne plus couper "Écart planning" et les valeurs longues du récapitulatif',
+  ] },
   { v: '1.79.1', items: [
     'Clôture Paie : l\'export Excel/CSV réutilise désormais exactement le même moteur que l\'export Récap paie habituel (semaines groupées avec sous-totaux, feuille "Synthèse employés", écart contrat neutralisé, majoration des fériés) — plus une colonne "Statut" (Réel/Anticipé) en plus, sans rien perdre du format habituel',
     'Les deux boutons d\'aperçu simulation ont été fusionnés en un seul (Excel + CSV toujours générés ensemble, cohérent avec la vraie clôture)',
@@ -7364,16 +7368,23 @@ function calculerAnticipationJour(empId, dk, splitSeuil, utiliserSemaineType) {
   return { planMin, nuitMin, panierJour, primesJour, decouchageJour, source, estConge: congeInsts.length > 0 };
 }
 
-// Estimation "réelle" d'un jour désormais passé (utilisée pour la régularisation) : reprend les
-// heures réellement pointées si elles existent (avec la nuit calculée sur le pointage réel comme
-// partout ailleurs), et retombe sur le planning ACTUEL (potentiellement modifié depuis
-// l'anticipation) si jamais rien n'a été pointé — panier/primes/découchage restent toujours issus
-// du planning (comme partout dans l'appli), donc automatiquement à jour si le planning a changé.
+// Estimation "réelle" d'un jour désormais passé — reprend les heures réellement pointées si elles
+// existent (avec la nuit calculée sur le pointage réel comme partout ailleurs), et retombe sur le
+// planning ACTUEL (potentiellement modifié depuis l'anticipation) si jamais rien n'a été pointé —
+// panier/primes/découchage restent toujours issus du planning, donc automatiquement à jour si le
+// planning a changé.
+// IMPORTANT : "planMin" ci-dessous reste un "réel combiné" (pointé si dispo, sinon planifié) —
+// c'est volontairement ce que la RÉGULARISATION compare à l'anticipé (voir
+// calculerRegularisationMoisPrecedent). Pour l'AFFICHAGE jour par jour (voir
+// construireLigneCloture), la vraie durée planifiée et la vraie durée pointée doivent rester deux
+// valeurs distinctes — d'où "planifieMin" et "pointeMin" ajoutés séparément ci-dessous.
 function calculerReelPourRegularisation(empId, dk, splitSeuil, pointagesParAnnee) {
   const base = calculerAnticipationJour(empId, dk, splitSeuil, false);
   const { pointeMin, nuitReelMin } = calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil);
   return {
-    planMin: pointeMin > 0 ? pointeMin : base.planMin,
+    planMin: pointeMin > 0 ? pointeMin : base.planMin, // réel combiné, pour la régularisation
+    planifieMin: base.planMin, // vraie durée planifiée, jamais confondue avec le pointé
+    pointeMin, // vraie durée pointée (0 si rien pointé)
     nuitMin: pointeMin > 0 ? nuitReelMin : base.nuitMin,
     panierJour: base.panierJour, primesJour: base.primesJour, decouchageJour: base.decouchageJour,
     estConge: base.estConge,
@@ -7688,14 +7699,20 @@ function getCongeEtFerieInfoCloture(empId, dk) {
 function construireLigneCloture(empId, dk, statutCloture, valeurs) {
   const d = isoToDate(dk);
   const info = getCongeEtFerieInfoCloture(empId, dk);
-  const pointeMin = valeurs.planMin; // "pointé" = réel pointé s'il existe, sinon l'estimation (déjà géré par le calcul en amont)
+  // Jour ANTICIPÉ : pas de pointage distinct — on simule "comme si pointé = planifié", exactement
+  // comme voulu (calculerAnticipationJour ne renvoie qu'un seul champ planMin, à dessein).
+  // Jour RÉEL : planifié et pointé restent deux valeurs bien distinctes (voir
+  // calculerReelPourRegularisation), jamais confondues — sinon l'écart planning affiche toujours
+  // +0h00 à tort, quel que soit ce qui a réellement été pointé.
+  const planMinAffiche = statutCloture === 'Anticipé' ? valeurs.planMin : valeurs.planifieMin;
+  const pointeMinAffiche = statutCloture === 'Anticipé' ? valeurs.planMin : valeurs.pointeMin;
   const estPremierMai = dk.slice(5) === '05-01';
-  const ferieTravaille = !!info.nomFerie && pointeMin > 0 && !info.congeFerieMin;
+  const ferieTravaille = !!info.nomFerie && pointeMinAffiche > 0 && !info.congeFerieMin;
   const pctMajoration = ferieTravaille ? (estPremierMai ? 100 : (db.params.majorationFerieAutrePct || 0)) : 0;
-  const heuresMajorees = pctMajoration > 0 ? Math.round(pointeMin * pctMajoration / 100) : 0;
+  const heuresMajorees = pctMajoration > 0 ? Math.round(pointeMinAffiche * pctMajoration / 100) : 0;
   return {
     type: 'jour', dk, d, dow: d.getDay(),
-    planMin: valeurs.planMin, pointeMin, ecartMin: pointeMin > 0 ? pointeMin - valeurs.planMin : null,
+    planMin: planMinAffiche, pointeMin: pointeMinAffiche, ecartMin: pointeMinAffiche > 0 ? pointeMinAffiche - planMinAffiche : null,
     nuitMin: valeurs.nuitMin, panierJour: valeurs.panierJour, primesJour: valeurs.primesJour, decouchageJour: valeurs.decouchageJour,
     congeLabel: info.congeLabel, congeFerieMin: info.congeFerieMin, nomFerie: info.nomFerie,
     ferieTravaille, pctMajoration, heuresMajorees, statutCloture,
@@ -8241,7 +8258,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
 
   // ---------- Feuille Résumé (toujours présente) ----------
   const wsResume = wb.addWorksheet('Résumé');
-  wsResume.columns = [{ width: 32 }, { width: 20 }];
+  wsResume.columns = [{ width: 32 }, { width: 32 }];
   wsResume.mergeCells('A1:B1');
   wsResume.getCell('A1').value = opts.titre || `Récap paie — du ${formatDateFR(debut)} au ${formatDateFR(fin)}`;
   wsResume.getCell('A1').font = { bold: true, size: 14, color: { argb: XLS_COULEURS.enteteTxt } };
@@ -8331,8 +8348,8 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
       // export Récap paie classique n'a jamais ce champ sur ses lignes, donc jamais cette colonne.
       const aStatut = d.lignes.some(l => l.type === 'jour' && l.statutCloture);
       ws.columns = aStatut
-        ? [{ width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 20 }]
-        : [{ width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 20 }];
+        ? [{ width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 15 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 20 }]
+        : [{ width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 15 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 20 }];
       const dernCol = aStatut ? 'J' : 'I';
 
       ws.mergeCells(`A1:${dernCol}1`);
