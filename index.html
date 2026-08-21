@@ -1335,19 +1335,11 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
     <label class="checkbox-row"><input type="checkbox" id="tk-sacrifiable"><span>🔄 Sacrifiable — cette tâche peut absorber un manque de personnel (utilisée par les propositions de remplacement)</span></label>
 
     <div class="section-label">Paie</div>
+    <div class="hint" style="margin-bottom:8px;">Un panier n'est plus un montant en € par tâche — l'appli compte désormais le NOMBRE de paniers jour/nuit obtenus par l'employé, selon plusieurs règles combinées (voir Paramètres > Règles horaires pour le détail). Ici, tu indiques seulement si CETTE tâche déclenche un panier quand elle est travaillée.</div>
     <div class="form-row-3">
-      <div class="form-group">
-        <label>Panier jour (€)</label>
-        <input type="number" id="tk-panier" min="0" step="0.5" value="0">
-      </div>
-      <div class="form-group">
-        <label>Panier nuit (€)</label>
-        <input type="number" id="tk-panier-nuit" min="0" step="0.5" value="0">
-      </div>
-      <div class="form-group">
-        <label>Découchage (€)</label>
-        <input type="number" id="tk-decouchage" min="0" step="0.5" value="0">
-      </div>
+      <label class="checkbox-row"><input type="checkbox" id="tk-panier"><span>Panier jour</span></label>
+      <label class="checkbox-row"><input type="checkbox" id="tk-panier-nuit"><span>Panier nuit</span></label>
+      <label class="checkbox-row"><input type="checkbox" id="tk-decouchage"><span>Découchage</span></label>
     </div>
     <div class="form-group">
       <label>Primes</label>
@@ -2026,6 +2018,17 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <input type="tel" id="em-telephone" placeholder="06 12 34 56 78">
     </div>
 
+    <div class="section-label">🍱 Paniers — cases exceptionnelles</div>
+    <div class="hint" style="margin-bottom:8px;">En plus des règles automatiques (panier nuit légal ≥4h entre 21h-6h, et tâches marquées "Panier" dans la Bibliothèque de tâches), certains jours/nuits fixes peuvent déclencher un panier pour cet employé — coche les jours concernés. Ne s'applique jamais un jour d'absence/congé/maladie.</div>
+    <div id="em-paniers-exceptionnels" style="margin-bottom:10px;"></div>
+
+    <div class="section-label">🍱 Paniers mensualisés</div>
+    <div class="hint" style="margin-bottom:8px;">Si coché, cet employé touche un forfait fixe de 5 paniers par semaine (travaillée ou non) — les autres règles de paniers (légale, tâches, exceptionnelles) ne s'appliquent alors plus du tout pour ce type (jour ou nuit). Les jours/nuits cochés ci-dessus servent de simple repère visuel dans le récap, sans changer le total (toujours 5/semaine).</div>
+    <div class="form-row">
+      <label class="checkbox-row"><input type="checkbox" id="em-panier-mensualise-jour"><span>Panier jour mensualisé (5/semaine)</span></label>
+      <label class="checkbox-row"><input type="checkbox" id="em-panier-mensualise-nuit"><span>Panier nuit mensualisé (5/semaine)</span></label>
+    </div>
+
     <div class="section-label">Production chaud / froid <span style="font-weight:400;text-transform:none;color:var(--text-dim);">(utilisé par le calcul de capacité Distribution)</span></div>
     <div class="form-row">
       <div class="form-group"><label>Productivité chaud (u/h)</label><input type="number" id="em-prod-chaud" min="0" step="0.5" value="0"></div>
@@ -2103,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.81.1';
+const APP_VERSION = '1.82.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2120,6 +2123,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.82.0', items: [
+    'Nouveau système de paniers (Briques 1-3/4) — remplace les montants € par un comptage de paniers jour/nuit selon 4 règles combinées : panier nuit légal automatique (conv. collective commerce de gros, ≥4h entre 21h-6h sur pointages réels), tâches déclenchant un panier (cases à cocher, plus de €), paniers exceptionnels récurrents par jour de semaine (fiche employé), et paniers mensualisés (5/semaine fixe)',
+    'Bibliothèque de tâches : "Panier jour (€)", "Panier nuit (€)" et "Découchage (€)" deviennent de simples cases à cocher',
+    'Fiche employé : nouvelle grille "Paniers exceptionnels" (jour/nuit × 7 jours) et cases "Paniers mensualisés"',
+    'L\'intégration dans le Récap paie, son export, l\'aperçu simulation et la Clôture Paie arrive dans la prochaine mise à jour',
+  ] },
   { v: '1.81.1', items: [
     'Correction : la fenêtre "📜 Historique des contrats" s\'ouvrait derrière la fiche employé (même z-index, ordre du code défavorable) au lieu de passer devant — corrigé',
   ] },
@@ -3118,9 +3127,9 @@ function openTaskModal() {
   renderTkJoursPrevus(null);
   document.getElementById('tk-suivi').checked = false;
   document.getElementById('tk-sacrifiable').checked = false;
-  document.getElementById('tk-panier').value = 0;
-  document.getElementById('tk-panier-nuit').value = 0;
-  document.getElementById('tk-decouchage').value = 0;
+  document.getElementById('tk-panier').checked = false;
+  document.getElementById('tk-panier-nuit').checked = false;
+  document.getElementById('tk-decouchage').checked = false;
   document.getElementById('tk-heures-chaud').value = 0;
   document.getElementById('tk-heures-froid').value = 0;
   document.getElementById('tk-primes-list').innerHTML = '';
@@ -3159,9 +3168,9 @@ function editTask(id) {
   renderTkJoursPrevus(t.joursPrevu || null);
   document.getElementById('tk-suivi').checked = !!t.suivi;
   document.getElementById('tk-sacrifiable').checked = !!t.sacrifiable;
-  document.getElementById('tk-panier').value = t.panier || 0;
-  document.getElementById('tk-panier-nuit').value = t.panierNuit || 0;
-  document.getElementById('tk-decouchage').value = t.decouchage || 0;
+  document.getElementById('tk-panier').checked = !!t.panier;
+  document.getElementById('tk-panier-nuit').checked = !!t.panierNuit;
+  document.getElementById('tk-decouchage').checked = !!t.decouchage;
   document.getElementById('tk-heures-chaud').value = t.heuresChaud || 0;
   document.getElementById('tk-heures-froid').value = t.heuresFroid || 0;
   document.getElementById('tk-primes-list').innerHTML = '';
@@ -3210,9 +3219,9 @@ function saveTask() {
     joursPrevu: getTkJoursPrevusFromForm().some(v => v) ? getTkJoursPrevusFromForm() : null,
     suivi: document.getElementById('tk-suivi').checked,
     sacrifiable: document.getElementById('tk-sacrifiable').checked,
-    panier: parseFloat(document.getElementById('tk-panier').value) || 0,
-    panierNuit: parseFloat(document.getElementById('tk-panier-nuit').value) || 0,
-    decouchage: parseFloat(document.getElementById('tk-decouchage').value) || 0,
+    panier: document.getElementById('tk-panier').checked,
+    panierNuit: document.getElementById('tk-panier-nuit').checked,
+    decouchage: document.getElementById('tk-decouchage').checked,
     heuresChaud: parseFloat(document.getElementById('tk-heures-chaud').value) || 0,
     heuresFroid: parseFloat(document.getElementById('tk-heures-froid').value) || 0,
     primes,
@@ -5130,6 +5139,29 @@ function getObjectifsJoursFromForm() {
   return arr;
 }
 
+// Grille "Paniers exceptionnels" (règle 3) — même principe visuel que les objectifs journaliers,
+// mais deux lignes de cases à cocher (Jour / Nuit) plutôt que des heures.
+function renderPanierExceptionnelInputs(joursVal, nuitsVal) {
+  const wrap = document.getElementById('em-paniers-exceptionnels');
+  const DOW = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+  const ligneCases = (prefix, valeurs) => [0,1,2,3,4,5,6].map(i =>
+    `<td style="padding:4px 8px;text-align:center;"><input type="checkbox" class="em-panier-exc-${prefix}" data-day="${i}" ${valeurs?.[i] ? 'checked' : ''}></td>`
+  ).join('');
+  wrap.innerHTML = `<div style="overflow-x:auto;"><table style="border-collapse:collapse;font-size:12px;">
+    <thead><tr><th style="padding:4px 8px;text-align:left;"></th>${DOW.map(j => `<th style="padding:4px 8px;color:var(--text-dim);font-weight:700;">${j}</th>`).join('')}</tr></thead>
+    <tbody>
+      <tr><td style="padding:4px 8px;font-weight:700;white-space:nowrap;">☀️ Jour</td>${ligneCases('jour', joursVal)}</tr>
+      <tr><td style="padding:4px 8px;font-weight:700;white-space:nowrap;">🌙 Nuit</td>${ligneCases('nuit', nuitsVal)}</tr>
+    </tbody>
+  </table></div>`;
+}
+
+function getPanierExceptionnelFromForm(prefix) {
+  const arr = [false,false,false,false,false,false,false];
+  document.querySelectorAll(`.em-panier-exc-${prefix}`).forEach(inp => { arr[+inp.dataset.day] = inp.checked; });
+  return arr;
+}
+
 function openEmployeModal() {
   renderEquipeFilterSelects();
   document.getElementById('modal-employe-title').textContent = '➕ Nouvel employé';
@@ -5142,6 +5174,9 @@ function openEmployeModal() {
   document.getElementById('em-telephone').value = '';
   document.getElementById('em-repos-hebdo').value = '0';
   renderObjectifsJoursInputs([7,7,7,7,7,7,7]);
+  renderPanierExceptionnelInputs(null, null);
+  document.getElementById('em-panier-mensualise-jour').checked = false;
+  document.getElementById('em-panier-mensualise-nuit').checked = false;
   document.getElementById('em-contrat-h').value = 35;
   document.getElementById('em-contrat-m').value = 0;
   document.getElementById('em-mode-hs').value = 'hebdo';
@@ -5170,6 +5205,9 @@ function editEmploye(id) {
   document.getElementById('em-telephone').value = e.telephone || '';
   document.getElementById('em-repos-hebdo').value = String(e.reposHebdo ?? 0);
   renderObjectifsJoursInputs(e.objectifsJours || [7,7,7,7,7,7,7]);
+  renderPanierExceptionnelInputs(e.panierExceptionnelJours, e.panierExceptionnelNuits);
+  document.getElementById('em-panier-mensualise-jour').checked = !!e.panierMensualiseJour;
+  document.getElementById('em-panier-mensualise-nuit').checked = !!e.panierMensualiseNuit;
   const contratVal = e.contratH || 35;
   document.getElementById('em-contrat-h').value = Math.floor(contratVal);
   document.getElementById('em-contrat-m').value = Math.round((contratVal - Math.floor(contratVal)) * 60);
@@ -5296,6 +5334,10 @@ function saveEmploye() {
     telephone: document.getElementById('em-telephone').value.trim(),
     reposHebdo: parseInt(document.getElementById('em-repos-hebdo').value) || 0,
     objectifsJours: getObjectifsJoursFromForm(),
+    panierExceptionnelJours: getPanierExceptionnelFromForm('jour'),
+    panierExceptionnelNuits: getPanierExceptionnelFromForm('nuit'),
+    panierMensualiseJour: document.getElementById('em-panier-mensualise-jour').checked,
+    panierMensualiseNuit: document.getElementById('em-panier-mensualise-nuit').checked,
     contratH: contratHActuel,
     contratHistorique: historique,
     modeHS: document.getElementById('em-mode-hs').value,
@@ -6781,6 +6823,14 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
   // le planning prévu — si une tâche prévue jusqu'à 3h00 est pointée jusqu'à 4h00, cette heure
   // supplémentaire doit compter en nuit, et inversement si le pointage s'arrête plus tôt que prévu.
   let nuitReelMin = 0;
+  // Pour le panier nuit légal (règle des 4h entre 21h et 6h, voir calculerPanierNuitLegal) : "la
+  // nuit du jour J" (21h J → 6h J+1) se recompose de deux morceaux calculés à des appels
+  // différents de cette fonction — la SOIRÉE (ce que J lui-même pointe entre 21h et minuit,
+  // hors reliquat d'hier) et la QUEUE DE MATINÉE (ce qu'un service commencé la veille apporte
+  // après minuit, déjà comptée dans nuitReelMin mais isolée ici séparément pour pouvoir
+  // recombiner "soirée de J" + "matinée de J+1" sans double-compte ni trou.
+  let nuitSoireeMin = 0;   // portion 21h-24h de CE jour (hors reliquat d'hier)
+  let nuitQueueHierCrossMin = 0; // portion après minuit héritée d'un service commencé hier
 
   if (instsHierCross.length) {
     const evtsHier = Object.values(pointagesParAnnee[dkHier.slice(0, 4)]?.[dkHier]?.[empId]?.evenements || {});
@@ -6798,7 +6848,9 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
       pointeMin += pointeApresMinuit;
       // Portion "après minuit" uniquement (le "avant minuit" a déjà été comptée sur hier) : la
       // fenêtre de nuit s'évalue sur [1440, fMin], jamais sur toute la chaîne depuis dMin.
-      nuitReelMin += computeNuitMinutes(1440, fMin, false);
+      const nuitPortion = computeNuitMinutes(1440, fMin, false);
+      nuitReelMin += nuitPortion;
+      nuitQueueHierCrossMin += nuitPortion;
     }
   }
 
@@ -6845,6 +6897,7 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
             const pauseTotaleChaine = chaine.reduce((s, i) => s + (i.pauseDuree || 0), 0);
             pointeMin += Math.max(0, fMin2 - dMin2 - pauseTotaleChaine);
             nuitReelMin += computeNuitMinutes(dMin2, fMin2, false);
+            nuitSoireeMin += Math.max(0, Math.min(fMin2, 1440) - Math.max(dMin2, 1260));
           } else {
             const pauseAvant = srv.reduce((s, i) => s + prePauseMinutes(i), 0);
             const avantMinuitBrut = Math.max(0, Math.min(fMin2, 1440) - dMin2);
@@ -6852,6 +6905,7 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
             // Seule la portion AVANT minuit revient à aujourd'hui (le reste sera compté demain,
             // par la branche instsHierCross de ce jour suivant, sur son propre appel).
             nuitReelMin += computeNuitMinutes(dMin2, Math.min(fMin2, 1440), false);
+            nuitSoireeMin += Math.max(0, Math.min(fMin2, 1440) - Math.max(dMin2, 1260));
           }
         }
         return;
@@ -6865,6 +6919,7 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
         const pauseTotal = srv.reduce((s, i) => s + (i.pauseDuree || 0), 0);
         pointeMin += Math.max(0, fMin - dMin - pauseTotal);
         nuitReelMin += computeNuitMinutes(dMin, fMin, false);
+        nuitSoireeMin += Math.max(0, Math.min(fMin, 1440) - Math.max(dMin, 1260));
       }
     });
   }
@@ -6883,12 +6938,59 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
         if (fMin <= dMin) fMin += 1440;
         pointeHorsPlanning += fMin - dMin;
         nuitReelMin += computeNuitMinutes(dMin, fMin, false);
+        nuitSoireeMin += Math.max(0, Math.min(fMin, 1440) - Math.max(dMin, 1260));
       }
     });
     pointeMin += pointeHorsPlanning;
   }
 
-  return { pointeMin, pointeHorsPlanning, nuitReelMin };
+  return { pointeMin, pointeHorsPlanning, nuitReelMin, nuitSoireeMin, nuitQueueHierCrossMin };
+}
+
+// ===================================================
+// RÈGLE 1 — PANIER NUIT LÉGAL (convention collective du commerce de gros)
+// ===================================================
+// L'indemnité casse-croûte est due dès que l'employé effectue AU MOINS 4 HEURES de travail
+// RÉELLEMENT POINTÉ entre 21h et 6h — calcul purement légal, aucun paramétrage requis. "La nuit du
+// jour J" (21h J → 6h J+1) se recompose de deux appels à calculerPointeMinJour : la soirée
+// (contribution propre de J, hors reliquat d'hier) + la queue de matinée héritée par J+1 (portion
+// après minuit d'un service commencé le soir de J) — voir le détail dans calculerPointeMinJour.
+function calculerPanierNuitLegal(empId, dk, pointagesParAnnee, splitSeuil) {
+  const dkSuivant = dateKey(addDays(isoToDate(dk), 1));
+  const soiree = calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil).nuitSoireeMin;
+  const matinee = calculerPointeMinJour(empId, dkSuivant, pointagesParAnnee, splitSeuil).nuitQueueHierCrossMin;
+  const minutesNuit = soiree + matinee;
+  return { minutesNuit, eligible: minutesNuit >= 240 };
+}
+
+// ===================================================
+// COMBINAISON FINALE DES RÈGLES DE PANIERS (règles 1, 2, 3 — la 4 "mensualisé" est gérée à part,
+// au niveau de la semaine, voir intégration Récap paie / Clôture Paie) — 1 panier jour MAX et 1
+// panier nuit MAX par jour, peu importe combien de règles se déclenchent en même temps.
+function calculerPaniersJourNuit(empId, dk, pointagesParAnnee, splitSeuil) {
+  const emp = getEmpById(empId);
+  const d = isoToDate(dk);
+  const { pointeMin } = calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil);
+  const aTravaille = pointeMin > 0;
+  const estAbsence = estJourCongePose(empId, dk);
+
+  const insts = (db.planning[empId]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge);
+  const tacheDeclenchePanierJour = insts.some(i => db.tasks.find(t => t.id === i.taskId)?.panier);
+  const tacheDeclenchePanierNuit = insts.some(i => db.tasks.find(t => t.id === i.taskId)?.panierNuit);
+  const tacheDeclencheDecouchage = insts.some(i => db.tasks.find(t => t.id === i.taskId)?.decouchage);
+
+  const dow = jsDayToIndex(d.getDay());
+  const exceptionnelJour = !!(emp?.panierExceptionnelJours?.[dow]) && aTravaille && !estAbsence;
+  const exceptionnelNuit = !!(emp?.panierExceptionnelNuits?.[dow]) && aTravaille && !estAbsence;
+  const legalNuit = calculerPanierNuitLegal(empId, dk, pointagesParAnnee, splitSeuil).eligible;
+
+  // Règle 4 (mensualisé) exclut toutes les autres règles pour le type concerné (jour et/ou nuit)
+  // — géré à part, au niveau semaine, jamais ici au niveau jour (voir intégration).
+  const panierJour = emp?.panierMensualiseJour ? 0 : ((aTravaille && tacheDeclenchePanierJour) || exceptionnelJour ? 1 : 0);
+  const panierNuit = emp?.panierMensualiseNuit ? 0 : (legalNuit || (aTravaille && tacheDeclenchePanierNuit) || exceptionnelNuit ? 1 : 0);
+  const decouchage = aTravaille && tacheDeclencheDecouchage ? 1 : 0;
+
+  return { panierJour, panierNuit, decouchage, sources: { legalNuit, tacheDeclenchePanierJour, tacheDeclenchePanierNuit, exceptionnelJour, exceptionnelNuit } };
 }
 
 // ===================================================
