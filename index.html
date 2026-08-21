@@ -1720,7 +1720,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 </div>
 
 <!-- ===== MODAL HISTORIQUE DES CONTRATS (par employé) ===== -->
-<div class="modal-overlay" id="modal-historique-contrat">
+<div class="modal-overlay" id="modal-historique-contrat" style="z-index:110;">
   <div class="modal" style="width:520px;">
     <button class="modal-close" onclick="closeModal('modal-historique-contrat')">✕</button>
     <h2>📜 Historique des contrats</h2>
@@ -2103,7 +2103,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.81.0';
+const APP_VERSION = '1.81.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2120,6 +2120,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.81.1', items: [
+    'Correction : la fenêtre "📜 Historique des contrats" s\'ouvrait derrière la fiche employé (même z-index, ordre du code défavorable) au lieu de passer devant — corrigé',
+  ] },
   { v: '1.81.0', items: [
     'Nouveau : historique des contrats par employé — modifier le champ "Contrat/semaine" crée automatiquement une nouvelle entrée datée (à partir d\'aujourd\'hui), sans rien à saisir en plus. Le Compteur & modulation, le Récap paie et la Clôture Paie utilisent désormais le bon contrat pour CHAQUE semaine selon sa date, au lieu d\'appliquer la valeur actuelle rétroactivement à tout l\'historique (ce qui pouvait faire apparaître de fausses heures sup après un changement de contrat, même sur des semaines déjà réglées)',
     'Nouvel écran "📜 Voir l\'historique des contrats" dans la fiche employé — chaque entrée (date + valeur) reste modifiable ou supprimable individuellement, pour corriger précisément une erreur de saisie sans jamais écraser une période antérieure correcte',
