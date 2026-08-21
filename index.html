@@ -1719,6 +1719,21 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
   </div>
 </div>
 
+<!-- ===== MODAL HISTORIQUE DES CONTRATS (par employé) ===== -->
+<div class="modal-overlay" id="modal-historique-contrat">
+  <div class="modal" style="width:520px;">
+    <button class="modal-close" onclick="closeModal('modal-historique-contrat')">✕</button>
+    <h2>📜 Historique des contrats</h2>
+    <div class="hint" style="margin-bottom:14px;">Chaque ligne = le contrat hebdomadaire applicable à partir d'une date donnée. Le Compteur & modulation et le Récap paie utilisent automatiquement la bonne valeur pour chaque semaine, selon sa date — les semaines déjà calculées avec une entrée ne bougent jamais si tu modifies une AUTRE entrée.</div>
+    <div id="hc-list"></div>
+    <button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="ajouterEntreeHistoriqueContrat()">+ Ajouter une entrée</button>
+    <div style="display:flex;gap:10px;margin-top:16px;">
+      <button class="btn btn-primary" onclick="enregistrerHistoriqueContrat()">💾 Enregistrer</button>
+      <button class="btn btn-secondary" onclick="closeModal('modal-historique-contrat')">Annuler</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== MODAL CLÔTURE PAIE (mode Estimation + régularisation) ===== -->
 <div class="modal-overlay" id="modal-cloture-paie">
   <div class="modal" style="width:760px;max-width:94vw;max-height:90vh;overflow-y:auto;">
@@ -1982,6 +1997,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <input type="number" id="em-contrat-h" min="0" step="1" value="35" placeholder="h" style="width:100%;">
           <input type="number" id="em-contrat-m" min="0" max="59" step="5" value="0" placeholder="min" style="width:100%;">
         </div>
+        <div class="hint" style="margin-top:4px;">Modifier cette valeur crée automatiquement une nouvelle entrée datée à l'historique (à partir d'aujourd'hui) — les semaines déjà calculées avec l'ancien contrat ne sont jamais recalculées à tort. <span id="em-contrat-historique-lien" style="color:var(--accent);cursor:pointer;text-decoration:underline;" onclick="ouvrirHistoriqueContrat()">📜 Voir l'historique des contrats</span></div>
       </div>
       <div class="form-group">
         <label>Mode heures sup</label>
@@ -2087,7 +2103,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.80.8';
+const APP_VERSION = '1.81.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2104,6 +2120,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.81.0', items: [
+    'Nouveau : historique des contrats par employé — modifier le champ "Contrat/semaine" crée automatiquement une nouvelle entrée datée (à partir d\'aujourd\'hui), sans rien à saisir en plus. Le Compteur & modulation, le Récap paie et la Clôture Paie utilisent désormais le bon contrat pour CHAQUE semaine selon sa date, au lieu d\'appliquer la valeur actuelle rétroactivement à tout l\'historique (ce qui pouvait faire apparaître de fausses heures sup après un changement de contrat, même sur des semaines déjà réglées)',
+    'Nouvel écran "📜 Voir l\'historique des contrats" dans la fiche employé — chaque entrée (date + valeur) reste modifiable ou supprimable individuellement, pour corriger précisément une erreur de saisie sans jamais écraser une période antérieure correcte',
+  ] },
   { v: '1.80.8', items: [
     'Le badge du Compteur & modulation (affiché sous chaque employé dans le planning depuis la v1.80.0) est désormais masqué automatiquement à l\'impression',
   ] },
@@ -5129,6 +5149,7 @@ function openEmployeModal() {
   document.getElementById('em-solde-initial').value = 0;
   document.getElementById('em-date-debut-contrat').value = '';
   document.getElementById('btn-delete-employe').style.display = 'none';
+  window._hcListeTemp = [];
   openModal('modal-employe');
 }
 
@@ -5158,7 +5179,90 @@ function editEmploye(id) {
   document.getElementById('em-solde-initial').value = e.soldeInitial ?? 0;
   document.getElementById('em-date-debut-contrat').value = e.dateDebutContrat || '';
   document.getElementById('btn-delete-employe').style.display = 'inline-flex';
+  // Copie de travail de l'historique des contrats — modifiable via la modale dédiée, jamais
+  // enregistrée directement dans db.employes tant que le formulaire employé lui-même n'est pas
+  // validé (cohérent avec "Annuler" qui doit tout annuler, historique compris).
+  window._hcListeTemp = e.contratHistorique
+    ? e.contratHistorique.map(x => ({ ...x }))
+    : (e.contratH ? [{ depuis: e.dateDebutContrat || '2000-01-01', contratH: e.contratH }] : []);
   openModal('modal-employe');
+}
+
+// ===================================================
+// HISTORIQUE DES CONTRATS — par employé, modifiable ligne par ligne (voir la discussion : une
+// simple case "corriger tout l'historique" écraserait à tort une période antérieure correcte).
+// ===================================================
+function ouvrirHistoriqueContrat() {
+  if (!window._hcListeTemp) window._hcListeTemp = [];
+  renderHistoriqueContratListe();
+  openModal('modal-historique-contrat');
+}
+
+function renderHistoriqueContratListe() {
+  const wrap = document.getElementById('hc-list');
+  const liste = window._hcListeTemp || [];
+  if (!liste.length) {
+    wrap.innerHTML = '<div class="hint">Aucune entrée pour le moment — elle sera créée automatiquement à l\'enregistrement.</div>';
+    return;
+  }
+  const triee = [...liste].sort((a, b) => a.depuis.localeCompare(b.depuis));
+  wrap.innerHTML = triee.map((entree, i) => `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+      <div class="form-group" style="margin:0;flex:1;">
+        <label>Depuis le</label>
+        <input type="date" value="${entree.depuis}" onchange="modifierEntreeHistoriqueContrat(${i},'depuis',this.value)">
+      </div>
+      <div class="form-group" style="margin:0;width:110px;">
+        <label>Contrat (h)</label>
+        <input type="number" step="0.25" min="0" value="${entree.contratH}" onchange="modifierEntreeHistoriqueContrat(${i},'contratH',parseFloat(this.value)||0)">
+      </div>
+      <button class="btn btn-danger btn-sm" style="margin-top:18px;" onclick="supprimerEntreeHistoriqueContrat(${i})" title="Supprimer cette entrée">🗑️</button>
+    </div>
+  `).join('');
+}
+
+// Les index passés depuis le HTML correspondent à la liste TRIÉE affichée — on retrouve donc
+// l'entrée par sa position dans une liste re-triée à l'identique, pas par un id fixe (plus simple,
+// suffisant ici puisque la liste est entièrement régénérée à chaque modification).
+function modifierEntreeHistoriqueContrat(indexTrie, champ, valeur) {
+  const triee = [...window._hcListeTemp].sort((a, b) => a.depuis.localeCompare(b.depuis));
+  triee[indexTrie][champ] = valeur;
+  window._hcListeTemp = triee;
+  renderHistoriqueContratListe();
+}
+function supprimerEntreeHistoriqueContrat(indexTrie) {
+  const triee = [...window._hcListeTemp].sort((a, b) => a.depuis.localeCompare(b.depuis));
+  triee.splice(indexTrie, 1);
+  window._hcListeTemp = triee;
+  renderHistoriqueContratListe();
+}
+function ajouterEntreeHistoriqueContrat() {
+  const contratActuel = (parseFloat(document.getElementById('em-contrat-h').value) || 0) + (parseFloat(document.getElementById('em-contrat-m').value) || 0) / 60;
+  window._hcListeTemp.push({ depuis: dateKey(new Date()), contratH: contratActuel });
+  renderHistoriqueContratListe();
+}
+function enregistrerHistoriqueContrat() {
+  // Rien à faire de plus : chaque modification est déjà répercutée en direct dans
+  // window._hcListeTemp — ce bouton ne fait que refermer la modale, l'enregistrement définitif
+  // se fait avec le reste de la fiche employé (bouton "Enregistrer" du formulaire principal).
+  closeModal('modal-historique-contrat');
+  notify('Historique mis à jour — pense à enregistrer la fiche employé pour valider définitivement');
+}
+
+// Renvoie le contrat (en minutes/semaine) applicable à une date donnée, d'après l'historique de
+// l'employé — la dernière entrée dont la date "depuis" est ≤ à la date demandée. À défaut
+// d'historique (anciennes données pas encore migrées), retombe sur emp.contratH tel quel.
+function getContratMinPourDate(emp, dk) {
+  const historique = emp?.contratHistorique;
+  if (!historique || !historique.length) return Math.round((emp?.contratH || 35) * 60);
+  let applicable = null;
+  historique.forEach(entree => {
+    if (entree.depuis <= dk && (!applicable || entree.depuis > applicable.depuis)) applicable = entree;
+  });
+  // Si la date demandée est ANTÉRIEURE à la toute première entrée connue, on utilise quand même
+  // cette première entrée (meilleure estimation disponible, plutôt que de tomber sur 35h par défaut).
+  if (!applicable) applicable = [...historique].sort((a, b) => a.depuis.localeCompare(b.depuis))[0];
+  return Math.round((applicable.contratH || 35) * 60);
 }
 
 function saveEmploye() {
@@ -5166,6 +5270,21 @@ function saveEmploye() {
   const nom = document.getElementById('em-nom').value.trim();
   if (!prenom || !nom) { notify('Prénom et nom sont obligatoires', 'danger'); return; }
   const id = document.getElementById('em-id').value || uid();
+  const contratHActuel = (parseFloat(document.getElementById('em-contrat-h').value) || 0) + (parseFloat(document.getElementById('em-contrat-m').value) || 0) / 60;
+  const dateDebutContrat = document.getElementById('em-date-debut-contrat').value || null;
+
+  // Historique des contrats : si le champ "Contrat/semaine" a été modifié depuis la dernière
+  // valeur connue (ou qu'aucun historique n'existe encore), une nouvelle entrée datée
+  // d'aujourd'hui est ajoutée automatiquement — sans rien demander de plus. Les entrées
+  // corrigées manuellement via la modale dédiée (📜) restent, elles, telles quelles.
+  let historique = (window._hcListeTemp || []).map(x => ({ ...x })).sort((a, b) => a.depuis.localeCompare(b.depuis));
+  const derniere = historique[historique.length - 1];
+  if (!derniere || Math.abs(derniere.contratH - contratHActuel) > 0.001) {
+    const aujourdhui = dateKey(new Date());
+    historique.push({ depuis: aujourdhui, contratH: contratHActuel });
+    historique.sort((a, b) => a.depuis.localeCompare(b.depuis));
+  }
+
   const employe = {
     id, prenom, nom,
     pin: document.getElementById('em-pin').value.trim(),
@@ -5174,13 +5293,14 @@ function saveEmploye() {
     telephone: document.getElementById('em-telephone').value.trim(),
     reposHebdo: parseInt(document.getElementById('em-repos-hebdo').value) || 0,
     objectifsJours: getObjectifsJoursFromForm(),
-    contratH: (parseFloat(document.getElementById('em-contrat-h').value) || 0) + (parseFloat(document.getElementById('em-contrat-m').value) || 0) / 60,
+    contratH: contratHActuel,
+    contratHistorique: historique,
     modeHS: document.getElementById('em-mode-hs').value,
     seuilHS: (parseFloat(document.getElementById('em-seuil-hs-h').value) || 0) + (parseFloat(document.getElementById('em-seuil-hs-m').value) || 0) / 60,
     prodChaud: parseFloat(document.getElementById('em-prod-chaud').value) || 0,
     prodFroid: parseFloat(document.getElementById('em-prod-froid').value) || 0,
     soldeInitial: parseFloat(document.getElementById('em-solde-initial').value) || 0,
-    dateDebutContrat: document.getElementById('em-date-debut-contrat').value || null,
+    dateDebutContrat,
   };
   const idx = db.employes.findIndex(x => x.id === id);
   if (idx >= 0) db.employes[idx] = employe; else db.employes.push(employe);
@@ -7826,7 +7946,6 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
   let gtHSValidees = 0, gtHSNonValidees = 0, gtFerieTravailleJours = 0, gtHeuresMajorees = 0, gtFerieChomeMin = 0;
 
   const donnees = emps.map(emp => {
-    const contratMin = Math.round((emp.contratH || 35) * 60);
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0;
     let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPrimes = 0, empDecouchage = 0;
     let empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
@@ -7834,6 +7953,11 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
 
     function flushSemaine() {
       if (weekKey === null) return;
+      // Le contrat applicable est celui EN VIGUEUR pendant cette semaine précise, d'après
+      // l'historique des contrats de l'employé — jamais la valeur actuelle appliquée
+      // rétroactivement (voir getContratMinPourDate), pour ne jamais fausser une semaine déjà
+      // calculée avec un contrat différent à l'époque.
+      const contratMin = getContratMinPourDate(emp, weekKey);
       // Une semaine seulement PARTIELLEMENT dans le mois (la première si le mois démarre en
       // milieu de semaine, la dernière si le mois se termine en milieu de semaine — comme ici,
       // "31/08" seul sur 7 jours d'une semaine qui déborde en septembre) ne doit JAMAIS être
@@ -7915,7 +8039,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
     gtFerieTravailleJours += empFerieTravailleJours; gtHeuresMajorees += empHeuresMajorees; gtFerieChomeMin += empFerieChomeMin;
 
     return {
-      emp, lignes, contratMin, empPlannifie, empPointe, empNuit, empPanier, empPrimes, empDecouchage,
+      emp, lignes, contratMin: getContratMinPourDate(emp, dateKey(dernierJour)), empPlannifie, empPointe, empNuit, empPanier, empPrimes, empDecouchage,
       empEcartContrat, empSemainesComptees, ecartTotal, reglementRecap, congesParType,
       empFerieTravailleJours, empHeuresMajorees, empFerieChomeMin,
     };
@@ -8129,7 +8253,6 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre) {
   emps.sort((a, b) => `${a.nom} ${a.prenom}`.localeCompare(`${b.nom} ${b.prenom}`, 'fr'));
 
   const cartes = emps.map(emp => {
-    const contratMin = Math.round((emp.contratH || 35) * 60);
     let weekKey = null, weekPtReel = 0, weekCredit = 0, weekAUnJourAbsence = false;
     let totalBrut = Math.round((emp.soldeInitial || 0) * 60);
     let semainesComptees = 0;
@@ -8141,6 +8264,9 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre) {
 
     function flushSemaine() {
       if (weekKey === null) return;
+      // Contrat EN VIGUEUR pendant cette semaine précise (voir getContratMinPourDate) — jamais la
+      // valeur actuelle appliquée à tort sur une semaine antérieure à un changement de contrat.
+      const contratMin = getContratMinPourDate(emp, weekKey);
       if (weekPtReel === 0 && weekAUnJourAbsence) {
         semainesComptees++;
       } else if (weekPtReel + weekCredit > 0) {
@@ -8180,7 +8306,7 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre) {
     const total = totalBrut - totalRegle;
     const reglementCeMois = getReglementMois(emp.id, moisActuelKey());
 
-    return { emp, total, totalBrut, totalRegle, semainesComptees, contratMin, reglementCeMois, jourDebutEmp, jourNeutralise };
+    return { emp, total, totalBrut, totalRegle, semainesComptees, contratMin: getContratMinPourDate(emp, dateKey(new Date())), reglementCeMois, jourDebutEmp, jourNeutralise };
   });
 
   return { cartes, debutEffectif, hier, aucuneSemaineComplete: false };
@@ -8625,7 +8751,11 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
   const colonnesActives = RECAP_COLONNES.filter(c => colPrefs[c.id]);
 
   const tablesHtml = emps.map(emp => {
-    const contratMin = Math.round((emp.contratH || 35) * 60);
+    // Le contrat exact par semaine se calcule désormais via getContratMinPourDate() à chaque
+    // flush de semaine (voir plus bas) — cette valeur "actuelle" ne sert plus qu'au badge global
+    // de fin de période (approximation raisonnable pour un simple repère visuel, pas pour le
+    // calcul d'écart proprement dit, qui lui reste toujours exact semaine par semaine).
+    const contratMinActuel = getContratMinPourDate(emp, dateKey(new Date()));
     let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPrimes = 0, empDecouchage = 0, empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
     let weekFerieChomeMin = 0;
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0, weekPause = 0;
@@ -8749,7 +8879,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
       // Flush total semaine si on change de semaine
       if (weekKey !== null && dayWeekKey !== weekKey) {
-        const cls = badgeClass(weekPlan, contratMin);
+        // Contrat EN VIGUEUR pendant CETTE semaine (voir getContratMinPourDate) — jamais la valeur
+        // actuelle appliquée à tort sur une semaine antérieure à un changement de contrat.
+        const contratMinSemaine = getContratMinPourDate(emp, weekKey);
+        const cls = badgeClass(weekPlan, contratMinSemaine);
         // Une semaine à cheval sur le bord de la période sélectionnée (ex: "Août" alors que la
         // semaine commence le 27/07) ne contient qu'une partie de ses jours dans "jours" — la
         // comparer à un contrat hebdomadaire COMPLET produirait un faux déficit énorme. On ne
@@ -8760,9 +8893,9 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         // congé/férié) : on crédite directement le contrat hebdomadaire EXACT (écart nul garanti)
         // plutôt que la somme des objectifs journaliers — ces derniers ne sont qu'un outil de
         // planification, pas une donnée de paie fiable au jour près (voir Employés > Contrat).
-        if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
-        if (weekCompleteFlush && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
-        lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush });
+        if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMinSemaine;
+        if (weekCompleteFlush && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMinSemaine; empSemainesComptees++; }
+        lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush });
         weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0;
       }
       weekKey = dayWeekKey;
@@ -8813,12 +8946,13 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
     // Dernier total semaine
     if (weekKey !== null) {
-      const cls = badgeClass(weekPlan, contratMin);
+      const contratMinSemaine = getContratMinPourDate(emp, weekKey);
+      const cls = badgeClass(weekPlan, contratMinSemaine);
       const weekMondayLast = isoToDate(weekKey);
       const weekCompleteLast = weekMondayLast >= debut && addDays(weekMondayLast, 6) <= fin;
-      if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
-      if (weekCompleteLast && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
-      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteLast });
+      if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMinSemaine;
+      if (weekCompleteLast && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMinSemaine; empSemainesComptees++; }
+      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteLast });
     }
 
     gtPlannifie += empPlannifie; gtPointe += empPointe; gtNuit += empNuit;
@@ -8925,7 +9059,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     // de la comparaison est corrigé) — sinon un férié légitimement chômé ferait mécaniquement
     // apparaître un faux déficit, malgré la case "Planifié" incluant volontairement ces heures.
     const ecartTotal = empPointe > 0 ? empPointe - (empPlannifie - empFerieChomeMin) : null;
-    const clsTot = badgeClass(empPlannifie, contratMin * Math.ceil(jours.length / 7));
+    const clsTot = badgeClass(empPlannifie, contratMinActuel * Math.ceil(jours.length / 7));
 
     // Badge "Heures sup" pour la compta : si un règlement existe pour le mois de fin de la
     // période affichée, c'est LUI qui fait foi (montant réellement validé/réglé, traçable) — sinon
@@ -8964,7 +9098,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     });
 
     donneesExport.push({
-      emp, lignes, contratMin,
+      emp, lignes, contratMin: contratMinActuel,
       empPlannifie, empPointe, empNuit, empPanier, empPrimes, empDecouchage,
       empEcartContrat, empSemainesComptees, ecartTotal,
       reglementRecap, congesParType, empFerieTravailleJours, empHeuresMajorees, empFerieChomeMin,
@@ -8977,7 +9111,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
           <span style="background:rgba(79,124,255,.12);color:var(--accent);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="${empFerieChomeMin > 0 ? `dont ${minToHM(empFerieChomeMin)} de férié chômé` : ''}">Planifié ${minToHM(empPlannifie)}${empFerieChomeMin > 0 ? ` <span style="font-weight:400;opacity:.85;">(dont 🔶 ${minToHM(empFerieChomeMin)} férié)</span>` : ''}</span>
           ${empPointe > 0 ? `<span style="background:rgba(46,204,113,.12);color:var(--success);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Retenue ${minToHM(empPointe)}</span>` : ''}
           ${ecartTotal !== null ? `<span style="background:${ecartTotal >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${ecartTotal >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au planning prévu${empFerieChomeMin > 0 ? ` — neutralisé de ${minToHM(empFerieChomeMin)} de férié chômé` : ''}">Écart planning ${ecartTotal >= 0 ? '+' : ''}${minToHM(Math.abs(ecartTotal))}${empFerieChomeMin > 0 ? ` <span style="font-weight:400;opacity:.85;">(férié neutralisé)</span>` : ''}</span>` : ''}
-          ${empSemainesComptees > 0 ? `<span style="background:${empEcartContrat >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${empEcartContrat >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au contrat de ${minToHM(contratMin)}/sem (${empSemainesComptees} semaine${empSemainesComptees > 1 ? 's' : ''})">Écart contrat ${empEcartContrat >= 0 ? '+' : ''}${minToHM(Math.abs(empEcartContrat))}</span>` : ''}
+          ${empSemainesComptees > 0 ? `<span style="background:${empEcartContrat >= 0 ? 'rgba(46,204,113,.12)' : 'rgba(255,77,106,.12)'};color:${empEcartContrat >= 0 ? 'var(--success)' : 'var(--danger)'};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Réel pointé comparé au contrat de ${minToHM(contratMinActuel)}/sem (${empSemainesComptees} semaine${empSemainesComptees > 1 ? 's' : ''})">Écart contrat ${empEcartContrat >= 0 ? '+' : ''}${minToHM(Math.abs(empEcartContrat))}</span>` : ''}
           ${badgeHS}
           ${badgeFerie}
           ${empNuit > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Nuit ${minToHM(empNuit)}</span>` : ''}
