@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.83.2';
+const APP_VERSION = '1.83.3';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2123,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.83.3', items: [
+    'Correction d\'un bug important dans le Récap paie : pour un jour qui termine seulement la fin d\'un service commencé la veille (ex: Jeudi 22h-Vendredi 6h30), sans lien avec le nouveau service du soir même (ex: Vendredi 22h30-Samedi 10h), la colonne "Déb. prévue/pointée/retenue" affichait à tort les horaires du service du LENDEMAIN au lieu de la vraie fin de service du matin — un mauvais repère de jour dans la logique de chaînage faisait chercher "demain" à partir du mauvais point de départ',
+  ] },
   { v: '1.83.2', items: [
     'Correction importante du panier nuit légal (règle 1) : une session matinale isolée (ex: 00:30-08:30), non chaînée à un service commencé la veille via une tâche "à cheval sur minuit", n\'était jamais comptée dans les 4h requises entre 21h et 6h — ces heures de nuit bien réelles étaient tout simplement perdues. Elles sont désormais correctement rattachées à "la nuit de la veille", comme la loi le prévoit',
   ] },
@@ -9018,7 +9021,15 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       let chaineDebut = null, chaineFinInitiale = null;
       if (instsHierCross.length) {
         chaineDebut = { dk: dkHier, inst: instsHierCross[0] };
-        chaineFinInitiale = { dk, inst: instsFusionnees.length ? instsFusionnees[instsFusionnees.length - 1] : instsHierCross[instsHierCross.length - 1] };
+        // Le "jour de référence" de la dernière instance doit être celui où elle est RÉELLEMENT
+        // datée : aujourd'hui (dk) si elle vient de instsFusionnees (une tâche d'aujourd'hui
+        // fusionnée avec la continuation d'hier), mais HIER (dkHier) si elle vient de
+        // instsHierCross et n'a rien fusionné — sinon la boucle de chaînage plus bas cherche "demain"
+        // à partir du mauvais jour et peut accidentellement rattacher un service sans rapport du
+        // lendemain suivant (ex: Vendredi hérite à tort de la fin du service de Samedi).
+        chaineFinInitiale = instsFusionnees.length
+          ? { dk, inst: instsFusionnees[instsFusionnees.length - 1] }
+          : { dk: dkHier, inst: instsHierCross[instsHierCross.length - 1] };
       } else if (instsAujProprement.length) {
         chaineDebut = { dk, inst: instsAujProprement[0] };
         chaineFinInitiale = { dk, inst: instsAujProprement[instsAujProprement.length - 1] };
@@ -9036,7 +9047,12 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
           const instsSuiv = (db.planning[emp.id]?.[dkSuiv] || [])
             .filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge)
             .sort((a, b) => a.debut - b.debut);
-          if (!instsSuiv.length || instsSuiv[0].debut - curInst.fin > splitSeuil) break;
+          // Une tâche "à cheval sur minuit" a TOUJOURS sa débauche le lendemain de sa propre date,
+          // que la chaîne continue ou non au-delà — donc le jour de référence avance ici même en
+          // cas d'arrêt immédiat, sinon la débauche serait cherchée dans le mauvais jour
+          // d'événements (ex: celle de Jeudi cherchée à tort dans les événements de Jeudi au lieu
+          // de Vendredi, où elle est réellement enregistrée).
+          if (!instsSuiv.length || instsSuiv[0].debut - curInst.fin > splitSeuil) { curDk = dkSuiv; break; }
           let derniereSuiv = instsSuiv[0];
           for (let i = 1; i < instsSuiv.length; i++) {
             const gap = instsSuiv[i].debut - derniereSuiv.fin;
