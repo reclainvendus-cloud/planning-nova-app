@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.83.7';
+const APP_VERSION = '1.83.8';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2123,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.83.8', items: [
+    'Correction du correctif de bord de période (v1.83.7) : il ne vérifiait pas si l\'employé était mensualisé nuit (règle 4) avant d\'appliquer le crédit — un employé mensualisé pouvait donc recevoir à tort un panier nuit "normal" en plus de son forfait, alors que la règle 4 doit exclure toutes les autres règles',
+  ] },
   { v: '1.83.7', items: [
     'Correction d\'un bord de période sur le panier nuit légal : un service matinal isolé sur le tout PREMIER jour affiché (ex: 00h30-09h15, sans lien avec un service commencé la veille) rattachait son panier à "la nuit de la veille" — un jour hors période, jamais évalué par personne, donc le panier disparaissait purement et simplement. Il est désormais récupéré et affiché sur ce premier jour (Récap paie comme Clôture Paie), sans se faire re-décaler par la règle de décalage systématique',
   ] },
@@ -8099,7 +8102,7 @@ function construireLigneCloture(empId, dk, statutCloture, valeurs, pointagesParA
   // Stocké à PART (panierNuitBordure), déjà sur le bon jour d'affichage : ne doit jamais repasser
   // par le décalage systématique d'un jour vers l'avant (voir construireDonneesCloturePaie).
   let panierNuitBordure = 0;
-  if (estPremierJourPeriode && statutCloture !== 'Anticipé') {
+  if (estPremierJourPeriode && statutCloture !== 'Anticipé' && !getEmpById(empId)?.panierMensualiseNuit) {
     const dkVeille = dateKey(addDays(d, -1));
     const legalVeille = calculerPanierNuitLegal(empId, dkVeille, pointagesParAnnee, splitSeuil);
     if (legalVeille.eligible) panierNuitBordure = 1;
@@ -9045,7 +9048,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       // décalage systématique d'un jour vers l'avant (voir plus bas), sinon il finirait à tort sur
       // le jour suivant.
       let panierNuitBordure = 0;
-      if (dk === jours[0]) {
+      if (dk === jours[0] && !emp.panierMensualiseNuit) {
         const legalVeille = calculerPanierNuitLegal(emp.id, dkHier, pointagesParAnnee, splitSeuil);
         if (legalVeille.eligible) panierNuitBordure = 1;
       }
