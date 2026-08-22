@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.83.3';
+const APP_VERSION = '1.83.4';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2123,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.83.4', items: [
+    'Ergonomie du panier nuit : le repère 🌙 s\'affiche désormais sur la ligne qui montre le plus d\'heures de nuit entre le jour de début et le jour de fin (ex: 2h le premier soir puis 8h le lendemain matin → le repère apparaît sur le lendemain) — le calcul et le comptage total restent identiques, seul l\'endroit où le repère est visuellement affiché change, dans le Récap paie comme dans la Clôture Paie',
+  ] },
   { v: '1.83.3', items: [
     'Correction d\'un bug important dans le Récap paie : pour un jour qui termine seulement la fin d\'un service commencé la veille (ex: Jeudi 22h-Vendredi 6h30), sans lien avec le nouveau service du soir même (ex: Vendredi 22h30-Samedi 10h), la colonne "Déb. prévue/pointée/retenue" affichait à tort les horaires du service du LENDEMAIN au lieu de la vraie fin de service du matin — un mauvais repère de jour dans la logique de chaînage faisait chercher "demain" à partir du mauvais point de départ',
   ] },
@@ -8204,6 +8207,21 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       if (nb > 0) congesParType[task?.nom || 'Congé'] = (congesParType[task?.nom || 'Congé'] || 0) + nb;
     });
 
+    // Réattribution VISUELLE UNIQUEMENT du repère 🌙 (voir même logique dans renderRecapPaieEnrichi)
+    // — le comptage réel reste sur le jour où la nuit légale commence, seul l'affichage se déplace
+    // vers la ligne qui montre le plus d'heures de nuit entre les deux jours concernés.
+    const lignesJourClot = lignes.filter(l => l.type === 'jour');
+    lignesJourClot.forEach(l => { l.panierNuitAffiche = l.panierNuit; });
+    lignesJourClot.forEach((l, i) => {
+      if (l.panierNuit > 0 && i + 1 < lignesJourClot.length) {
+        const suivante = lignesJourClot[i + 1];
+        if ((suivante.nuitMin || 0) > (l.nuitMin || 0)) {
+          l.panierNuitAffiche = 0;
+          suivante.panierNuitAffiche = (suivante.panierNuitAffiche || 0) + 1;
+        }
+      }
+    });
+
     const reglementRecap = getReglementMois(emp.id, mois);
     const hsValidees = reglementRecap ? reglementRecap.montantMin : 0;
     const hsNonValidees = !reglementRecap && empSemainesComptees > 0 && empEcartContrat > 0 ? empEcartContrat : 0;
@@ -8663,7 +8681,7 @@ function construireCSV(donnees) {
         ...(aStatut ? [l.statutCloture || ''] : []),
         l.planMin ? minToHM(l.planMin) : '', l.pointeMin ? minToHM(l.pointeMin) : '',
         l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '',
-        l.nuitMin ? minToHM(l.nuitMin) : '', l.panierJour ? l.panierJour : '', l.panierNuit ? l.panierNuit : '',
+        l.nuitMin ? minToHM(l.nuitMin) : '', l.panierJour ? l.panierJour : '', (l.panierNuitAffiche ?? l.panierNuit) ? (l.panierNuitAffiche ?? l.panierNuit) : '',
         l.primesJour ? l.primesJour.toFixed(2) : '', l.decouchageJour ? 'Oui' : '', libelleCongeJour(l),
       ].map(esc).join(sep));
     });
@@ -8815,7 +8833,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
             ...(aStatut ? [l.statutCloture] : []),
             l.planMin ? minToHM(l.planMin) : '—', l.pointeMin ? minToHM(l.pointeMin) : '—',
             l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '—',
-            l.nuitMin ? minToHM(l.nuitMin) : '—', l.panierJour ? l.panierJour : '—', l.panierNuit ? l.panierNuit : '—',
+            l.nuitMin ? minToHM(l.nuitMin) : '—', l.panierJour ? l.panierJour : '—', (l.panierNuitAffiche ?? l.panierNuit) ? (l.panierNuitAffiche ?? l.panierNuit) : '—',
             l.primesJour ? l.primesJour.toFixed(2) : '—', libelleCongeJour(l) || '—',
           ];
           const row = ws.addRow(valeurs);
@@ -9214,7 +9232,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         case 'ecartContrat': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:var(--text-dim);" title="Uniquement calculable sur un total semaine">—</td>`;
         case 'nuit': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:#9d8fff;${l.nuitMin > 0 ? 'background:rgba(157,143,255,.08);' : ''}" title="${l.nuitMin > 0 ? 'Heures majorées (nuit)' : ''}">${l.nuitMin > 0 ? minToHM(l.nuitMin) : '—'}</td>`;
         case 'panier': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierJour > 0 ? '🍱' : '—'}</td>`;
-        case 'panierNuit': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierNuit > 0 ? '🌙' : '—'}</td>`;
+        case 'panierNuit': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierNuitAffiche > 0 ? '🌙' : '—'}</td>`;
         case 'primes': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.primesJour > 0 ? l.primesJour.toFixed(2) + '€' : '—'}</td>`;
         case 'decouchage': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.decouchageJour > 0 ? 'Oui' : '—'}</td>`;
         default: return '<td></td>';
@@ -9305,6 +9323,25 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const label = task?.nom || 'Congé';
       const nbJours = computeJoursDecomptes(emp.id, taskId, debut, fin);
       if (nbJours > 0) congesParType[label] = (congesParType[label] || 0) + nbJours;
+    });
+
+    // Réattribution VISUELLE UNIQUEMENT du repère 🌙 panier nuit — le comptage réel (semaine,
+    // résumé, export) reste toujours rattaché au soir où la nuit légale commence (voir
+    // calculerPanierNuitLegal), mais afficher le repère sur ce jour-là peut être trompeur quand
+    // l'essentiel des heures de nuit apparaît en fait sur la ligne du lendemain (ex: un service
+    // 22h-7h30 : 2h00 le premier soir, 8h00 le matin suivant). Le repère est donc déplacé vers
+    // la ligne qui affiche le plus d'heures de nuit entre les deux jours concernés, sans jamais
+    // changer le total ni le dupliquer.
+    const lignesJour = lignes.filter(l => l.type === 'jour');
+    lignesJour.forEach(l => { l.panierNuitAffiche = l.panierNuit; });
+    lignesJour.forEach((l, i) => {
+      if (l.panierNuit > 0 && i + 1 < lignesJour.length) {
+        const suivante = lignesJour[i + 1];
+        if ((suivante.nuitMin || 0) > (l.nuitMin || 0)) {
+          l.panierNuitAffiche = 0;
+          suivante.panierNuitAffiche = (suivante.panierNuitAffiche || 0) + 1;
+        }
+      }
     });
 
     donneesExport.push({
