@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.82.0';
+const APP_VERSION = '1.83.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2123,17 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.83.1', items: [
+    'Correction de cohérence sur la régularisation (Clôture Paie) : la valeur "anticipée" figée à la clôture et la valeur "réelle" recalculée le mois suivant utilisaient chacune une version différente du calcul de panier — désormais les deux passent par les mêmes 4 règles combinées, sinon l\'écart de régularisation n\'avait pas de sens',
+    'Ajout du suivi "Écart panier nuit" (absent jusqu\'ici) dans le tableau de régularisation, le résumé et le CSV dédié — passage en comptage plutôt qu\'en € pour panier jour/nuit',
+    'Le résumé "Ce qui sera figé" (avant validation de la clôture) affiche désormais aussi le total de paniers jour/nuit anticipés',
+  ] },
+  { v: '1.83.0', items: [
+    'Nouveau système de paniers (Brique 4/4 — complet) : le Récap paie (écran, export Excel/CSV), l\'aperçu simulation et le rapport de Clôture Paie affichent désormais le comptage réel de paniers jour/nuit (🍱/🌙) selon les 4 règles combinées, à la place des anciens montants en €',
+    'Règle 4 (mensualisé, 5 paniers/semaine fixe) intégrée dans les 3 moteurs de calcul, rattachée uniquement aux semaines entièrement comprises dans la période analysée — jamais sur-comptée sur une semaine tronquée au bord de la période',
+    'Découchage devient également un simple comptage ("Oui"/nombre de jours) au lieu d\'un montant en €, cohérent avec le reste du nouveau système',
+    'Nouvelle colonne "Panier nuit" disponible dans les préférences de colonnes du Récap paie',
+  ] },
   { v: '1.82.0', items: [
     'Nouveau système de paniers (Briques 1-3/4) — remplace les montants € par un comptage de paniers jour/nuit selon 4 règles combinées : panier nuit légal automatique (conv. collective commerce de gros, ≥4h entre 21h-6h sur pointages réels), tâches déclenchant un panier (cases à cocher, plus de €), paniers exceptionnels récurrents par jour de semaine (fiche employé), et paniers mensualisés (5/semaine fixe)',
     'Bibliothèque de tâches : "Panier jour (€)", "Panier nuit (€)" et "Découchage (€)" deviennent de simples cases à cocher',
@@ -6743,7 +6754,8 @@ const RECAP_COLONNES = [
   { id: 'ecartTotal', label: 'Écart planning', defaut: true },
   { id: 'ecartContrat', label: 'Écart contrat', defaut: true },
   { id: 'nuit', label: 'Nuit', defaut: true },
-  { id: 'panier', label: 'Panier', defaut: true },
+  { id: 'panier', label: 'Panier jour', defaut: true },
+  { id: 'panierNuit', label: 'Panier nuit', defaut: true },
   { id: 'primes', label: 'Primes', defaut: true },
   { id: 'decouchage', label: 'Découchage', defaut: true },
 ];
@@ -6967,11 +6979,27 @@ function calculerPanierNuitLegal(empId, dk, pointagesParAnnee, splitSeuil) {
 // COMBINAISON FINALE DES RÈGLES DE PANIERS (règles 1, 2, 3 — la 4 "mensualisé" est gérée à part,
 // au niveau de la semaine, voir intégration Récap paie / Clôture Paie) — 1 panier jour MAX et 1
 // panier nuit MAX par jour, peu importe combien de règles se déclenchent en même temps.
-function calculerPaniersJourNuit(empId, dk, pointagesParAnnee, splitSeuil) {
+// ===================================================
+// COMBINAISON FINALE DES RÈGLES DE PANIERS (règles 1, 2, 3 — la 4 "mensualisé" est gérée à part,
+// au niveau de la semaine, voir intégration Récap paie / Clôture Paie) — 1 panier jour MAX et 1
+// panier nuit MAX par jour, peu importe combien de règles se déclenchent en même temps.
+// modeAnticipe (Clôture Paie uniquement) : pour un jour pas encore pointé, on se base sur le
+// planning (comme s'il avait été travaillé exactement comme prévu) plutôt que sur les pointages
+// réels — y compris pour la règle légale de nuit, dont l'estimation reste alors provisoire (sera
+// régularisée le mois suivant comme le reste des données anticipées).
+function calculerPaniersJourNuit(empId, dk, pointagesParAnnee, splitSeuil, modeAnticipe) {
   const emp = getEmpById(empId);
   const d = isoToDate(dk);
-  const { pointeMin } = calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil);
-  const aTravaille = pointeMin > 0;
+  let aTravaille, legalNuit;
+  if (modeAnticipe) {
+    const base = calculerAnticipationJour(empId, dk, splitSeuil, false);
+    aTravaille = base.planMin > 0;
+    legalNuit = base.nuitMin >= 240; // estimation provisoire, basée sur le planning
+  } else {
+    const { pointeMin } = calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil);
+    aTravaille = pointeMin > 0;
+    legalNuit = calculerPanierNuitLegal(empId, dk, pointagesParAnnee, splitSeuil).eligible;
+  }
   const estAbsence = estJourCongePose(empId, dk);
 
   const insts = (db.planning[empId]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge);
@@ -6982,7 +7010,6 @@ function calculerPaniersJourNuit(empId, dk, pointagesParAnnee, splitSeuil) {
   const dow = jsDayToIndex(d.getDay());
   const exceptionnelJour = !!(emp?.panierExceptionnelJours?.[dow]) && aTravaille && !estAbsence;
   const exceptionnelNuit = !!(emp?.panierExceptionnelNuits?.[dow]) && aTravaille && !estAbsence;
-  const legalNuit = calculerPanierNuitLegal(empId, dk, pointagesParAnnee, splitSeuil).eligible;
 
   // Règle 4 (mensualisé) exclut toutes les autres règles pour le type concerné (jour et/ou nuit)
   // — géré à part, au niveau semaine, jamais ici au niveau jour (voir intégration).
@@ -7691,12 +7718,16 @@ function calculerAnticipationJour(empId, dk, splitSeuil, utiliserSemaineType) {
 function calculerReelPourRegularisation(empId, dk, splitSeuil, pointagesParAnnee) {
   const base = calculerAnticipationJour(empId, dk, splitSeuil, false);
   const { pointeMin, nuitReelMin } = calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil);
+  // Paniers/découchage : toujours via les 4 règles combinées (voir calculerPaniersJourNuit), pas
+  // via calculerAnticipationJour — sinon la régularisation comparerait des choses différentes
+  // (anticipé = 4 règles complètes, réel = simple flag de tâche), faussant tout l'écart.
+  const paniers = calculerPaniersJourNuit(empId, dk, pointagesParAnnee, splitSeuil, false);
   return {
     planMin: pointeMin > 0 ? pointeMin : base.planMin, // réel combiné, pour la régularisation
     planifieMin: base.planMin, // vraie durée planifiée, jamais confondue avec le pointé
     pointeMin, // vraie durée pointée (0 si rien pointé)
     nuitMin: pointeMin > 0 ? nuitReelMin : base.nuitMin,
-    panierJour: base.panierJour, primesJour: base.primesJour, decouchageJour: base.decouchageJour,
+    panierJour: paniers.panierJour, panierNuit: paniers.panierNuit, primesJour: base.primesJour, decouchageJour: paniers.decouchage,
     estConge: base.estConge,
   };
 }
@@ -7716,19 +7747,20 @@ async function calculerRegularisationMoisPrecedent(clotureAReguler) {
   const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
   const parEmploye = {};
   Object.entries(clotureAReguler.parEmploye).forEach(([empId, data]) => {
-    let deltaPlanMin = 0, deltaNuitMin = 0, deltaPanier = 0, deltaPrimes = 0, deltaDecouchage = 0;
+    let deltaPlanMin = 0, deltaNuitMin = 0, deltaPanier = 0, deltaPanierNuit = 0, deltaPrimes = 0, deltaDecouchage = 0;
     const details = [];
     Object.entries(data.joursAnticipes).forEach(([dk, anticipe]) => {
       const reel = calculerReelPourRegularisation(empId, dk, splitSeuil, pointagesParAnnee);
       const dPlan = reel.planMin - anticipe.planMin;
       const dNuit = reel.nuitMin - anticipe.nuitMin;
-      const dPanier = reel.panierJour - anticipe.panierJour;
+      const dPanier = (reel.panierJour || 0) - (anticipe.panierJour || 0);
+      const dPanierNuit = (reel.panierNuit || 0) - (anticipe.panierNuit || 0);
       const dPrimes = reel.primesJour - anticipe.primesJour;
       const dDecouchage = reel.decouchageJour - anticipe.decouchageJour;
-      deltaPlanMin += dPlan; deltaNuitMin += dNuit; deltaPanier += dPanier; deltaPrimes += dPrimes; deltaDecouchage += dDecouchage;
-      details.push({ dk, anticipe, reel, dPlan, dNuit, dPanier, dPrimes, dDecouchage });
+      deltaPlanMin += dPlan; deltaNuitMin += dNuit; deltaPanier += dPanier; deltaPanierNuit += dPanierNuit; deltaPrimes += dPrimes; deltaDecouchage += dDecouchage;
+      details.push({ dk, anticipe, reel, dPlan, dNuit, dPanier, dPanierNuit, dPrimes, dDecouchage });
     });
-    parEmploye[empId] = { deltaPlanMin, deltaNuitMin, deltaPanier, deltaPrimes, deltaDecouchage, details };
+    parEmploye[empId] = { deltaPlanMin, deltaNuitMin, deltaPanier, deltaPanierNuit, deltaPrimes, deltaDecouchage, details };
   });
   return { mois: clotureAReguler.mois, parEmploye };
 }
@@ -7791,7 +7823,7 @@ async function chargerRegularisationSiApplicable(mois) {
     const emps = getEmployesTries();
     const lignes = emps
       .map(emp => ({ emp, d: regul.parEmploye[emp.id] }))
-      .filter(x => x.d && (x.d.deltaPlanMin !== 0 || x.d.deltaNuitMin !== 0 || x.d.deltaPanier !== 0 || x.d.deltaPrimes !== 0 || x.d.deltaDecouchage !== 0));
+      .filter(x => x.d && (x.d.deltaPlanMin !== 0 || x.d.deltaNuitMin !== 0 || x.d.deltaPanier !== 0 || x.d.deltaPanierNuit !== 0 || x.d.deltaPrimes !== 0 || x.d.deltaDecouchage !== 0));
 
     if (!lignes.length) {
       wrap.innerHTML = '<div class="hint" style="color:var(--success);">✅ Aucun écart entre l\'anticipé et le réel — rien à régulariser.</div>';
@@ -7802,7 +7834,8 @@ async function chargerRegularisationSiApplicable(mois) {
         <th style="padding:6px 9px;text-align:left;font-size:12px;font-weight:700;color:var(--text-muted);">Employé</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Heures</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Nuit</th>
-        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Panier</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🍱 Panier jour</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🌙 Panier nuit</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Primes</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Découchage</th>
       </tr></thead>
@@ -7811,7 +7844,8 @@ async function chargerRegularisationSiApplicable(mois) {
           <td style="padding:6px 9px;font-size:13px;font-weight:700;color:var(--text);">${emp.prenom} ${emp.nom}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaPlanMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaPlanMin >= 0 ? '+' : ''}${minToHM(d.deltaPlanMin)}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaNuitMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaNuitMin >= 0 ? '+' : ''}${minToHM(d.deltaNuitMin)}</td>
-          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaPanier ? (d.deltaPanier >= 0 ? '+' : '') + d.deltaPanier.toFixed(2) + '€' : '—'}</td>
+          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaPanier ? (d.deltaPanier >= 0 ? '+' : '') + d.deltaPanier : '—'}</td>
+          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaPanierNuit ? (d.deltaPanierNuit >= 0 ? '+' : '') + d.deltaPanierNuit : '—'}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaPrimes ? (d.deltaPrimes >= 0 ? '+' : '') + d.deltaPrimes.toFixed(2) + '€' : '—'}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaDecouchage ? (d.deltaDecouchage >= 0 ? '+' : '') + d.deltaDecouchage : '—'}</td>
         </tr>`).join('')}</tbody>
@@ -7925,6 +7959,12 @@ function rendreApercuCloturePaie() {
     const jours = {};
     const cellsHtml = joursAAnticiper.map(dk => {
       const r = calculerAnticipationJour(emp.id, dk, splitSeuil, utiliserSemaineType);
+      // Paniers/découchage : toujours via les 4 règles combinées (voir calculerPaniersJourNuit),
+      // en mode anticipé (basé sur le planning) — jamais le simple flag de calculerAnticipationJour,
+      // sinon la valeur figée dans la clôture ne correspondrait plus à ce qui sera réellement
+      // comparé lors de la régularisation le mois suivant (voir calculerReelPourRegularisation).
+      const paniers = calculerPaniersJourNuit(emp.id, dk, null, splitSeuil, true);
+      r.panierJour = paniers.panierJour; r.panierNuit = paniers.panierNuit; r.decouchageJour = paniers.decouchage;
       jours[dk] = r;
       const d = isoToDate(dk);
       const label = String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
@@ -7965,9 +8005,9 @@ function rendreApercuCloturePaie() {
 
   // Résumé récapitulatif — ce qui sera exactement figé si tu cliques "Clôturer", pour que tu
   // valides en connaissance de cause avant l'enregistrement définitif.
-  let totalMinAnticipe = 0, totalReglementHS = 0, nbEmployesAvecReglement = 0;
+  let totalMinAnticipe = 0, totalReglementHS = 0, nbEmployesAvecReglement = 0, totalPanierJour = 0, totalPanierNuit = 0;
   emps.forEach(emp => {
-    Object.values(parEmploye[emp.id].joursAnticipes).forEach(j => { totalMinAnticipe += j.planMin; });
+    Object.values(parEmploye[emp.id].joursAnticipes).forEach(j => { totalMinAnticipe += j.planMin; totalPanierJour += j.panierJour || 0; totalPanierNuit += j.panierNuit || 0; });
     const r = getReglementMois(emp.id, mois);
     if (r) { totalReglementHS += r.montantMin; nbEmployesAvecReglement++; }
   });
@@ -7977,6 +8017,7 @@ function rendreApercuCloturePaie() {
       <ul style="margin:6px 0 0 18px;padding:0;font-size:13px;color:var(--text-muted);">
         <li>${emps.length} employé(s), ${joursAAnticiper.length} jour(s) anticipé(s) chacun (du ${formatDateFR(isoToDate(joursAAnticiper[0]))} au ${formatDateFR(isoToDate(joursAAnticiper[joursAAnticiper.length-1]))})</li>
         <li>${minToHM(totalMinAnticipe)} d'heures anticipées au total, sur la base du planning</li>
+        <li>🍱 ${totalPanierJour} panier(s) jour · 🌙 ${totalPanierNuit} panier(s) nuit anticipés (hors paniers mensualisés, comptés à part)</li>
         <li>${nbEmployesAvecReglement > 0 ? `Règlement d'heures sup déjà validé pour ${nbEmployesAvecReglement} employé(s) (${minToHM(totalReglementHS)} au total) — sera figé avec cette clôture` : '⚠️ Aucun règlement d\'heures sup validé pour ce mois — vérifie l\'étape 1 si ce n\'est pas volontaire'}</li>
       </ul>
     </div>
@@ -8006,7 +8047,7 @@ function getCongeEtFerieInfoCloture(empId, dk) {
   return { congeLabel, congeFerieMin, nomFerie };
 }
 
-function construireLigneCloture(empId, dk, statutCloture, valeurs) {
+function construireLigneCloture(empId, dk, statutCloture, valeurs, pointagesParAnnee, splitSeuil) {
   const d = isoToDate(dk);
   const info = getCongeEtFerieInfoCloture(empId, dk);
   // Jour ANTICIPÉ : pas de pointage distinct — on simule "comme si pointé = planifié", exactement
@@ -8020,10 +8061,15 @@ function construireLigneCloture(empId, dk, statutCloture, valeurs) {
   const ferieTravaille = !!info.nomFerie && pointeMinAffiche > 0 && !info.congeFerieMin;
   const pctMajoration = ferieTravaille ? (estPremierMai ? 100 : (db.params.majorationFerieAutrePct || 0)) : 0;
   const heuresMajorees = pctMajoration > 0 ? Math.round(pointeMinAffiche * pctMajoration / 100) : 0;
+  // Paniers/découchage : toujours calculés via les 4 règles combinées (voir
+  // calculerPaniersJourNuit), jamais via un simple flag de tâche — un jour anticipé utilise le
+  // planning comme base provisoire (y compris pour la règle légale de nuit), régularisée le mois
+  // suivant comme le reste des données anticipées.
+  const paniers = calculerPaniersJourNuit(empId, dk, pointagesParAnnee, splitSeuil, statutCloture === 'Anticipé');
   return {
     type: 'jour', dk, d, dow: d.getDay(),
     planMin: planMinAffiche, pointeMin: pointeMinAffiche, ecartMin: pointeMinAffiche > 0 ? pointeMinAffiche - planMinAffiche : null,
-    nuitMin: valeurs.nuitMin, panierJour: valeurs.panierJour, primesJour: valeurs.primesJour, decouchageJour: valeurs.decouchageJour,
+    nuitMin: valeurs.nuitMin, panierJour: paniers.panierJour, panierNuit: paniers.panierNuit, primesJour: valeurs.primesJour, decouchageJour: paniers.decouchage,
     congeLabel: info.congeLabel, congeFerieMin: info.congeFerieMin, nomFerie: info.nomFerie,
     ferieTravaille, pctMajoration, heuresMajorees, statutCloture,
   };
@@ -8047,12 +8093,14 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
     catch { pointagesParAnnee[an2] = {}; }
   }));
 
-  let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPrimes = 0, gtDecouchage = 0;
+  let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPanierNuit = 0, gtPrimes = 0, gtDecouchage = 0;
   let gtHSValidees = 0, gtHSNonValidees = 0, gtFerieTravailleJours = 0, gtHeuresMajorees = 0, gtFerieChomeMin = 0;
+  let gtPanierJourMensualise = 0, gtPanierNuitMensualise = 0;
 
   const donnees = emps.map(emp => {
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0;
-    let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPrimes = 0, empDecouchage = 0;
+    let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPanierNuit = 0, empPrimes = 0, empDecouchage = 0;
+    let empPanierJourMensualise = 0, empPanierNuitMensualise = 0;
     let empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
     const lignes = [];
 
@@ -8072,6 +8120,13 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       const weekComplete = weekMonday >= premierJour && addDays(weekMonday, 6) <= dernierJour;
       if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
       if (weekComplete && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
+      // Règle 4 — paniers mensualisés : 5/semaine fixe, travaillée ou non, uniquement pour une
+      // semaine ENTIÈREMENT comprise dans la période (même logique que l'écart contrat ci-dessus,
+      // pour ne jamais sur-compter une semaine tronquée au bord de la période).
+      if (weekComplete) {
+        if (emp.panierMensualiseJour) empPanierJourMensualise += 5;
+        if (emp.panierMensualiseNuit) empPanierNuitMensualise += 5;
+      }
       lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekNuit });
     }
 
@@ -8094,7 +8149,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       } else {
         valeurs = calculerReelPourRegularisation(emp.id, dk, splitSeuil, pointagesParAnnee);
       }
-      const ligne = construireLigneCloture(emp.id, dk, estAnticipe ? 'Anticipé' : 'Réel', valeurs);
+      const ligne = construireLigneCloture(emp.id, dk, estAnticipe ? 'Anticipé' : 'Réel', valeurs, pointagesParAnnee, splitSeuil);
 
       weekPlan += ligne.planMin; weekPt += ligne.pointeMin; weekNuit += ligne.nuitMin;
       const ferieChomeJour = (ligne.congeFerieMin > 0 && ligne.pointeMin === 0) ? ligne.congeFerieMin : 0;
@@ -8112,7 +8167,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       if (ligne.ferieTravaille) { empFerieTravailleJours++; empHeuresMajorees += ligne.heuresMajorees; }
 
       empPlannifie += ligne.planMin; empPointe += ligne.pointeMin; empNuit += ligne.nuitMin;
-      empPanier += ligne.panierJour; empPrimes += ligne.primesJour; empDecouchage += ligne.decouchageJour;
+      empPanier += ligne.panierJour; empPanierNuit += ligne.panierNuit; empPrimes += ligne.primesJour; empDecouchage += ligne.decouchageJour;
 
       lignes.push(ligne);
       d = addDays(d, 1);
@@ -8139,18 +8194,20 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
     const hsNonValidees = !reglementRecap && empSemainesComptees > 0 && empEcartContrat > 0 ? empEcartContrat : 0;
 
     gtPlannifie += empPlannifie; gtPointe += empPointe; gtNuit += empNuit;
-    gtPanier += empPanier; gtPrimes += empPrimes; gtDecouchage += empDecouchage;
+    gtPanier += empPanier; gtPanierNuit += empPanierNuit; gtPrimes += empPrimes; gtDecouchage += empDecouchage;
     gtHSValidees += hsValidees; gtHSNonValidees += hsNonValidees;
     gtFerieTravailleJours += empFerieTravailleJours; gtHeuresMajorees += empHeuresMajorees; gtFerieChomeMin += empFerieChomeMin;
+    gtPanierJourMensualise += empPanierJourMensualise; gtPanierNuitMensualise += empPanierNuitMensualise;
 
     return {
-      emp, lignes, contratMin: getContratMinPourDate(emp, dateKey(dernierJour)), empPlannifie, empPointe, empNuit, empPanier, empPrimes, empDecouchage,
+      emp, lignes, contratMin: getContratMinPourDate(emp, dateKey(dernierJour)), empPlannifie, empPointe, empNuit, empPanier, empPanierNuit, empPrimes, empDecouchage,
+      empPanierJourMensualise, empPanierNuitMensualise,
       empEcartContrat, empSemainesComptees, ecartTotal, reglementRecap, congesParType,
       empFerieTravailleJours, empHeuresMajorees, empFerieChomeMin,
     };
   });
 
-  const contexteGlobal = { gtPlannifie, gtPointe, gtNuit, gtPanier, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin };
+  const contexteGlobal = { gtPlannifie, gtPointe, gtNuit, gtPanier, gtPanierNuit, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin, gtPanierJourMensualise, gtPanierNuitMensualise };
   return { donnees, contexteGlobal, periode: { debut: premierJour, fin: dernierJour } };
 }
 
@@ -8172,10 +8229,10 @@ async function genererFichiersCloturePaie(mois, dateClotureKey, parEmployeAntici
     const sep = ';';
     const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = [[`RÉGULARISATION DE ${regul.mois}`].map(esc).join(sep)];
-    rows.push(['Employé', 'Écart heures', 'Écart nuit', 'Écart panier (€)', 'Écart primes (€)', 'Écart découchage'].map(esc).join(sep));
+    rows.push(['Employé', 'Écart heures', 'Écart nuit', 'Écart panier jour', 'Écart panier nuit', 'Écart primes (€)', 'Écart découchage'].map(esc).join(sep));
     Object.entries(regul.parEmploye).forEach(([empId, r]) => {
       const emp = getEmpById(empId); if (!emp) return;
-      rows.push([`${emp.nom} ${emp.prenom}`, minToHM(r.deltaPlanMin), minToHM(r.deltaNuitMin), r.deltaPanier.toFixed(2), r.deltaPrimes.toFixed(2), r.deltaDecouchage].map(esc).join(sep));
+      rows.push([`${emp.nom} ${emp.prenom}`, minToHM(r.deltaPlanMin), minToHM(r.deltaNuitMin), r.deltaPanier, r.deltaPanierNuit, r.deltaPrimes.toFixed(2), r.deltaDecouchage].map(esc).join(sep));
     });
     downloadBlob(new Blob(['\uFEFF' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' }), `${nomFichier}-regularisation.csv`);
   }
@@ -8581,7 +8638,7 @@ function construireCSV(donnees) {
   const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   // Colonne "Statut" (Réel/Anticipé) ajoutée uniquement pour un export Clôture Paie.
   const aStatut = donnees.some(d => d.lignes.some(l => l.type === 'jour' && l.statutCloture));
-  const entetes = ['Employé','Contrat/sem','Jour','Date', ...(aStatut ? ['Statut'] : []), 'Planifié','Pointé net','Écart planning','Nuit','Panier (€)','Primes (€)','Découchage','Congé'];
+  const entetes = ['Employé','Contrat/sem','Jour','Date', ...(aStatut ? ['Statut'] : []), 'Planifié','Pointé net','Écart planning','Nuit','Panier jour','Panier nuit','Primes (€)','Découchage','Congé'];
   const lignesCsv = [entetes.map(esc).join(sep)];
   donnees.forEach(d => {
     d.lignes.filter(l => l.type === 'jour').forEach(l => {
@@ -8591,7 +8648,7 @@ function construireCSV(donnees) {
         ...(aStatut ? [l.statutCloture || ''] : []),
         l.planMin ? minToHM(l.planMin) : '', l.pointeMin ? minToHM(l.pointeMin) : '',
         l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '',
-        l.nuitMin ? minToHM(l.nuitMin) : '', l.panierJour ? l.panierJour.toFixed(2) : '',
+        l.nuitMin ? minToHM(l.nuitMin) : '', l.panierJour ? l.panierJour : '', l.panierNuit ? l.panierNuit : '',
         l.primesJour ? l.primesJour.toFixed(2) : '', l.decouchageJour ? 'Oui' : '', libelleCongeJour(l),
       ].map(esc).join(sep));
     });
@@ -8645,7 +8702,10 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
     ['🔶 Fériés travaillés', g.gtFerieTravailleJours ? `${g.gtFerieTravailleJours} j.${g.gtHeuresMajorees ? ' (majoration +' + minToHM(g.gtHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
     ['Primes', g.gtPrimes ? g.gtPrimes.toFixed(2) + ' €' : '—'],
     ['Découchages', g.gtDecouchage || '—'],
-    ['Paniers', g.gtPanier ? g.gtPanier.toFixed(2) + ' €' : '—'],
+    ['🍱 Panier jour', g.gtPanier || '—'],
+    ['🌙 Panier nuit', g.gtPanierNuit || '—'],
+    ...(g.gtPanierJourMensualise ? [['🍱 Panier jour mensualisé', g.gtPanierJourMensualise]] : []),
+    ...(g.gtPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', g.gtPanierNuitMensualise]] : []),
     ...Object.entries(congesTotal).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
   ];
   let r = 3;
@@ -8714,9 +8774,9 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
       // export Récap paie classique n'a jamais ce champ sur ses lignes, donc jamais cette colonne.
       const aStatut = d.lignes.some(l => l.type === 'jour' && l.statutCloture);
       ws.columns = aStatut
-        ? [{ width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 15 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 20 }]
-        : [{ width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 15 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 20 }];
-      const dernCol = aStatut ? 'J' : 'I';
+        ? [{ width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 15 }, { width: 9 }, { width: 10 }, { width: 10 }, { width: 9 }, { width: 20 }]
+        : [{ width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 15 }, { width: 9 }, { width: 10 }, { width: 10 }, { width: 9 }, { width: 20 }];
+      const dernCol = aStatut ? 'K' : 'J';
 
       ws.mergeCells(`A1:${dernCol}1`);
       ws.getCell('A1').value = `${d.emp.nom} ${d.emp.prenom} — du ${formatDateFR(debut)} au ${formatDateFR(fin)}`;
@@ -8726,8 +8786,8 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
       ws.getCell('A1').alignment = { vertical: 'middle' };
 
       const entetes = aStatut
-        ? ['Jour', 'Date', 'Statut', 'Planifié', 'Pointé net', 'Écart planning', 'Nuit', 'Panier (€)', 'Primes (€)', 'Congé']
-        : ['Jour', 'Date', 'Planifié', 'Pointé net', 'Écart planning', 'Nuit', 'Panier (€)', 'Primes (€)', 'Congé'];
+        ? ['Jour', 'Date', 'Statut', 'Planifié', 'Pointé net', 'Écart planning', 'Nuit', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Congé']
+        : ['Jour', 'Date', 'Planifié', 'Pointé net', 'Écart planning', 'Nuit', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Congé'];
       const headerRow = ws.addRow(entetes);
       headerRow.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } }; cell.fill = xlsFill(XLS_COULEURS.entete); cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' }; });
 
@@ -8740,7 +8800,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
             ...(aStatut ? [l.statutCloture] : []),
             l.planMin ? minToHM(l.planMin) : '—', l.pointeMin ? minToHM(l.pointeMin) : '—',
             l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '—',
-            l.nuitMin ? minToHM(l.nuitMin) : '—', l.panierJour ? l.panierJour.toFixed(2) : '—',
+            l.nuitMin ? minToHM(l.nuitMin) : '—', l.panierJour ? l.panierJour : '—', l.panierNuit ? l.panierNuit : '—',
             l.primesJour ? l.primesJour.toFixed(2) : '—', libelleCongeJour(l) || '—',
           ];
           const row = ws.addRow(valeurs);
@@ -8754,8 +8814,8 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
           const wf = addDays(wd, 6);
           const labelSemaine = `Semaine du ${String(wd.getDate()).padStart(2,'0')}/${String(wd.getMonth()+1).padStart(2,'0')} au ${String(wf.getDate()).padStart(2,'0')}/${String(wf.getMonth()+1).padStart(2,'0')}/${wf.getFullYear()}`;
           const valeurs = aStatut
-            ? [labelSemaine, '', '', minToHM(l.weekPlan), l.weekPt ? minToHM(l.weekPt) : '—', '', l.weekNuit ? minToHM(l.weekNuit) : '—', '', '', '']
-            : [labelSemaine, '', minToHM(l.weekPlan), l.weekPt ? minToHM(l.weekPt) : '—', '', l.weekNuit ? minToHM(l.weekNuit) : '—', '', '', ''];
+            ? [labelSemaine, '', '', minToHM(l.weekPlan), l.weekPt ? minToHM(l.weekPt) : '—', '', l.weekNuit ? minToHM(l.weekNuit) : '—', '', '', '', '']
+            : [labelSemaine, '', minToHM(l.weekPlan), l.weekPt ? minToHM(l.weekPt) : '—', '', l.weekNuit ? minToHM(l.weekNuit) : '—', '', '', '', ''];
           const row = ws.addRow(valeurs);
           row.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.semaineTxt } }; cell.fill = xlsFill(XLS_COULEURS.semaine); cell.border = xlsBordureFine(); });
           ws.mergeCells(`A${row.number}:B${row.number}`);
@@ -8781,7 +8841,10 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
         ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
         ['Découchages', d.empDecouchage || '—'],
-        ['Paniers', d.empPanier ? d.empPanier.toFixed(2) + ' €' : '—'],
+        ['🍱 Panier jour', d.empPanier || '—'],
+        ['🌙 Panier nuit', d.empPanierNuit || '—'],
+        ...(d.empPanierJourMensualise ? [['🍱 Panier jour mensualisé', d.empPanierJourMensualise]] : []),
+        ...(d.empPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', d.empPanierNuitMensualise]] : []),
         ...Object.entries(d.congesParType).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
       ];
       recapLignes.forEach(([label, val], idx) => {
@@ -8848,7 +8911,8 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
   const nowMin = now.getHours() * 60 + now.getMinutes();
 
   // Calcule les totaux globaux pour le résumé
-  let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPrimes = 0, gtDecouchage = 0, gtHSValidees = 0, gtHSNonValidees = 0, gtFerieTravailleJours = 0, gtHeuresMajorees = 0, gtFerieChomeMin = 0;
+  let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPanierNuit = 0, gtPrimes = 0, gtDecouchage = 0, gtHSValidees = 0, gtHSNonValidees = 0, gtFerieTravailleJours = 0, gtHeuresMajorees = 0, gtFerieChomeMin = 0;
+  let gtPanierJourMensualise = 0, gtPanierNuitMensualise = 0;
 
   // Capture des données par employé pour l'export Excel/CSV (mêmes chiffres que l'écran, aucun
   // second calcul en parallèle qui risquerait de diverger — voir exportRecapPaie()).
@@ -8861,7 +8925,8 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     // de fin de période (approximation raisonnable pour un simple repère visuel, pas pour le
     // calcul d'écart proprement dit, qui lui reste toujours exact semaine par semaine).
     const contratMinActuel = getContratMinPourDate(emp, dateKey(new Date()));
-    let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPrimes = 0, empDecouchage = 0, empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
+    let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPanierNuit = 0, empPrimes = 0, empDecouchage = 0, empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
+    let empPanierJourMensualise = 0, empPanierNuitMensualise = 0;
     let weekFerieChomeMin = 0;
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0, weekPause = 0;
     const badgeBg = { ok: 'rgba(46,204,113,.12)', under: 'rgba(245,166,35,.12)', over: 'rgba(255,77,106,.12)', empty: 'transparent' };
@@ -8911,9 +8976,11 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       // Pause prévue (donc décomptée pour calculer la durée retenue) — affichée pour aider la
       // compréhension des écarts entre planifié/pointé et durée retenue.
       const pauseJourMin = insts.reduce((s, i) => s + prePauseMinutes(i), 0) + instsHierCross.reduce((s, i) => s + postPauseMinutes(i), 0);
-      const panierJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.panier || 0); }, 0);
+      const panierNuitLegal = calculerPaniersJourNuit(emp.id, dk, pointagesParAnnee, splitSeuil, false);
+      const panierJour = panierNuitLegal.panierJour;
+      const panierNuit = panierNuitLegal.panierNuit;
       const primesJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.primeMontant || 0); }, 0);
-      const decouchageJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.decouchage || 0); }, 0);
+      const decouchageJour = panierNuitLegal.decouchage;
 
       // Calcule les heures pointées depuis les événements Firebase (moteur partagé avec le
       // Compteur & modulation — voir calculerPointeMinJour)
@@ -9000,6 +9067,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         // planification, pas une donnée de paie fiable au jour près (voir Employés > Contrat).
         if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMinSemaine;
         if (weekCompleteFlush && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMinSemaine; empSemainesComptees++; }
+        if (weekCompleteFlush) {
+          if (emp.panierMensualiseJour) empPanierJourMensualise += 5;
+          if (emp.panierMensualiseNuit) empPanierNuitMensualise += 5;
+        }
         lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush });
         weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0;
       }
@@ -9028,7 +9099,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         weekPtReel += pointeMin;
       }
       empPlannifie += planMin; empPointe += pointeMin; empNuit += nuitMin;
-      empPanier += panierJour; empPrimes += primesJour; empDecouchage += decouchageJour;
+      empPanier += panierJour; empPanierNuit += panierNuit; empPrimes += primesJour; empDecouchage += decouchageJour;
 
       const hasWork = planMin > 0 || congeInsts.length > 0 || pointeHorsPlanning > 0;
       if (!afficherTous && !hasWork) return;
@@ -9046,7 +9117,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const heuresMajorees = pctMajoration > 0 ? Math.round(pointeMin * pctMajoration / 100) : 0;
       if (ferieTravaille) { empFerieTravailleJours++; empHeuresMajorees += heuresMajorees; }
 
-      lignes.push({ type: 'jour', dk, d, dow, planMin, pointeMin, ecartMin, nuitMin, panierJour, primesJour, decouchageJour, congeLabel, congeTaskId, congeFerieMin, hasWork, pointeHorsPlanning, embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin, nomFerie, ferieTravaille, pctMajoration, heuresMajorees });
+      lignes.push({ type: 'jour', dk, d, dow, planMin, pointeMin, ecartMin, nuitMin, panierJour, panierNuit, primesJour, decouchageJour, congeLabel, congeTaskId, congeFerieMin, hasWork, pointeHorsPlanning, embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin, nomFerie, ferieTravaille, pctMajoration, heuresMajorees });
     });
 
     // Dernier total semaine
@@ -9057,12 +9128,17 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const weekCompleteLast = weekMondayLast >= debut && addDays(weekMondayLast, 6) <= fin;
       if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMinSemaine;
       if (weekCompleteLast && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMinSemaine; empSemainesComptees++; }
+      if (weekCompleteLast) {
+        if (emp.panierMensualiseJour) empPanierJourMensualise += 5;
+        if (emp.panierMensualiseNuit) empPanierNuitMensualise += 5;
+      }
       lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteLast });
     }
 
     gtPlannifie += empPlannifie; gtPointe += empPointe; gtNuit += empNuit;
-    gtPanier += empPanier; gtPrimes += empPrimes; gtDecouchage += empDecouchage;
+    gtPanier += empPanier; gtPanierNuit += empPanierNuit; gtPrimes += empPrimes; gtDecouchage += empDecouchage;
     gtFerieChomeMin += empFerieChomeMin;
+    gtPanierJourMensualise += empPanierJourMensualise; gtPanierNuitMensualise += empPanierNuitMensualise;
     gtFerieTravailleJours += empFerieTravailleJours; gtHeuresMajorees += empHeuresMajorees;
     {
       const moisRecapFinGt = fin.getFullYear() + '-' + String(fin.getMonth() + 1).padStart(2, '0');
@@ -9109,9 +9185,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         case 'ecartTotal': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:${ecartColor(l.ecartMin)};">${ecartFmt(l.ecartMin)}</td>`;
         case 'ecartContrat': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:var(--text-dim);" title="Uniquement calculable sur un total semaine">—</td>`;
         case 'nuit': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:#9d8fff;${l.nuitMin > 0 ? 'background:rgba(157,143,255,.08);' : ''}" title="${l.nuitMin > 0 ? 'Heures majorées (nuit)' : ''}">${l.nuitMin > 0 ? minToHM(l.nuitMin) : '—'}</td>`;
-        case 'panier': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierJour > 0 ? l.panierJour.toFixed(2) + '€' : '—'}</td>`;
+        case 'panier': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierJour > 0 ? '🍱' : '—'}</td>`;
+        case 'panierNuit': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierNuit > 0 ? '🌙' : '—'}</td>`;
         case 'primes': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.primesJour > 0 ? l.primesJour.toFixed(2) + '€' : '—'}</td>`;
-        case 'decouchage': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.decouchageJour > 0 ? l.decouchageJour.toFixed(2) + '€' : '—'}</td>`;
+        case 'decouchage': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.decouchageJour > 0 ? 'Oui' : '—'}</td>`;
         default: return '<td></td>';
       }
     }
@@ -9204,7 +9281,8 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
     donneesExport.push({
       emp, lignes, contratMin: contratMinActuel,
-      empPlannifie, empPointe, empNuit, empPanier, empPrimes, empDecouchage,
+      empPlannifie, empPointe, empNuit, empPanier, empPanierNuit, empPrimes, empDecouchage,
+      empPanierJourMensualise, empPanierNuitMensualise,
       empEcartContrat, empSemainesComptees, ecartTotal,
       reglementRecap, congesParType, empFerieTravailleJours, empHeuresMajorees, empFerieChomeMin,
     });
@@ -9220,7 +9298,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
           ${badgeHS}
           ${badgeFerie}
           ${empNuit > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Nuit ${minToHM(empNuit)}</span>` : ''}
-          ${empPanier > 0 ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Paniers ${empPanier.toFixed(2)}€</span>` : ''}
+          ${empPanier > 0 ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">🍱 Panier jour ${empPanier}</span>` : ''}
+          ${empPanierNuit > 0 ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">🌙 Panier nuit ${empPanierNuit}</span>` : ''}
+          ${empPanierJourMensualise > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Forfait fixe, indépendant du travail réel">🍱 Panier jour mensualisé ${empPanierJourMensualise}</span>` : ''}
+          ${empPanierNuitMensualise > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Forfait fixe, indépendant du travail réel">🌙 Panier nuit mensualisé ${empPanierNuitMensualise}</span>` : ''}
         </div>
       </div>
       <div style="overflow-x:auto;">
@@ -9240,7 +9321,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
   // Rend les données capturées disponibles pour l'export Excel/CSV (voir exportRecapPaie()) —
   // toujours en phase avec ce qui vient d'être affiché, y compris les congés par type et le
   // détail global (heures sup validées/non validées calculées juste après).
-  _dernierRecapExport = { donneesExport, debut, fin, colonnesActives, gtPlannifie, gtPointe, gtNuit, gtPanier, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin };
+  _dernierRecapExport = { donneesExport, debut, fin, colonnesActives, gtPlannifie, gtPointe, gtNuit, gtPanier, gtPanierNuit, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin, gtPanierJourMensualise, gtPanierNuitMensualise };
 
   // Résumé global
   document.getElementById('rp-summary').innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px;">
@@ -9267,13 +9348,22 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       <div class="meta">Heures de nuit</div><div style="font-size:18px;font-weight:800;color:#9d8fff;">${minToHM(gtNuit)}</div>
     </div>` : ''}
     ${gtPanier > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
-      <div class="meta">Paniers</div><div style="font-size:18px;font-weight:800;color:var(--warning);">${gtPanier.toFixed(2)} €</div>
+      <div class="meta">🍱 Panier jour</div><div style="font-size:18px;font-weight:800;color:var(--warning);">${gtPanier}</div>
+    </div>` : ''}
+    ${gtPanierNuit > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
+      <div class="meta">🌙 Panier nuit</div><div style="font-size:18px;font-weight:800;color:var(--warning);">${gtPanierNuit}</div>
+    </div>` : ''}
+    ${gtPanierJourMensualise > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;border:1px solid rgba(157,143,255,.3);">
+      <div class="meta">🍱 Panier jour mensualisé</div><div style="font-size:18px;font-weight:800;color:#9d8fff;">${gtPanierJourMensualise}</div>
+    </div>` : ''}
+    ${gtPanierNuitMensualise > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;border:1px solid rgba(157,143,255,.3);">
+      <div class="meta">🌙 Panier nuit mensualisé</div><div style="font-size:18px;font-weight:800;color:#9d8fff;">${gtPanierNuitMensualise}</div>
     </div>` : ''}
     ${gtPrimes > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
       <div class="meta">Primes</div><div style="font-size:18px;font-weight:800;color:var(--warning);">${gtPrimes.toFixed(2)} €</div>
     </div>` : ''}
     ${gtDecouchage > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
-      <div class="meta">Découchage</div><div style="font-size:18px;font-weight:800;color:var(--warning);">${gtDecouchage.toFixed(2)} €</div>
+      <div class="meta">Découchage</div><div style="font-size:18px;font-weight:800;color:var(--warning);">${gtDecouchage}</div>
     </div>` : ''}
   </div>`;
 
@@ -11473,7 +11563,10 @@ function construireHTMLRecapFragmentEmploye(d, debut, fin) {
     ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
     ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
     ['Découchages', d.empDecouchage || '—'],
-    ['Paniers', d.empPanier ? d.empPanier.toFixed(2) + ' €' : '—'],
+    ['🍱 Panier jour', d.empPanier || '—'],
+    ['🌙 Panier nuit', d.empPanierNuit || '—'],
+    ...(d.empPanierJourMensualise ? [['🍱 Panier jour mensualisé', d.empPanierJourMensualise]] : []),
+    ...(d.empPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', d.empPanierNuitMensualise]] : []),
     ...Object.entries(d.congesParType).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
   ];
 
@@ -11514,7 +11607,10 @@ function construireHTMLRecapGroupe(donnees, debut, fin, g) {
     ['🔶 Fériés travaillés', g.gtFerieTravailleJours ? `${g.gtFerieTravailleJours} j.${g.gtHeuresMajorees ? ' (majoration +' + minToHM(g.gtHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
     ['Primes', g.gtPrimes ? g.gtPrimes.toFixed(2) + ' €' : '—'],
     ['Découchages', g.gtDecouchage || '—'],
-    ['Paniers', g.gtPanier ? g.gtPanier.toFixed(2) + ' €' : '—'],
+    ['🍱 Panier jour', g.gtPanier || '—'],
+    ['🌙 Panier nuit', g.gtPanierNuit || '—'],
+    ...(g.gtPanierJourMensualise ? [['🍱 Panier jour mensualisé', g.gtPanierJourMensualise]] : []),
+    ...(g.gtPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', g.gtPanierNuitMensualise]] : []),
     ...Object.entries(congesTotal).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
   ];
   const resumeHtml = `<div style="max-width:600px;margin:0 auto 28px;font-family:Arial,Helvetica,sans-serif;">
