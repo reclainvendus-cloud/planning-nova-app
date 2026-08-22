@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.83.1';
+const APP_VERSION = '1.83.2';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2123,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.83.2', items: [
+    'Correction importante du panier nuit légal (règle 1) : une session matinale isolée (ex: 00:30-08:30), non chaînée à un service commencé la veille via une tâche "à cheval sur minuit", n\'était jamais comptée dans les 4h requises entre 21h et 6h — ces heures de nuit bien réelles étaient tout simplement perdues. Elles sont désormais correctement rattachées à "la nuit de la veille", comme la loi le prévoit',
+  ] },
   { v: '1.83.1', items: [
     'Correction de cohérence sur la régularisation (Clôture Paie) : la valeur "anticipée" figée à la clôture et la valeur "réelle" recalculée le mois suivant utilisaient chacune une version différente du calcul de panier — désormais les deux passent par les mêmes 4 règles combinées, sinon l\'écart de régularisation n\'avait pas de sens',
     'Ajout du suivi "Écart panier nuit" (absent jusqu\'ici) dans le tableau de régularisation, le résumé et le CSV dédié — passage en comptage plutôt qu\'en € pour panier jour/nuit',
@@ -6842,7 +6845,12 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
   // après minuit, déjà comptée dans nuitReelMin mais isolée ici séparément pour pouvoir
   // recombiner "soirée de J" + "matinée de J+1" sans double-compte ni trou.
   let nuitSoireeMin = 0;   // portion 21h-24h de CE jour (hors reliquat d'hier)
-  let nuitQueueHierCrossMin = 0; // portion après minuit héritée d'un service commencé hier
+  // Portion 0h-6h de CE jour — QUEL QU'EN SOIT LA SOURCE : service commencé hier (chaînage) OU
+  // service standalone démarré tôt ce matin-même sans lien avec la veille (ex: 00:30-08:30, sans
+  // aucune tâche à cheval sur minuit programmée) — les DEUX comptent légalement pour "la nuit
+  // d'hier" (21h hier → 6h aujourd'hui), sous peine de perdre des heures de nuit réellement
+  // travaillées si le planning ne modélise pas explicitement un service à cheval sur minuit.
+  let nuitMatineeMin = 0;
 
   if (instsHierCross.length) {
     const evtsHier = Object.values(pointagesParAnnee[dkHier.slice(0, 4)]?.[dkHier]?.[empId]?.evenements || {});
@@ -6862,7 +6870,7 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
       // fenêtre de nuit s'évalue sur [1440, fMin], jamais sur toute la chaîne depuis dMin.
       const nuitPortion = computeNuitMinutes(1440, fMin, false);
       nuitReelMin += nuitPortion;
-      nuitQueueHierCrossMin += nuitPortion;
+      nuitMatineeMin += nuitPortion;
     }
   }
 
@@ -6932,6 +6940,9 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
         pointeMin += Math.max(0, fMin - dMin - pauseTotal);
         nuitReelMin += computeNuitMinutes(dMin, fMin, false);
         nuitSoireeMin += Math.max(0, Math.min(fMin, 1440) - Math.max(dMin, 1260));
+        // Service standalone démarré tôt ce matin (ex: 00:30-08:30), sans lien de chaînage avec
+        // hier — sa portion 0h-6h compte quand même pour "la nuit d'hier" (voir note plus haut).
+        nuitMatineeMin += Math.max(0, Math.min(fMin, 360) - Math.max(dMin, 0));
       }
     });
   }
@@ -6951,12 +6962,13 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
         pointeHorsPlanning += fMin - dMin;
         nuitReelMin += computeNuitMinutes(dMin, fMin, false);
         nuitSoireeMin += Math.max(0, Math.min(fMin, 1440) - Math.max(dMin, 1260));
+        nuitMatineeMin += Math.max(0, Math.min(fMin, 360) - Math.max(dMin, 0));
       }
     });
     pointeMin += pointeHorsPlanning;
   }
 
-  return { pointeMin, pointeHorsPlanning, nuitReelMin, nuitSoireeMin, nuitQueueHierCrossMin };
+  return { pointeMin, pointeHorsPlanning, nuitReelMin, nuitSoireeMin, nuitMatineeMin };
 }
 
 // ===================================================
@@ -6970,7 +6982,7 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
 function calculerPanierNuitLegal(empId, dk, pointagesParAnnee, splitSeuil) {
   const dkSuivant = dateKey(addDays(isoToDate(dk), 1));
   const soiree = calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil).nuitSoireeMin;
-  const matinee = calculerPointeMinJour(empId, dkSuivant, pointagesParAnnee, splitSeuil).nuitQueueHierCrossMin;
+  const matinee = calculerPointeMinJour(empId, dkSuivant, pointagesParAnnee, splitSeuil).nuitMatineeMin;
   const minutesNuit = soiree + matinee;
   return { minutesNuit, eligible: minutesNuit >= 240 };
 }
