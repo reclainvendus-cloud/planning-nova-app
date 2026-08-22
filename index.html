@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.83.4';
+const APP_VERSION = '1.83.5';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2123,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.83.5', items: [
+    'Correction du correctif précédent (v1.83.4) : la réattribution visuelle du repère 🌙 s\'exécutait après la construction des lignes du tableau à l\'écran au lieu d\'avant — plus aucun panier nuit ne s\'affichait nulle part. Déplacé au bon endroit, retesté sur un cas à 6 jours consécutifs',
+  ] },
   { v: '1.83.4', items: [
     'Ergonomie du panier nuit : le repère 🌙 s\'affiche désormais sur la ligne qui montre le plus d\'heures de nuit entre le jour de début et le jour de fin (ex: 2h le premier soir puis 8h le lendemain matin → le repère apparaît sur le lendemain) — le calcul et le comptage total restent identiques, seul l\'endroit où le repère est visuellement affiché change, dans le Récap paie comme dans la Clôture Paie',
   ] },
@@ -9239,6 +9242,27 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       }
     }
 
+    // Réattribution VISUELLE UNIQUEMENT du repère 🌙 panier nuit — le comptage réel (semaine,
+    // résumé, export) reste toujours rattaché au soir où la nuit légale commence (voir
+    // calculerPanierNuitLegal), mais afficher le repère sur ce jour-là peut être trompeur quand
+    // l'essentiel des heures de nuit apparaît en fait sur la ligne du lendemain (ex: un service
+    // 22h-7h30 : 2h00 le premier soir, 8h00 le matin suivant). Le repère est donc déplacé vers
+    // la ligne qui affiche le plus d'heures de nuit entre les deux jours concernés, sans jamais
+    // changer le total ni le dupliquer. IMPORTANT : ce bloc doit s'exécuter AVANT la construction
+    // des lignes HTML ci-dessous (const rows = ...), sinon panierNuitAffiche n'existe pas encore
+    // au moment du rendu et rien ne s'affiche (vécu — voir le correctif qui a suivi).
+    const lignesJourAffichage = lignes.filter(l => l.type === 'jour');
+    lignesJourAffichage.forEach(l => { l.panierNuitAffiche = l.panierNuit; });
+    lignesJourAffichage.forEach((l, i) => {
+      if (l.panierNuit > 0 && i + 1 < lignesJourAffichage.length) {
+        const suivante = lignesJourAffichage[i + 1];
+        if ((suivante.nuitMin || 0) > (l.nuitMin || 0)) {
+          l.panierNuitAffiche = 0;
+          suivante.panierNuitAffiche = (suivante.panierNuitAffiche || 0) + 1;
+        }
+      }
+    });
+
     const rows = lignes.map(l => {
       if (l.type === 'week') {
         const wd = isoToDate(l.label);
@@ -9323,25 +9347,6 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const label = task?.nom || 'Congé';
       const nbJours = computeJoursDecomptes(emp.id, taskId, debut, fin);
       if (nbJours > 0) congesParType[label] = (congesParType[label] || 0) + nbJours;
-    });
-
-    // Réattribution VISUELLE UNIQUEMENT du repère 🌙 panier nuit — le comptage réel (semaine,
-    // résumé, export) reste toujours rattaché au soir où la nuit légale commence (voir
-    // calculerPanierNuitLegal), mais afficher le repère sur ce jour-là peut être trompeur quand
-    // l'essentiel des heures de nuit apparaît en fait sur la ligne du lendemain (ex: un service
-    // 22h-7h30 : 2h00 le premier soir, 8h00 le matin suivant). Le repère est donc déplacé vers
-    // la ligne qui affiche le plus d'heures de nuit entre les deux jours concernés, sans jamais
-    // changer le total ni le dupliquer.
-    const lignesJour = lignes.filter(l => l.type === 'jour');
-    lignesJour.forEach(l => { l.panierNuitAffiche = l.panierNuit; });
-    lignesJour.forEach((l, i) => {
-      if (l.panierNuit > 0 && i + 1 < lignesJour.length) {
-        const suivante = lignesJour[i + 1];
-        if ((suivante.nuitMin || 0) > (l.nuitMin || 0)) {
-          l.panierNuitAffiche = 0;
-          suivante.panierNuitAffiche = (suivante.panierNuitAffiche || 0) + 1;
-        }
-      }
     });
 
     donneesExport.push({
