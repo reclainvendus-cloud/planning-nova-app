@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.83.6';
+const APP_VERSION = '1.83.7';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2123,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.83.7', items: [
+    'Correction d\'un bord de période sur le panier nuit légal : un service matinal isolé sur le tout PREMIER jour affiché (ex: 00h30-09h15, sans lien avec un service commencé la veille) rattachait son panier à "la nuit de la veille" — un jour hors période, jamais évalué par personne, donc le panier disparaissait purement et simplement. Il est désormais récupéré et affiché sur ce premier jour (Récap paie comme Clôture Paie), sans se faire re-décaler par la règle de décalage systématique',
+  ] },
   { v: '1.83.6', items: [
     'Panier nuit : la réattribution visuelle du repère 🌙 n\'était pas fiable (comparaison des heures de nuit entre jours voisins, qui pouvait rater des cas). Remplacée par un décalage systématique et constant d\'un jour vers l\'avant — le repère apparaît toujours sur le lendemain matin, là où une équipe de nuit voit vraiment "sa nuit" (ex: service lundi 22h → mardi 7h30 → repère affiché sur mardi) — sauf le tout dernier jour affiché de la période, qui garde son repère sur place faute de lendemain',
   ] },
@@ -8071,7 +8074,7 @@ function getCongeEtFerieInfoCloture(empId, dk) {
   return { congeLabel, congeFerieMin, nomFerie };
 }
 
-function construireLigneCloture(empId, dk, statutCloture, valeurs, pointagesParAnnee, splitSeuil) {
+function construireLigneCloture(empId, dk, statutCloture, valeurs, pointagesParAnnee, splitSeuil, estPremierJourPeriode) {
   const d = isoToDate(dk);
   const info = getCongeEtFerieInfoCloture(empId, dk);
   // Jour ANTICIPÉ : pas de pointage distinct — on simule "comme si pointé = planifié", exactement
@@ -8090,10 +8093,21 @@ function construireLigneCloture(empId, dk, statutCloture, valeurs, pointagesParA
   // planning comme base provisoire (y compris pour la règle légale de nuit), régularisée le mois
   // suivant comme le reste des données anticipées.
   const paniers = calculerPaniersJourNuit(empId, dk, pointagesParAnnee, splitSeuil, statutCloture === 'Anticipé');
+  // Bord de période (même logique que renderRecapPaieEnrichi) : le tout premier jour du mois
+  // clôturé doit aussi récupérer "la nuit de la veille" (hors mois, jamais évaluée ailleurs) si
+  // elle est éligible — sinon un service matinal isolé au 1er du mois perd son panier nuit légal.
+  // Stocké à PART (panierNuitBordure), déjà sur le bon jour d'affichage : ne doit jamais repasser
+  // par le décalage systématique d'un jour vers l'avant (voir construireDonneesCloturePaie).
+  let panierNuitBordure = 0;
+  if (estPremierJourPeriode && statutCloture !== 'Anticipé') {
+    const dkVeille = dateKey(addDays(d, -1));
+    const legalVeille = calculerPanierNuitLegal(empId, dkVeille, pointagesParAnnee, splitSeuil);
+    if (legalVeille.eligible) panierNuitBordure = 1;
+  }
   return {
     type: 'jour', dk, d, dow: d.getDay(),
     planMin: planMinAffiche, pointeMin: pointeMinAffiche, ecartMin: pointeMinAffiche > 0 ? pointeMinAffiche - planMinAffiche : null,
-    nuitMin: valeurs.nuitMin, panierJour: paniers.panierJour, panierNuit: paniers.panierNuit, primesJour: valeurs.primesJour, decouchageJour: paniers.decouchage,
+    nuitMin: valeurs.nuitMin, panierJour: paniers.panierJour, panierNuit: paniers.panierNuit, panierNuitBordure, primesJour: valeurs.primesJour, decouchageJour: paniers.decouchage,
     congeLabel: info.congeLabel, congeFerieMin: info.congeFerieMin, nomFerie: info.nomFerie,
     ferieTravaille, pctMajoration, heuresMajorees, statutCloture,
   };
@@ -8173,7 +8187,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       } else {
         valeurs = calculerReelPourRegularisation(emp.id, dk, splitSeuil, pointagesParAnnee);
       }
-      const ligne = construireLigneCloture(emp.id, dk, estAnticipe ? 'Anticipé' : 'Réel', valeurs, pointagesParAnnee, splitSeuil);
+      const ligne = construireLigneCloture(emp.id, dk, estAnticipe ? 'Anticipé' : 'Réel', valeurs, pointagesParAnnee, splitSeuil, dk === dateKey(premierJour));
 
       weekPlan += ligne.planMin; weekPt += ligne.pointeMin; weekNuit += ligne.nuitMin;
       const ferieChomeJour = (ligne.congeFerieMin > 0 && ligne.pointeMin === 0) ? ligne.congeFerieMin : 0;
@@ -8191,7 +8205,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       if (ligne.ferieTravaille) { empFerieTravailleJours++; empHeuresMajorees += ligne.heuresMajorees; }
 
       empPlannifie += ligne.planMin; empPointe += ligne.pointeMin; empNuit += ligne.nuitMin;
-      empPanier += ligne.panierJour; empPanierNuit += ligne.panierNuit; empPrimes += ligne.primesJour; empDecouchage += ligne.decouchageJour;
+      empPanier += ligne.panierJour; empPanierNuit += ligne.panierNuit + (ligne.panierNuitBordure || 0); empPrimes += ligne.primesJour; empDecouchage += ligne.decouchageJour;
 
       lignes.push(ligne);
       d = addDays(d, 1);
@@ -8227,6 +8241,9 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
           l.panierNuitAffiche = (l.panierNuitAffiche || 0) + 1;
         }
       }
+      // Crédit de bord de période : déjà sur le bon jour, ajouté APRÈS le décalage pour ne jamais
+      // être décalé une seconde fois.
+      if (l.panierNuitBordure > 0) l.panierNuitAffiche = (l.panierNuitAffiche || 0) + 1;
     });
 
     const reglementRecap = getReglementMois(emp.id, mois);
@@ -9019,6 +9036,19 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const panierNuitLegal = calculerPaniersJourNuit(emp.id, dk, pointagesParAnnee, splitSeuil, false);
       const panierJour = panierNuitLegal.panierJour;
       const panierNuit = panierNuitLegal.panierNuit;
+      // Bord de période : si c'est le tout premier jour affiché, "la nuit de la veille" (21h la
+      // veille → 6h aujourd'hui) n'est jamais évaluée par personne d'autre puisqu'elle est hors
+      // période — un service matinal isolé tout au début de la période (ex: 00h30-09h15 le tout
+      // premier jour, sans lien avec un service commencé la veille) perdrait sinon son panier nuit
+      // légal, même si les heures réellement pointées le justifient largement. Stocké à PART
+      // (panierNuitBordure) car déjà sur le bon jour d'affichage — ne doit jamais repasser par le
+      // décalage systématique d'un jour vers l'avant (voir plus bas), sinon il finirait à tort sur
+      // le jour suivant.
+      let panierNuitBordure = 0;
+      if (dk === jours[0]) {
+        const legalVeille = calculerPanierNuitLegal(emp.id, dkHier, pointagesParAnnee, splitSeuil);
+        if (legalVeille.eligible) panierNuitBordure = 1;
+      }
       const primesJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.primeMontant || 0); }, 0);
       const decouchageJour = panierNuitLegal.decouchage;
 
@@ -9152,7 +9182,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         weekPtReel += pointeMin;
       }
       empPlannifie += planMin; empPointe += pointeMin; empNuit += nuitMin;
-      empPanier += panierJour; empPanierNuit += panierNuit; empPrimes += primesJour; empDecouchage += decouchageJour;
+      empPanier += panierJour; empPanierNuit += panierNuit + panierNuitBordure; empPrimes += primesJour; empDecouchage += decouchageJour;
 
       const hasWork = planMin > 0 || congeInsts.length > 0 || pointeHorsPlanning > 0;
       if (!afficherTous && !hasWork) return;
@@ -9170,7 +9200,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const heuresMajorees = pctMajoration > 0 ? Math.round(pointeMin * pctMajoration / 100) : 0;
       if (ferieTravaille) { empFerieTravailleJours++; empHeuresMajorees += heuresMajorees; }
 
-      lignes.push({ type: 'jour', dk, d, dow, planMin, pointeMin, ecartMin, nuitMin, panierJour, panierNuit, primesJour, decouchageJour, congeLabel, congeTaskId, congeFerieMin, hasWork, pointeHorsPlanning, embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin, nomFerie, ferieTravaille, pctMajoration, heuresMajorees });
+      lignes.push({ type: 'jour', dk, d, dow, planMin, pointeMin, ecartMin, nuitMin, panierJour, panierNuit, panierNuitBordure, primesJour, decouchageJour, congeLabel, congeTaskId, congeFerieMin, hasWork, pointeHorsPlanning, embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin, nomFerie, ferieTravaille, pctMajoration, heuresMajorees });
     });
 
     // Dernier total semaine
@@ -9266,6 +9296,9 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
           l.panierNuitAffiche = (l.panierNuitAffiche || 0) + 1;
         }
       }
+      // Crédit de bord de période (voir plus haut) : déjà sur le bon jour, ajouté APRÈS le
+      // décalage systématique pour ne jamais être décalé une seconde fois.
+      if (l.panierNuitBordure > 0) l.panierNuitAffiche = (l.panierNuitAffiche || 0) + 1;
     });
 
     const rows = lignes.map(l => {
