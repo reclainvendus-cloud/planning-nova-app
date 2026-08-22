@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.83.5';
+const APP_VERSION = '1.83.6';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2123,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.83.6', items: [
+    'Panier nuit : la réattribution visuelle du repère 🌙 n\'était pas fiable (comparaison des heures de nuit entre jours voisins, qui pouvait rater des cas). Remplacée par un décalage systématique et constant d\'un jour vers l\'avant — le repère apparaît toujours sur le lendemain matin, là où une équipe de nuit voit vraiment "sa nuit" (ex: service lundi 22h → mardi 7h30 → repère affiché sur mardi) — sauf le tout dernier jour affiché de la période, qui garde son repère sur place faute de lendemain',
+  ] },
   { v: '1.83.5', items: [
     'Correction du correctif précédent (v1.83.4) : la réattribution visuelle du repère 🌙 s\'exécutait après la construction des lignes du tableau à l\'écran au lieu d\'avant — plus aucun panier nuit ne s\'affichait nulle part. Déplacé au bon endroit, retesté sur un cas à 6 jours consécutifs',
   ] },
@@ -8211,16 +8214,17 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
     });
 
     // Réattribution VISUELLE UNIQUEMENT du repère 🌙 (voir même logique dans renderRecapPaieEnrichi)
-    // — le comptage réel reste sur le jour où la nuit légale commence, seul l'affichage se déplace
-    // vers la ligne qui montre le plus d'heures de nuit entre les deux jours concernés.
+    // — le comptage réel reste sur le jour où la nuit légale commence, seul l'affichage se décale
+    // SYSTÉMATIQUEMENT d'un jour vers l'avant (vers le lendemain matin, où la nuit d'une équipe se
+    // voit vraiment) — sauf le tout dernier jour affiché, qui garde son repère sur place.
     const lignesJourClot = lignes.filter(l => l.type === 'jour');
-    lignesJourClot.forEach(l => { l.panierNuitAffiche = l.panierNuit; });
+    lignesJourClot.forEach(l => { l.panierNuitAffiche = 0; });
     lignesJourClot.forEach((l, i) => {
-      if (l.panierNuit > 0 && i + 1 < lignesJourClot.length) {
-        const suivante = lignesJourClot[i + 1];
-        if ((suivante.nuitMin || 0) > (l.nuitMin || 0)) {
-          l.panierNuitAffiche = 0;
-          suivante.panierNuitAffiche = (suivante.panierNuitAffiche || 0) + 1;
+      if (l.panierNuit > 0) {
+        if (i + 1 < lignesJourClot.length) {
+          lignesJourClot[i + 1].panierNuitAffiche = (lignesJourClot[i + 1].panierNuitAffiche || 0) + 1;
+        } else {
+          l.panierNuitAffiche = (l.panierNuitAffiche || 0) + 1;
         }
       }
     });
@@ -9244,21 +9248,22 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
     // Réattribution VISUELLE UNIQUEMENT du repère 🌙 panier nuit — le comptage réel (semaine,
     // résumé, export) reste toujours rattaché au soir où la nuit légale commence (voir
-    // calculerPanierNuitLegal), mais afficher le repère sur ce jour-là peut être trompeur quand
-    // l'essentiel des heures de nuit apparaît en fait sur la ligne du lendemain (ex: un service
-    // 22h-7h30 : 2h00 le premier soir, 8h00 le matin suivant). Le repère est donc déplacé vers
-    // la ligne qui affiche le plus d'heures de nuit entre les deux jours concernés, sans jamais
-    // changer le total ni le dupliquer. IMPORTANT : ce bloc doit s'exécuter AVANT la construction
-    // des lignes HTML ci-dessous (const rows = ...), sinon panierNuitAffiche n'existe pas encore
-    // au moment du rendu et rien ne s'affiche (vécu — voir le correctif qui a suivi).
+    // calculerPanierNuitLegal), mais afficher le repère ce soir-là est trompeur pour une équipe de
+    // nuit : la ligne qui montre vraiment "la nuit" à l'écran est celle du LENDEMAIN matin (là où
+    // apparaît la queue du service, 00h-06h/07h30). Le repère se décale donc SYSTÉMATIQUEMENT d'un
+    // jour vers l'avant — pas une comparaison d'heures, un décalage simple et constant — sauf pour
+    // le tout dernier jour affiché de la période, qui n'a pas de lendemain à afficher et garde donc
+    // son repère sur place plutôt que de le perdre. IMPORTANT : ce bloc doit s'exécuter AVANT la
+    // construction des lignes HTML ci-dessous (const rows = ...), sinon panierNuitAffiche n'existe
+    // pas encore au moment du rendu et rien ne s'affiche (vécu — voir le correctif qui a suivi).
     const lignesJourAffichage = lignes.filter(l => l.type === 'jour');
-    lignesJourAffichage.forEach(l => { l.panierNuitAffiche = l.panierNuit; });
+    lignesJourAffichage.forEach(l => { l.panierNuitAffiche = 0; });
     lignesJourAffichage.forEach((l, i) => {
-      if (l.panierNuit > 0 && i + 1 < lignesJourAffichage.length) {
-        const suivante = lignesJourAffichage[i + 1];
-        if ((suivante.nuitMin || 0) > (l.nuitMin || 0)) {
-          l.panierNuitAffiche = 0;
-          suivante.panierNuitAffiche = (suivante.panierNuitAffiche || 0) + 1;
+      if (l.panierNuit > 0) {
+        if (i + 1 < lignesJourAffichage.length) {
+          lignesJourAffichage[i + 1].panierNuitAffiche = (lignesJourAffichage[i + 1].panierNuitAffiche || 0) + 1;
+        } else {
+          l.panierNuitAffiche = (l.panierNuitAffiche || 0) + 1;
         }
       }
     });
