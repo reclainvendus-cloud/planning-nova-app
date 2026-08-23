@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.83.8';
+const APP_VERSION = '1.84.0';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2123,15 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.84.0', items: [
+    'Export Excel/CSV (Récap paie et Clôture Paie, moteur partagé) — refonte complète : toutes les colonnes de l\'écran sont désormais présentes (embauche/débauche prévue/pointée/retenue + écarts, durée brute, pause, découchage jour par jour), plus une colonne "N° de semaine"',
+    'Nouvelle colonne dédiée "Écart contrat / HS" — distincte de "Écart planning" (qui reste l\'écart pointé/planifié au jour le jour) : elle affiche clairement les heures supplémentaires réelles (pointé vs contrat), calculées par semaine complète uniquement, pour ne plus confondre les deux notions',
+    'Chaque semaine affiche désormais un cumul complet pour toutes les colonnes concernées (durée brute, pause, pointé net, écart planning, heures sup, nuit, paniers, primes, découchage) — plus seulement planifié/pointé/nuit comme avant',
+    'Colonnes importantes pour la compta mises en évidence visuellement dans l\'Excel : Pointé net, Nuit, Panier jour, Panier nuit, Découchage (texte bleu gras), et Heures sup en semaine (orange gras)',
+  ] },
+  { v: '1.83.9', items: [
+    'La feuille "Synthèse employés" de l\'export Excel avait été oubliée lors du passage des paniers en comptage — elle affichait encore une seule colonne "Paniers (€)". Remplacée par 4 colonnes distinctes : Panier jour, Panier nuit, Panier jour mensualisé, Panier nuit mensualisé',
+  ] },
   { v: '1.83.8', items: [
     'Correction du correctif de bord de période (v1.83.7) : il ne vérifiait pas si l\'employé était mensualisé nuit (règle 4) avant d\'appliquer le crédit — un employé mensualisé pouvait donc recevoir à tort un panier nuit "normal" en plus de son forfait, alors que la règle 4 doit exclure toutes les autres règles',
   ] },
@@ -8140,6 +8149,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
 
   const donnees = emps.map(emp => {
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0;
+    let weekBrute = 0, weekPause = 0, weekPanierJour = 0, weekPanierNuit = 0, weekPrimes = 0, weekDecouchage = 0;
     let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPanierNuit = 0, empPrimes = 0, empDecouchage = 0;
     let empPanierJourMensualise = 0, empPanierNuitMensualise = 0;
     let empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
@@ -8168,7 +8178,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
         if (emp.panierMensualiseJour) empPanierJourMensualise += 5;
         if (emp.panierMensualiseNuit) empPanierNuitMensualise += 5;
       }
-      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekNuit });
+      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, contratMin, weekComplete, weekHeuresSup: weekComplete && weekPtContrat > contratMin ? weekPtContrat - contratMin : null });
     }
 
     let d = new Date(premierJour);
@@ -8178,6 +8188,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       if (weekKey !== null && dayWeekKey !== weekKey) {
         flushSemaine();
         weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0;
+        weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0;
       }
       weekKey = dayWeekKey;
 
@@ -8193,6 +8204,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       const ligne = construireLigneCloture(emp.id, dk, estAnticipe ? 'Anticipé' : 'Réel', valeurs, pointagesParAnnee, splitSeuil, dk === dateKey(premierJour));
 
       weekPlan += ligne.planMin; weekPt += ligne.pointeMin; weekNuit += ligne.nuitMin;
+      weekPanierJour += ligne.panierJour; weekPanierNuit += ligne.panierNuit; weekPrimes += ligne.primesJour; weekDecouchage += ligne.decouchageJour;
       const ferieChomeJour = (ligne.congeFerieMin > 0 && ligne.pointeMin === 0) ? ligne.congeFerieMin : 0;
       empFerieChomeMin += ferieChomeJour;
 
@@ -8698,19 +8710,48 @@ function construireCSV(donnees) {
   const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   // Colonne "Statut" (Réel/Anticipé) ajoutée uniquement pour un export Clôture Paie.
   const aStatut = donnees.some(d => d.lignes.some(l => l.type === 'jour' && l.statutCloture));
-  const entetes = ['Employé','Contrat/sem','Jour','Date', ...(aStatut ? ['Statut'] : []), 'Planifié','Pointé net','Écart planning','Nuit','Panier jour','Panier nuit','Primes (€)','Découchage','Congé'];
+  const entetes = ['Employé', 'Contrat/sem', 'N° sem.', 'Jour', 'Date', ...(aStatut ? ['Statut'] : []),
+    'Emb. prévue', 'Emb. pointée', 'Emb. retenue', 'Écart emb.',
+    'Déb. prévue', 'Déb. pointée', 'Déb. retenue', 'Écart déb.',
+    'Durée brute', 'Pause', 'Pointé net', 'Écart planning', 'Écart contrat / HS',
+    'Nuit', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Découchage', 'Congé'];
   const lignesCsv = [entetes.map(esc).join(sep)];
   donnees.forEach(d => {
-    d.lignes.filter(l => l.type === 'jour').forEach(l => {
-      lignesCsv.push([
-        `${d.emp.nom} ${d.emp.prenom}`, (d.contratMin / 60).toFixed(2),
-        DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}/${l.d.getFullYear()}`,
-        ...(aStatut ? [l.statutCloture || ''] : []),
-        l.planMin ? minToHM(l.planMin) : '', l.pointeMin ? minToHM(l.pointeMin) : '',
-        l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '',
-        l.nuitMin ? minToHM(l.nuitMin) : '', l.panierJour ? l.panierJour : '', (l.panierNuitAffiche ?? l.panierNuit) ? (l.panierNuitAffiche ?? l.panierNuit) : '',
-        l.primesJour ? l.primesJour.toFixed(2) : '', l.decouchageJour ? 'Oui' : '', libelleCongeJour(l),
-      ].map(esc).join(sep));
+    d.lignes.forEach(l => {
+      if (l.type === 'jour') {
+        lignesCsv.push([
+          `${d.emp.nom} ${d.emp.prenom}`, (d.contratMin / 60).toFixed(2), getISOWeekNumber(l.d),
+          DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}/${l.d.getFullYear()}`,
+          ...(aStatut ? [l.statutCloture || ''] : []),
+          l.embInfo?.prevu || '', l.embInfo?.pointe || (l.embInfo ? 'manquant' : ''), l.embInfo?.retenue || '',
+          l.ecartEmb !== undefined && l.ecartEmb !== null ? (l.ecartEmb >= 0 ? '+' : '') + l.ecartEmb + 'min' : '',
+          l.debInfo?.prevu || '', l.debInfo?.pointe || (l.debInfo ? 'manquant' : ''), l.debInfo?.retenue || '',
+          l.ecartDeb !== undefined && l.ecartDeb !== null ? (l.ecartDeb >= 0 ? '+' : '') + l.ecartDeb + 'min' : '',
+          l.pointeMin > 0 && l.pauseJourMin !== undefined ? minToHM(l.pointeMin + l.pauseJourMin) : '',
+          l.pauseJourMin ? '-' + minToHM(l.pauseJourMin) : '',
+          l.pointeMin ? minToHM(l.pointeMin) : '',
+          l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '',
+          '',
+          l.nuitMin ? minToHM(l.nuitMin) : '', l.panierJour ? l.panierJour : '', (l.panierNuitAffiche ?? l.panierNuit) ? (l.panierNuitAffiche ?? l.panierNuit) : '',
+          l.primesJour ? l.primesJour.toFixed(2) : '', l.decouchageJour ? 'Oui' : '', libelleCongeJour(l),
+        ].map(esc).join(sep));
+      } else if (l.type === 'week') {
+        const wd = isoToDate(l.label);
+        const ecartPlanningSemaine = l.weekPt ? l.weekPt - l.weekPlan : null;
+        lignesCsv.push([
+          `${d.emp.nom} ${d.emp.prenom}`, '', getISOWeekNumber(wd),
+          `SEMAINE ${getISOWeekNumber(wd)}`, `du ${String(wd.getDate()).padStart(2,'0')}/${String(wd.getMonth()+1).padStart(2,'0')}`,
+          ...(aStatut ? [''] : []),
+          '', '', '', '', '', '', '', '',
+          l.weekBrute ? minToHM(l.weekBrute) : '', l.weekPause ? '-' + minToHM(l.weekPause) : '',
+          l.weekPt ? minToHM(l.weekPt) : '',
+          ecartPlanningSemaine !== null ? (ecartPlanningSemaine >= 0 ? '+' : '-') + minToHM(Math.abs(ecartPlanningSemaine)) : '',
+          l.weekHeuresSup ? '+' + minToHM(l.weekHeuresSup) + ' (HS)' : (l.weekComplete ? '+0h00' : ''),
+          l.weekNuit ? minToHM(l.weekNuit) : '',
+          l.weekPanierJour || '', l.weekPanierNuit || '',
+          l.weekPrimes ? l.weekPrimes.toFixed(2) : '', l.weekDecouchage || '', '',
+        ].map(esc).join(sep));
+      }
     });
   });
   return lignesCsv.join('\r\n');
@@ -8723,6 +8764,7 @@ const XLS_COULEURS = {
   vert: 'FFDFF5E3', vertTxt: 'FF1B7A38',
   rouge: 'FFFCE3E3', rougeTxt: 'FFB0272C',
   orange: 'FFFFF1D6', orangeTxt: 'FFB4750D',
+  bleu: 'FFE1E9FB', bleuTxt: 'FF1F4E9C',
   ligneAlt: 'FFF5F7FB', bordure: 'FFD8DEEA',
 };
 function xlsFill(argb) { return { type: 'pattern', pattern: 'solid', fgColor: { argb } }; }
@@ -8784,7 +8826,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
   if (contenu === 'synthese' || contenu === 'both') {
     const wsSyn = wb.addWorksheet('Synthèse employés');
     const typesConge = Object.keys(congesTotal);
-    const entetes = ['Nom', 'Prénom', 'Contrat/sem', 'Planifié', 'Pointé net', 'Écart planning', 'Écart contrat', 'Statut HS', 'Heures sup', 'Nuit', 'Primes (€)', 'Découchages', 'Paniers (€)', ...typesConge.map(t => `Congé: ${t}`)];
+    const entetes = ['Nom', 'Prénom', 'Contrat/sem', 'Planifié', 'Pointé net', 'Écart planning', 'Écart contrat', 'Statut HS', 'Heures sup', 'Nuit', 'Primes (€)', 'Découchages', 'Panier jour', 'Panier nuit', 'Panier jour mens.', 'Panier nuit mens.', ...typesConge.map(t => `Congé: ${t}`)];
     wsSyn.columns = entetes.map((h, i) => ({ width: i < 2 ? 16 : 15 }));
     const headerRow = wsSyn.addRow(entetes);
     headerRow.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } }; cell.fill = xlsFill(XLS_COULEURS.entete); cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center', vertical: 'middle' }; });
@@ -8803,7 +8845,8 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         d.empNuit ? minToHM(d.empNuit) : '—',
         d.empPrimes ? d.empPrimes.toFixed(2) : '—',
         d.empDecouchage || '—',
-        d.empPanier ? d.empPanier.toFixed(2) : '—',
+        d.empPanier || '—', d.empPanierNuit || '—',
+        d.empPanierJourMensualise || '—', d.empPanierNuitMensualise || '—',
         ...typesConge.map(t => d.congesParType[t] || '—'),
       ]);
       row.eachCell((cell, colNumber) => {
@@ -8833,10 +8876,18 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
       // Colonne "Statut" (Réel/Anticipé) ajoutée uniquement pour un export Clôture Paie — un
       // export Récap paie classique n'a jamais ce champ sur ses lignes, donc jamais cette colonne.
       const aStatut = d.lignes.some(l => l.type === 'jour' && l.statutCloture);
-      ws.columns = aStatut
-        ? [{ width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 15 }, { width: 9 }, { width: 10 }, { width: 10 }, { width: 9 }, { width: 20 }]
-        : [{ width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 15 }, { width: 9 }, { width: 10 }, { width: 10 }, { width: 9 }, { width: 20 }];
-      const dernCol = aStatut ? 'K' : 'J';
+
+      // Colonnes complètes (toutes les infos disponibles, y compris celles masquées par défaut à
+      // l'écran) — index fixe pour chaque colonne, quel que soit aStatut, pour ne jamais avoir à
+      // recalculer un décalage ailleurs dans le code.
+      const entetes = ['N° sem.', 'Jour', 'Date', ...(aStatut ? ['Statut'] : []),
+        'Emb. prévue', 'Emb. pointée', 'Emb. retenue', 'Écart emb.',
+        'Déb. prévue', 'Déb. pointée', 'Déb. retenue', 'Écart déb.',
+        'Durée brute', 'Pause', 'Pointé net', 'Écart planning', 'Écart contrat / HS',
+        'Nuit', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Découchage', 'Congé'];
+      const nbCols = entetes.length;
+      ws.columns = entetes.map((h, i) => ({ width: i === 0 ? 8 : (i <= 2 ? 12 : (h === 'Congé' ? 20 : 11)) }));
+      const dernCol = String.fromCharCode(64 + nbCols > 90 ? 90 : 64 + nbCols); // sécurité, table reste < 26 col normalement
 
       ws.mergeCells(`A1:${dernCol}1`);
       ws.getCell('A1').value = `${d.emp.nom} ${d.emp.prenom} — du ${formatDateFR(debut)} au ${formatDateFR(fin)}`;
@@ -8845,40 +8896,74 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
       ws.getRow(1).height = 24;
       ws.getCell('A1').alignment = { vertical: 'middle' };
 
-      const entetes = aStatut
-        ? ['Jour', 'Date', 'Statut', 'Planifié', 'Pointé net', 'Écart planning', 'Nuit', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Congé']
-        : ['Jour', 'Date', 'Planifié', 'Pointé net', 'Écart planning', 'Nuit', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Congé'];
       const headerRow = ws.addRow(entetes);
-      headerRow.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } }; cell.fill = xlsFill(XLS_COULEURS.entete); cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' }; });
+      headerRow.eachCell((cell, colNumber) => {
+        cell.font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } };
+        // Repère visuel dès l'en-tête pour les colonnes importantes côté compta (retenue, nuit,
+        // écart contrat/HS, paniers, découchage) — bleu plutôt que la couleur d'en-tête standard.
+        cell.fill = xlsFill(['Pointé net', 'Écart contrat / HS', 'Nuit', 'Panier jour', 'Panier nuit', 'Découchage'].includes(cell.value) ? XLS_COULEURS.bleuTxt : XLS_COULEURS.entete);
+        cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' };
+      });
 
-      const ecartColIdx = aStatut ? 6 : 5;
+      // Index (1-based) des colonnes qu'on met en valeur ligne par ligne — calculé une fois car
+      // dépend de aStatut (décalage de +1 si la colonne Statut est présente).
+      const offset = aStatut ? 1 : 0;
+      const idx = {
+        ecartEmb: 7 + offset, ecartDeb: 11 + offset, pointeNet: 14 + offset, ecartPlanning: 15 + offset,
+        ecartContratHS: 16 + offset, nuit: 17 + offset, panierJour: 18 + offset, panierNuit: 19 + offset,
+        decouchage: 21 + offset, statut: 4,
+      };
+      const colBleuFont = { color: { argb: XLS_COULEURS.bleuTxt }, bold: true };
+
       let i = 0;
       d.lignes.forEach(l => {
         if (l.type === 'jour') {
+          const noSem = getISOWeekNumber(l.d);
           const valeurs = [
-            DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}`,
+            noSem, DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}`,
             ...(aStatut ? [l.statutCloture] : []),
-            l.planMin ? minToHM(l.planMin) : '—', l.pointeMin ? minToHM(l.pointeMin) : '—',
+            l.embInfo?.prevu || '—', l.embInfo?.pointe || (l.embInfo ? 'manquant' : '—'), l.embInfo?.retenue || '—',
+            l.ecartEmb !== undefined && l.ecartEmb !== null ? (l.ecartEmb >= 0 ? '+' : '') + l.ecartEmb + 'min' : '—',
+            l.debInfo?.prevu || '—', l.debInfo?.pointe || (l.debInfo ? 'manquant' : '—'), l.debInfo?.retenue || '—',
+            l.ecartDeb !== undefined && l.ecartDeb !== null ? (l.ecartDeb >= 0 ? '+' : '') + l.ecartDeb + 'min' : '—',
+            l.pointeMin > 0 && l.pauseJourMin !== undefined ? minToHM(l.pointeMin + l.pauseJourMin) : '—',
+            l.pauseJourMin ? '-' + minToHM(l.pauseJourMin) : '—',
+            l.pointeMin ? minToHM(l.pointeMin) : '—',
             l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '—',
+            '—', // Écart contrat/HS : concept hebdomadaire, jamais par jour (voir ligne semaine)
             l.nuitMin ? minToHM(l.nuitMin) : '—', l.panierJour ? l.panierJour : '—', (l.panierNuitAffiche ?? l.panierNuit) ? (l.panierNuitAffiche ?? l.panierNuit) : '—',
-            l.primesJour ? l.primesJour.toFixed(2) : '—', libelleCongeJour(l) || '—',
+            l.primesJour ? l.primesJour.toFixed(2) : '—', l.decouchageJour ? 'Oui' : '—', libelleCongeJour(l) || '—',
           ];
           const row = ws.addRow(valeurs);
           row.eachCell(cell => { cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' }; if (i % 2 === 1) cell.fill = xlsFill(XLS_COULEURS.ligneAlt); });
-          const ecartCell = row.getCell(ecartColIdx);
-          if (l.ecartMin !== null) ecartCell.font = { color: { argb: l.ecartMin >= 0 ? XLS_COULEURS.vertTxt : XLS_COULEURS.rougeTxt } };
-          if (aStatut && l.statutCloture === 'Anticipé') row.getCell(3).font = { color: { argb: XLS_COULEURS.orangeTxt }, bold: true };
+          if (l.ecartMin !== null) row.getCell(idx.ecartPlanning).font = { color: { argb: l.ecartMin >= 0 ? XLS_COULEURS.vertTxt : XLS_COULEURS.rougeTxt } };
+          if (l.ecartEmb !== undefined && l.ecartEmb !== null) row.getCell(idx.ecartEmb).font = { color: { argb: l.ecartEmb >= 0 ? XLS_COULEURS.vertTxt : XLS_COULEURS.rougeTxt } };
+          if (l.ecartDeb !== undefined && l.ecartDeb !== null) row.getCell(idx.ecartDeb).font = { color: { argb: l.ecartDeb >= 0 ? XLS_COULEURS.vertTxt : XLS_COULEURS.rougeTxt } };
+          if (aStatut && l.statutCloture === 'Anticipé') row.getCell(idx.statut).font = { color: { argb: XLS_COULEURS.orangeTxt }, bold: true };
+          // Colonnes importantes côté compta, en valeur bleue/gras pour ressortir visuellement.
+          [idx.pointeNet, idx.nuit, idx.panierJour, idx.panierNuit, idx.decouchage].forEach(ci => { row.getCell(ci).font = colBleuFont; });
           i++;
         } else if (l.type === 'week') {
           const wd = isoToDate(l.label);
           const wf = addDays(wd, 6);
-          const labelSemaine = `Semaine du ${String(wd.getDate()).padStart(2,'0')}/${String(wd.getMonth()+1).padStart(2,'0')} au ${String(wf.getDate()).padStart(2,'0')}/${String(wf.getMonth()+1).padStart(2,'0')}/${wf.getFullYear()}`;
-          const valeurs = aStatut
-            ? [labelSemaine, '', '', minToHM(l.weekPlan), l.weekPt ? minToHM(l.weekPt) : '—', '', l.weekNuit ? minToHM(l.weekNuit) : '—', '', '', '', '']
-            : [labelSemaine, '', minToHM(l.weekPlan), l.weekPt ? minToHM(l.weekPt) : '—', '', l.weekNuit ? minToHM(l.weekNuit) : '—', '', '', '', ''];
+          const noSem = getISOWeekNumber(wd);
+          const labelSemaine = `Semaine ${noSem} — du ${String(wd.getDate()).padStart(2,'0')}/${String(wd.getMonth()+1).padStart(2,'0')} au ${String(wf.getDate()).padStart(2,'0')}/${String(wf.getMonth()+1).padStart(2,'0')}/${wf.getFullYear()}`;
+          const ecartPlanningSemaine = l.weekPt ? l.weekPt - l.weekPlan : null;
+          const valeurs = [
+            noSem, labelSemaine, '', ...(aStatut ? [''] : []),
+            '', '', '', '', '', '', '', '',
+            l.weekBrute ? minToHM(l.weekBrute) : '—', l.weekPause ? '-' + minToHM(l.weekPause) : '—',
+            l.weekPt ? minToHM(l.weekPt) : '—',
+            ecartPlanningSemaine !== null ? (ecartPlanningSemaine >= 0 ? '+' : '-') + minToHM(Math.abs(ecartPlanningSemaine)) : '—',
+            l.weekHeuresSup ? '+' + minToHM(l.weekHeuresSup) + ' (HS)' : (l.weekComplete ? '+0h00' : '—'),
+            l.weekNuit ? minToHM(l.weekNuit) : '—',
+            l.weekPanierJour || '—', l.weekPanierNuit || '—',
+            l.weekPrimes ? l.weekPrimes.toFixed(2) : '—', l.weekDecouchage || '—', '',
+          ];
           const row = ws.addRow(valeurs);
           row.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.semaineTxt } }; cell.fill = xlsFill(XLS_COULEURS.semaine); cell.border = xlsBordureFine(); });
-          ws.mergeCells(`A${row.number}:B${row.number}`);
+          ws.mergeCells(`B${row.number}:C${row.number}`);
+          if (l.weekHeuresSup) row.getCell(idx.ecartContratHS).font = { color: { argb: 'FFFFD27A' }, bold: true };
         }
       });
 
@@ -8907,12 +8992,12 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         ...(d.empPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', d.empPanierNuitMensualise]] : []),
         ...Object.entries(d.congesParType).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
       ];
-      recapLignes.forEach(([label, val], idx) => {
+      recapLignes.forEach(([label, val], idx2) => {
         ws.mergeCells(`A${rr}:B${rr}`);
         ws.getCell(`A${rr}`).value = label;
         ws.getCell(`C${rr}`).value = val;
         ws.getCell(`C${rr}`).font = { bold: true };
-        if (idx % 2 === 1) { ['A','C'].forEach(col => ws.getCell(`${col}${rr}`).fill = xlsFill(XLS_COULEURS.ligneAlt)); }
+        if (idx2 % 2 === 1) { ['A','C'].forEach(col => ws.getCell(`${col}${rr}`).fill = xlsFill(XLS_COULEURS.ligneAlt)); }
         ['A','C'].forEach(col => ws.getCell(`${col}${rr}`).border = xlsBordureFine());
         rr++;
       });
@@ -8989,6 +9074,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     let empPanierJourMensualise = 0, empPanierNuitMensualise = 0;
     let weekFerieChomeMin = 0;
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0, weekPause = 0;
+    let weekBrute = 0, weekPanierJour = 0, weekPanierNuit = 0, weekPrimes = 0, weekDecouchage = 0;
     const badgeBg = { ok: 'rgba(46,204,113,.12)', under: 'rgba(245,166,35,.12)', over: 'rgba(255,77,106,.12)', empty: 'transparent' };
     const badgeCol = { ok: 'var(--success)', under: 'var(--warning)', over: 'var(--danger)', empty: 'var(--text-dim)' };
 
@@ -9157,11 +9243,14 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
           if (emp.panierMensualiseJour) empPanierJourMensualise += 5;
           if (emp.panierMensualiseNuit) empPanierNuitMensualise += 5;
         }
-        lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush });
+        lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, weekBrute, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush, weekHeuresSup: weekCompleteFlush && weekPtContrat > contratMinSemaine ? weekPtContrat - contratMinSemaine : null });
         weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0;
+        weekBrute = 0; weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0;
       }
       weekKey = dayWeekKey;
       weekPlan += planMin; weekPt += pointeMin; weekNuit += nuitMin; weekPause += pauseJourMin;
+      weekBrute += pointeMin > 0 ? pointeMin + pauseJourMin : 0;
+      weekPanierJour += panierJour; weekPanierNuit += panierNuit + panierNuitBordure; weekPrimes += primesJour; weekDecouchage += decouchageJour;
       // Cumule les heures de férié CHÔMÉ (pas travaillé) — sert à neutraliser "Écart planning" plus
       // bas, sans jamais retirer ces heures de "Planifié" (qui doit bien les inclure, comme demandé).
       const ferieChomeMinJour = (congeFerieMin > 0 && pointeMin === 0) ? congeFerieMin : 0;
@@ -9218,7 +9307,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         if (emp.panierMensualiseJour) empPanierJourMensualise += 5;
         if (emp.panierMensualiseNuit) empPanierNuitMensualise += 5;
       }
-      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteLast });
+      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, weekBrute, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteLast, weekHeuresSup: weekCompleteLast && weekPtContrat > contratMinSemaine ? weekPtContrat - contratMinSemaine : null });
     }
 
     gtPlannifie += empPlannifie; gtPointe += empPointe; gtNuit += empNuit;
