@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.84.0';
+const APP_VERSION = '1.84.1';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2123,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.84.1', items: [
+    'Correction importante : l\'export Clôture Paie (simulation et rapport final) affichait les colonnes embauche/débauche prévue/pointée/retenue, écarts, durée brute et pause vides pour les jours RÉELS — le moteur de la Clôture Paie ne calculait jamais ces détails, contrairement au Récap paie. Cette logique (déjà testée et fiabilisée sur les cas complexes de services à cheval sur minuit) est désormais partagée entre les deux, garantissant un rendu identique pour les jours réels',
+    'Les cumuls hebdomadaires de durée brute et pause sont également désormais calculés côté Clôture Paie (auparavant toujours vides)',
+  ] },
   { v: '1.84.0', items: [
     'Export Excel/CSV (Récap paie et Clôture Paie, moteur partagé) — refonte complète : toutes les colonnes de l\'écran sont désormais présentes (embauche/débauche prévue/pointée/retenue + écarts, durée brute, pause, découchage jour par jour), plus une colonne "N° de semaine"',
     'Nouvelle colonne dédiée "Écart contrat / HS" — distincte de "Écart planning" (qui reste l\'écart pointé/planifié au jour le jour) : elle affiche clairement les heures supplémentaires réelles (pointé vs contrat), calculées par semaine complète uniquement, pour ne plus confondre les deux notions',
@@ -6840,6 +6844,83 @@ function calculerPlanMinJour(empId, dk, splitSeuil) {
   return insts.reduce((s, i) => s + ownDayMinutes(i), 0) + planMinHier;
 }
 
+// Détails embauche/débauche (prévue/pointée/retenue + écarts) pour un jour donné — extrait en
+// fonction PARTAGÉE (utilisée par le Récap paie ET la Clôture Paie, voir construireLigneCloture)
+// pour ne jamais dupliquer cette logique de chaînage déjà scrupuleusement testée (voir les
+// correctifs sur les services à cheval sur minuit). Ne calcule PAS pointeMin/planMin/nuitMin
+// (voir calculerPointeMinJour et calculerAnticipationJour pour ça) — uniquement l'affichage
+// détaillé des horaires prévus/pointés/retenus.
+function construireEmbDebInfo(empId, dk, pointagesParAnnee, splitSeuil) {
+  const d = isoToDate(dk);
+  const dkHier = dateKey(addDays(d, -1));
+  const insts = (db.planning[empId]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge).sort((a, b) => a.debut - b.debut);
+  const instsHierCross = buildChaineHierCross(empId, dkHier, splitSeuil);
+  const evts = Object.values(pointagesParAnnee[dk.slice(0, 4)]?.[dk]?.[empId]?.evenements || {});
+
+  let instsAujProprement = insts.slice();
+  let instsFusionnees = [];
+  if (instsHierCross.length && instsAujProprement.length) {
+    const derniereHier = instsHierCross[instsHierCross.length - 1];
+    let cursorFin = derniereHier.fin;
+    while (instsAujProprement.length && instsAujProprement[0].debut - cursorFin <= splitSeuil) {
+      instsFusionnees.push(instsAujProprement[0]);
+      cursorFin = instsAujProprement[0].fin;
+      instsAujProprement = instsAujProprement.slice(1);
+    }
+  }
+
+  const pauseJourMin = insts.reduce((s, i) => s + prePauseMinutes(i), 0) + instsHierCross.reduce((s, i) => s + postPauseMinutes(i), 0);
+
+  let embInfo = null, debInfo = null;
+  let chaineDebut = null, chaineFinInitiale = null;
+  if (instsHierCross.length) {
+    chaineDebut = { dk: dkHier, inst: instsHierCross[0] };
+    chaineFinInitiale = instsFusionnees.length
+      ? { dk, inst: instsFusionnees[instsFusionnees.length - 1] }
+      : { dk: dkHier, inst: instsHierCross[instsHierCross.length - 1] };
+  } else if (instsAujProprement.length) {
+    chaineDebut = { dk, inst: instsAujProprement[0] };
+    chaineFinInitiale = { dk, inst: instsAujProprement[instsAujProprement.length - 1] };
+  }
+
+  if (chaineDebut) {
+    const evtsDebut = chaineDebut.dk === dk ? evts : Object.values(pointagesParAnnee[chaineDebut.dk.slice(0, 4)]?.[chaineDebut.dk]?.[empId]?.evenements || {});
+    const e = evtsDebut.find(ev => ev.type === 'embauche' && ev.instId === chaineDebut.inst.id);
+    embInfo = { prevu: minToTime(chaineDebut.inst.debut), pointe: e?.heure || null, retenue: e?.heureRetenue || null, veille: chaineDebut.dk !== dk, statut: e?.statut || null, mode: e?.modeValidation || null };
+  }
+  if (chaineFinInitiale) {
+    let curInst = chaineFinInitiale.inst, curDk = chaineFinInitiale.dk, guard = 0;
+    while (curInst.crosseMinuit && guard++ < 5) {
+      const dkSuiv = dateKey(addDays(isoToDate(curDk), 1));
+      const instsSuiv = (db.planning[empId]?.[dkSuiv] || [])
+        .filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge)
+        .sort((a, b) => a.debut - b.debut);
+      if (!instsSuiv.length || instsSuiv[0].debut - curInst.fin > splitSeuil) { curDk = dkSuiv; break; }
+      let derniereSuiv = instsSuiv[0];
+      for (let i = 1; i < instsSuiv.length; i++) {
+        const gap = instsSuiv[i].debut - derniereSuiv.fin;
+        if (gap > splitSeuil) break;
+        derniereSuiv = instsSuiv[i];
+      }
+      curInst = derniereSuiv; curDk = dkSuiv;
+    }
+    const evtsFin = curDk === dk ? evts : Object.values(pointagesParAnnee[curDk.slice(0, 4)]?.[curDk]?.[empId]?.evenements || {});
+    const e = [...evtsFin].reverse().find(ev => ev.type === 'debauche' && ev.instId === curInst.id);
+    debInfo = { prevu: minToTime(curInst.fin), pointe: e?.heure || null, retenue: e?.heureRetenue || null, lendemain: curDk !== dk, statut: e?.statut || null, mode: e?.modeValidation || null };
+  }
+  const ecartTime = (pointeStr, prevuStr) => {
+    if (!pointeStr || !prevuStr) return null;
+    let a = timeToMin(pointeStr), b = timeToMin(prevuStr);
+    if (a === null || b === null) return null;
+    if (Math.abs(a - b) > 720) { if (a < b) a += 1440; else b += 1440; }
+    return a - b;
+  };
+  const ecartEmb = embInfo ? ecartTime(embInfo.pointe, embInfo.prevu) : null;
+  const ecartDeb = debInfo ? ecartTime(debInfo.pointe, debInfo.prevu) : null;
+
+  return { embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin };
+}
+
 function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
   const d = isoToDate(dk);
   const insts = (db.planning[empId]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge).sort((a,b) => a.debut - b.debut);
@@ -8116,12 +8197,19 @@ function construireLigneCloture(empId, dk, statutCloture, valeurs, pointagesParA
     const legalVeille = calculerPanierNuitLegal(empId, dkVeille, pointagesParAnnee, splitSeuil);
     if (legalVeille.eligible) panierNuitBordure = 1;
   }
+  // Détails embauche/débauche (prévue/pointée/retenue) — uniquement pour un jour RÉEL, qui a un
+  // vrai pointage à montrer (voir construireEmbDebInfo, partagée avec le Récap paie). Un jour
+  // ANTICIPÉ n'a par définition aucun pointage réel, ces colonnes restent donc vides (null),
+  // affichées "—" côté export.
+  const embDeb = statutCloture !== 'Anticipé' ? construireEmbDebInfo(empId, dk, pointagesParAnnee, splitSeuil) : null;
   return {
     type: 'jour', dk, d, dow: d.getDay(),
     planMin: planMinAffiche, pointeMin: pointeMinAffiche, ecartMin: pointeMinAffiche > 0 ? pointeMinAffiche - planMinAffiche : null,
     nuitMin: valeurs.nuitMin, panierJour: paniers.panierJour, panierNuit: paniers.panierNuit, panierNuitBordure, primesJour: valeurs.primesJour, decouchageJour: paniers.decouchage,
     congeLabel: info.congeLabel, congeFerieMin: info.congeFerieMin, nomFerie: info.nomFerie,
     ferieTravaille, pctMajoration, heuresMajorees, statutCloture,
+    embInfo: embDeb?.embInfo || null, debInfo: embDeb?.debInfo || null, ecartEmb: embDeb?.ecartEmb ?? null, ecartDeb: embDeb?.ecartDeb ?? null,
+    pauseJourMin: embDeb?.pauseJourMin ?? null,
   };
 }
 
@@ -8178,7 +8266,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
         if (emp.panierMensualiseJour) empPanierJourMensualise += 5;
         if (emp.panierMensualiseNuit) empPanierNuitMensualise += 5;
       }
-      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, contratMin, weekComplete, weekHeuresSup: weekComplete && weekPtContrat > contratMin ? weekPtContrat - contratMin : null });
+      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekBrute, weekPause, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, contratMin, weekComplete, weekHeuresSup: weekComplete && weekPtContrat > contratMin ? weekPtContrat - contratMin : null });
     }
 
     let d = new Date(premierJour);
@@ -8189,6 +8277,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
         flushSemaine();
         weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0;
         weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0;
+        weekBrute = 0; weekPause = 0;
       }
       weekKey = dayWeekKey;
 
@@ -8205,6 +8294,9 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
 
       weekPlan += ligne.planMin; weekPt += ligne.pointeMin; weekNuit += ligne.nuitMin;
       weekPanierJour += ligne.panierJour; weekPanierNuit += ligne.panierNuit; weekPrimes += ligne.primesJour; weekDecouchage += ligne.decouchageJour;
+      // Durée brute/pause : uniquement disponibles pour un jour RÉEL (voir construireLigneCloture,
+      // pauseJourMin reste null pour un jour anticipé, faute de vrai pointage à mesurer).
+      if (ligne.pauseJourMin !== null && ligne.pointeMin > 0) { weekBrute += ligne.pointeMin + ligne.pauseJourMin; weekPause += ligne.pauseJourMin; }
       const ferieChomeJour = (ligne.congeFerieMin > 0 && ligne.pointeMin === 0) ? ligne.congeFerieMin : 0;
       empFerieChomeMin += ferieChomeJour;
 
@@ -9154,72 +9246,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const dayWeekKey = dateKey(getMonday(d));
 
       // --- Détails embauche/débauche (prévue/pointée/retenue) pour l'affichage détaillé ---
-      // Calcul volontairement séparé de pointeMin ci-dessus (déjà testé et stable sur les cas de
-      // traversée de minuit) — on ne veut pas risquer de le perturber pour ce simple affichage.
-      // Construit la chaîne complète du service : point de départ (hier si continuation, sinon
-      // aujourd'hui) et point d'arrivée initial avant résolution vers l'avant (peut lui-même
-      // encore continuer sur un jour suivant). Couvre les 3 cas : continuation pure d'hier sans
-      // rien aujourd'hui, continuation fusionnée avec une tâche d'aujourd'hui, et service normal
-      // démarrant aujourd'hui.
-      let embInfo = null, debInfo = null;
-      let chaineDebut = null, chaineFinInitiale = null;
-      if (instsHierCross.length) {
-        chaineDebut = { dk: dkHier, inst: instsHierCross[0] };
-        // Le "jour de référence" de la dernière instance doit être celui où elle est RÉELLEMENT
-        // datée : aujourd'hui (dk) si elle vient de instsFusionnees (une tâche d'aujourd'hui
-        // fusionnée avec la continuation d'hier), mais HIER (dkHier) si elle vient de
-        // instsHierCross et n'a rien fusionné — sinon la boucle de chaînage plus bas cherche "demain"
-        // à partir du mauvais jour et peut accidentellement rattacher un service sans rapport du
-        // lendemain suivant (ex: Vendredi hérite à tort de la fin du service de Samedi).
-        chaineFinInitiale = instsFusionnees.length
-          ? { dk, inst: instsFusionnees[instsFusionnees.length - 1] }
-          : { dk: dkHier, inst: instsHierCross[instsHierCross.length - 1] };
-      } else if (instsAujProprement.length) {
-        chaineDebut = { dk, inst: instsAujProprement[0] };
-        chaineFinInitiale = { dk, inst: instsAujProprement[instsAujProprement.length - 1] };
-      }
-
-      if (chaineDebut) {
-        const evtsDebut = chaineDebut.dk === dk ? evts : Object.values(pointagesParAnnee[chaineDebut.dk.slice(0,4)]?.[chaineDebut.dk]?.[emp.id]?.evenements || {});
-        const e = evtsDebut.find(ev => ev.type === 'embauche' && ev.instId === chaineDebut.inst.id);
-        embInfo = { prevu: minToTime(chaineDebut.inst.debut), pointe: e?.heure || null, retenue: e?.heureRetenue || null, veille: chaineDebut.dk !== dk, statut: e?.statut || null, mode: e?.modeValidation || null };
-      }
-      if (chaineFinInitiale) {
-        let curInst = chaineFinInitiale.inst, curDk = chaineFinInitiale.dk, guard = 0;
-        while (curInst.crosseMinuit && guard++ < 5) {
-          const dkSuiv = dateKey(addDays(isoToDate(curDk), 1));
-          const instsSuiv = (db.planning[emp.id]?.[dkSuiv] || [])
-            .filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge)
-            .sort((a, b) => a.debut - b.debut);
-          // Une tâche "à cheval sur minuit" a TOUJOURS sa débauche le lendemain de sa propre date,
-          // que la chaîne continue ou non au-delà — donc le jour de référence avance ici même en
-          // cas d'arrêt immédiat, sinon la débauche serait cherchée dans le mauvais jour
-          // d'événements (ex: celle de Jeudi cherchée à tort dans les événements de Jeudi au lieu
-          // de Vendredi, où elle est réellement enregistrée).
-          if (!instsSuiv.length || instsSuiv[0].debut - curInst.fin > splitSeuil) { curDk = dkSuiv; break; }
-          let derniereSuiv = instsSuiv[0];
-          for (let i = 1; i < instsSuiv.length; i++) {
-            const gap = instsSuiv[i].debut - derniereSuiv.fin;
-            if (gap > splitSeuil) break;
-            derniereSuiv = instsSuiv[i];
-          }
-          curInst = derniereSuiv; curDk = dkSuiv;
-        }
-        const evtsFin = curDk === dk ? evts : Object.values(pointagesParAnnee[curDk.slice(0,4)]?.[curDk]?.[emp.id]?.evenements || {});
-        const e = [...evtsFin].reverse().find(ev => ev.type === 'debauche' && ev.instId === curInst.id);
-        debInfo = { prevu: minToTime(curInst.fin), pointe: e?.heure || null, retenue: e?.heureRetenue || null, lendemain: curDk !== dk, statut: e?.statut || null, mode: e?.modeValidation || null };
-      }
-      // Écart = pointé - prévu (jamais retenue - prévu, puisque retenue est souvent égale au prévu
-      // par construction quand le pointage est dans la tolérance — voir logique de la pointeuse)
-      const ecartTime = (pointeStr, prevuStr) => {
-        if (!pointeStr || !prevuStr) return null;
-        let a = timeToMin(pointeStr), b = timeToMin(prevuStr);
-        if (a === null || b === null) return null;
-        if (Math.abs(a - b) > 720) { if (a < b) a += 1440; else b += 1440; }
-        return a - b;
-      };
-      const ecartEmb = embInfo ? ecartTime(embInfo.pointe, embInfo.prevu) : null;
-      const ecartDeb = debInfo ? ecartTime(debInfo.pointe, debInfo.prevu) : null;
+      // Fonction partagée avec la Clôture Paie (voir construireEmbDebInfo) — ne recalcule jamais
+      // cette logique de chaînage en double.
+      const embDebInfo = construireEmbDebInfo(emp.id, dk, pointagesParAnnee, splitSeuil);
+      const { embInfo, debInfo, ecartEmb, ecartDeb } = embDebInfo;
 
       // Flush total semaine si on change de semaine
       if (weekKey !== null && dayWeekKey !== weekKey) {
