@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.84.1';
+const APP_VERSION = '1.84.2';
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2123,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.84.2', items: [
+    'La régularisation du mois précédent (Clôture Paie) est désormais intégrée directement dans l\'onglet Excel de chaque employé concerné (juste avant son récapitulatif), et dans le CSV principal juste après ses lignes du mois — le fichier CSV séparé "regularisation.csv" a été retiré, il n\'y a plus qu\'un seul jeu de fichiers à consulter par clôture',
+  ] },
   { v: '1.84.1', items: [
     'Correction importante : l\'export Clôture Paie (simulation et rapport final) affichait les colonnes embauche/débauche prévue/pointée/retenue, écarts, durée brute et pause vides pour les jours RÉELS — le moteur de la Clôture Paie ne calculait jamais ces détails, contrairement au Récap paie. Cette logique (déjà testée et fiabilisée sur les cas complexes de services à cheval sur minuit) est désormais partagée entre les deux, garantissant un rendu identique pour les jours réels',
     'Les cumuls hebdomadaires de durée brute et pause sont également désormais calculés côté Clôture Paie (auparavant toujours vides)',
@@ -8383,23 +8386,12 @@ async function genererFichiersCloturePaie(mois, dateClotureKey, parEmployeAntici
   const titre = (estSimulation ? '⚠️ SIMULATION — ' : '') + `Clôture Paie — ${mois}` + (estSimulation ? ' — rien n\'est enregistré' : '');
   const nomFichier = `${estSimulation ? 'simulation-' : ''}cloture-${mois}`;
 
-  const buffer = await construireClasseurExcel(donnees, 'both', { contexteGlobal, periode, titre });
+  // La régularisation du mois précédent (si applicable) est intégrée directement dans l'onglet de
+  // chaque employé concerné (Excel) et juste après ses lignes (CSV) — plus de fichier séparé à
+  // consulter à part, moins de risque de l'oublier.
+  const buffer = await construireClasseurExcel(donnees, 'both', { contexteGlobal, periode, titre, regul });
   downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${nomFichier}.xlsx`);
-  downloadBlob(new Blob(['\uFEFF' + construireCSV(donnees)], { type: 'text/csv;charset=utf-8' }), `${nomFichier}.csv`);
-
-  if (regul) {
-    // La régularisation n'est pas (encore) intégrée aux colonnes du Récap paie standard — un
-    // second fichier CSV dédié complète l'information, en clair, sans surcharger l'export principal.
-    const sep = ';';
-    const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const rows = [[`RÉGULARISATION DE ${regul.mois}`].map(esc).join(sep)];
-    rows.push(['Employé', 'Écart heures', 'Écart nuit', 'Écart panier jour', 'Écart panier nuit', 'Écart primes (€)', 'Écart découchage'].map(esc).join(sep));
-    Object.entries(regul.parEmploye).forEach(([empId, r]) => {
-      const emp = getEmpById(empId); if (!emp) return;
-      rows.push([`${emp.nom} ${emp.prenom}`, minToHM(r.deltaPlanMin), minToHM(r.deltaNuitMin), r.deltaPanier, r.deltaPanierNuit, r.deltaPrimes.toFixed(2), r.deltaDecouchage].map(esc).join(sep));
-    });
-    downloadBlob(new Blob(['\uFEFF' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' }), `${nomFichier}-regularisation.csv`);
-  }
+  downloadBlob(new Blob(['\uFEFF' + construireCSV(donnees, regul)], { type: 'text/csv;charset=utf-8' }), `${nomFichier}.csv`);
 }
 
 async function telechargerSimulationCloturePaie() {
@@ -8796,7 +8788,7 @@ async function genererExportRecap() {
 }
 
 // ----- CSV : une ligne par jour × employé, format brut pour import comptable -----
-function construireCSV(donnees) {
+function construireCSV(donnees, regul) {
   const sep = ';'; // Excel FR ouvre correctement avec le point-virgule
   const DOW = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
   const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -8808,6 +8800,7 @@ function construireCSV(donnees) {
     'Durée brute', 'Pause', 'Pointé net', 'Écart planning', 'Écart contrat / HS',
     'Nuit', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Découchage', 'Congé'];
   const lignesCsv = [entetes.map(esc).join(sep)];
+  const nbColsVides = entetes.length - 2; // toutes les colonnes sauf "Employé" pour les lignes de titre/texte libre
   donnees.forEach(d => {
     d.lignes.forEach(l => {
       if (l.type === 'jour') {
@@ -8845,6 +8838,13 @@ function construireCSV(donnees) {
         ].map(esc).join(sep));
       }
     });
+    // Régularisation du mois précédent — juste après les lignes de CET employé, avant de passer
+    // au suivant (voir aussi le même bloc dans l'onglet Excel, avant son récapitulatif).
+    const r = regul?.parEmploye?.[d.emp.id];
+    if (r) {
+      lignesCsv.push([`RÉGULARISATION DE ${regul.mois}`, ...Array(nbColsVides).fill('')].map(esc).join(sep));
+      lignesCsv.push(['Écart heures', minToHM(r.deltaPlanMin), 'Écart nuit', minToHM(r.deltaNuitMin), 'Écart panier jour', r.deltaPanier, 'Écart panier nuit', r.deltaPanierNuit, 'Écart primes (€)', r.deltaPrimes.toFixed(2), 'Écart découchage', r.deltaDecouchage, ...Array(Math.max(0, nbColsVides - 11)).fill('')].map(esc).join(sep));
+    }
   });
   return lignesCsv.join('\r\n');
 }
@@ -9058,6 +9058,35 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
           if (l.weekHeuresSup) row.getCell(idx.ecartContratHS).font = { color: { argb: 'FFFFD27A' }, bold: true };
         }
       });
+
+      // Régularisation du mois précédent (Clôture Paie uniquement, quand applicable) — placée
+      // AVANT le récapitulatif, pour rester dans le fil de lecture de CET employé sans avoir à
+      // sauter vers un onglet séparé.
+      const regulEmp = opts.regul?.parEmploye?.[d.emp.id];
+      if (regulEmp) {
+        let rrg = ws.rowCount + 2;
+        ws.mergeCells(`A${rrg}:C${rrg}`);
+        ws.getCell(`A${rrg}`).value = `🔁 Régularisation de ${opts.regul.mois}`;
+        ws.getCell(`A${rrg}`).font = { bold: true, size: 12, color: { argb: XLS_COULEURS.enteteTxt } };
+        ws.getCell(`A${rrg}`).fill = xlsFill(XLS_COULEURS.entete);
+        rrg++;
+        [
+          ['Écart heures', minToHM(regulEmp.deltaPlanMin)],
+          ['Écart nuit', minToHM(regulEmp.deltaNuitMin)],
+          ['Écart panier jour', regulEmp.deltaPanier],
+          ['Écart panier nuit', regulEmp.deltaPanierNuit],
+          ['Écart primes (€)', regulEmp.deltaPrimes.toFixed(2)],
+          ['Écart découchage', regulEmp.deltaDecouchage],
+        ].forEach(([label, val], iReg) => {
+          ws.mergeCells(`A${rrg}:B${rrg}`);
+          ws.getCell(`A${rrg}`).value = label;
+          ws.getCell(`C${rrg}`).value = val;
+          ws.getCell(`C${rrg}`).font = { bold: true };
+          if (iReg % 2 === 1) { ['A','C'].forEach(col => ws.getCell(`${col}${rrg}`).fill = xlsFill(XLS_COULEURS.ligneAlt)); }
+          ['A','C'].forEach(col => ws.getCell(`${col}${rrg}`).border = xlsBordureFine());
+          rrg++;
+        });
+      }
 
       // Récapitulatif en bas de CE rapport employé
       const hsValidees = d.reglementRecap ? d.reglementRecap.montantMin : null;
