@@ -2106,7 +2106,21 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.84.2';
+const APP_VERSION = '1.84.4';
+// Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
+// 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
+// les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
+const PANIER_MENSUALISE_PAR_MOIS = Math.round(5 * 52 / 12 * 100) / 100;
+// Nombre de mois calendaires DISTINCTS touchés par une période — sert au panier mensualisé (règle
+// 4) pour le Récap paie, qui peut porter sur une période arbitraire (pas forcément un mois
+// calendaire complet comme la Clôture Paie) : chaque mois calendaire touché compte pour un crédit
+// mensuel plein (voir PANIER_MENSUALISE_PAR_MOIS), jamais proportionnel au nombre de semaines.
+function nbMoisCalendairesDansPeriode(debut, fin) {
+  const mois = new Set();
+  let d = new Date(debut);
+  while (d <= fin) { mois.add(d.getFullYear() + '-' + d.getMonth()); d = addDays(d, 1); }
+  return mois.size;
+}
 
 // Compare deux versions au format X.Y.Z numériquement (jamais en texte brut, sinon "1.9.0" est
 // vu comme "plus grand" que "1.10.0" en comparaison de chaînes). Retourne -1/0/1.
@@ -2123,6 +2137,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.84.4', items: [
+    'Correction du calcul du panier mensualisé (règle 4) : "5 paniers/semaine" était traduit à tort en "5 × nombre de semaines calendaires du mois affiché" (donc 4 ou 5 selon les mois) — la vraie mensualisation lisse sur l\'année : 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, fixe quel que soit le mois. La Clôture Paie applique ce montant une fois par mois clôturé ; le Récap paie l\'applique une fois par mois calendaire distinct touché par la période sélectionnée',
+  ] },
   { v: '1.84.2', items: [
     'La régularisation du mois précédent (Clôture Paie) est désormais intégrée directement dans l\'onglet Excel de chaque employé concerné (juste avant son récapitulatif), et dans le CSV principal juste après ses lignes du mois — le fichier CSV séparé "regularisation.csv" a été retiré, il n\'y a plus qu\'un seul jeu de fichiers à consulter par clôture',
   ] },
@@ -8242,7 +8259,12 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0;
     let weekBrute = 0, weekPause = 0, weekPanierJour = 0, weekPanierNuit = 0, weekPrimes = 0, weekDecouchage = 0;
     let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPanierNuit = 0, empPrimes = 0, empDecouchage = 0;
-    let empPanierJourMensualise = 0, empPanierNuitMensualise = 0;
+    // Règle 4 — panier mensualisé : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé
+    // par 12, jamais "5 × nombre de semaines calendaires de CE mois précis" (qui varie entre 4 et
+    // 5 selon les mois et fausserait le total — voir PANIER_MENSUALISE_PAR_MOIS). Cette fonction
+    // traite toujours exactement UN mois calendaire complet, donc un crédit unique suffit.
+    let empPanierJourMensualise = emp.panierMensualiseJour ? PANIER_MENSUALISE_PAR_MOIS : 0;
+    let empPanierNuitMensualise = emp.panierMensualiseNuit ? PANIER_MENSUALISE_PAR_MOIS : 0;
     let empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
     const lignes = [];
 
@@ -8262,13 +8284,6 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       const weekComplete = weekMonday >= premierJour && addDays(weekMonday, 6) <= dernierJour;
       if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
       if (weekComplete && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
-      // Règle 4 — paniers mensualisés : 5/semaine fixe, travaillée ou non, uniquement pour une
-      // semaine ENTIÈREMENT comprise dans la période (même logique que l'écart contrat ci-dessus,
-      // pour ne jamais sur-compter une semaine tronquée au bord de la période).
-      if (weekComplete) {
-        if (emp.panierMensualiseJour) empPanierJourMensualise += 5;
-        if (emp.panierMensualiseNuit) empPanierNuitMensualise += 5;
-      }
       lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekBrute, weekPause, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, contratMin, weekComplete, weekHeuresSup: weekComplete && weekPtContrat > contratMin ? weekPtContrat - contratMin : null });
     }
 
@@ -8898,8 +8913,8 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
     ['Découchages', g.gtDecouchage || '—'],
     ['🍱 Panier jour', g.gtPanier || '—'],
     ['🌙 Panier nuit', g.gtPanierNuit || '—'],
-    ...(g.gtPanierJourMensualise ? [['🍱 Panier jour mensualisé', g.gtPanierJourMensualise]] : []),
-    ...(g.gtPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', g.gtPanierNuitMensualise]] : []),
+    ...(g.gtPanierJourMensualise ? [['🍱 Panier jour mensualisé', g.gtPanierJourMensualise.toFixed(2)]] : []),
+    ...(g.gtPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', g.gtPanierNuitMensualise.toFixed(2)]] : []),
     ...Object.entries(congesTotal).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
   ];
   let r = 3;
@@ -8938,7 +8953,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         d.empPrimes ? d.empPrimes.toFixed(2) : '—',
         d.empDecouchage || '—',
         d.empPanier || '—', d.empPanierNuit || '—',
-        d.empPanierJourMensualise || '—', d.empPanierNuitMensualise || '—',
+        d.empPanierJourMensualise ? d.empPanierJourMensualise.toFixed(2) : '—', d.empPanierNuitMensualise ? d.empPanierNuitMensualise.toFixed(2) : '—',
         ...typesConge.map(t => d.congesParType[t] || '—'),
       ]);
       row.eachCell((cell, colNumber) => {
@@ -9109,8 +9124,8 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         ['Découchages', d.empDecouchage || '—'],
         ['🍱 Panier jour', d.empPanier || '—'],
         ['🌙 Panier nuit', d.empPanierNuit || '—'],
-        ...(d.empPanierJourMensualise ? [['🍱 Panier jour mensualisé', d.empPanierJourMensualise]] : []),
-        ...(d.empPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', d.empPanierNuitMensualise]] : []),
+        ...(d.empPanierJourMensualise ? [['🍱 Panier jour mensualisé', d.empPanierJourMensualise.toFixed(2)]] : []),
+        ...(d.empPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', d.empPanierNuitMensualise.toFixed(2)]] : []),
         ...Object.entries(d.congesParType).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
       ];
       recapLignes.forEach(([label, val], idx2) => {
@@ -9185,6 +9200,11 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
   const donneesExport = [];
   const colonnesActives = RECAP_COLONNES.filter(c => colPrefs[c.id]);
 
+  // Panier mensualisé (règle 4) : nombre de mois calendaires distincts touchés par la période
+  // sélectionnée, calculé UNE FOIS pour tous les employés — voir PANIER_MENSUALISE_PAR_MOIS pour
+  // le pourquoi de ce calcul (jamais proportionnel au nombre de semaines de cette période précise).
+  const nbMoisTouchesPeriode = nbMoisCalendairesDansPeriode(debut, fin);
+
   const tablesHtml = emps.map(emp => {
     // Le contrat exact par semaine se calcule désormais via getContratMinPourDate() à chaque
     // flush de semaine (voir plus bas) — cette valeur "actuelle" ne sert plus qu'au badge global
@@ -9192,7 +9212,8 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     // calcul d'écart proprement dit, qui lui reste toujours exact semaine par semaine).
     const contratMinActuel = getContratMinPourDate(emp, dateKey(new Date()));
     let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPanierNuit = 0, empPrimes = 0, empDecouchage = 0, empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
-    let empPanierJourMensualise = 0, empPanierNuitMensualise = 0;
+    let empPanierJourMensualise = emp.panierMensualiseJour ? nbMoisTouchesPeriode * PANIER_MENSUALISE_PAR_MOIS : 0;
+    let empPanierNuitMensualise = emp.panierMensualiseNuit ? nbMoisTouchesPeriode * PANIER_MENSUALISE_PAR_MOIS : 0;
     let weekFerieChomeMin = 0;
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0, weekPause = 0;
     let weekBrute = 0, weekPanierJour = 0, weekPanierNuit = 0, weekPrimes = 0, weekDecouchage = 0;
@@ -9298,10 +9319,6 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         // planification, pas une donnée de paie fiable au jour près (voir Employés > Contrat).
         if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMinSemaine;
         if (weekCompleteFlush && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMinSemaine; empSemainesComptees++; }
-        if (weekCompleteFlush) {
-          if (emp.panierMensualiseJour) empPanierJourMensualise += 5;
-          if (emp.panierMensualiseNuit) empPanierNuitMensualise += 5;
-        }
         lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, weekBrute, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush, weekHeuresSup: weekCompleteFlush && weekPtContrat > contratMinSemaine ? weekPtContrat - contratMinSemaine : null });
         weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0;
         weekBrute = 0; weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0;
@@ -9362,10 +9379,6 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const weekCompleteLast = weekMondayLast >= debut && addDays(weekMondayLast, 6) <= fin;
       if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMinSemaine;
       if (weekCompleteLast && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMinSemaine; empSemainesComptees++; }
-      if (weekCompleteLast) {
-        if (emp.panierMensualiseJour) empPanierJourMensualise += 5;
-        if (emp.panierMensualiseNuit) empPanierNuitMensualise += 5;
-      }
       lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, weekBrute, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteLast, weekHeuresSup: weekCompleteLast && weekPtContrat > contratMinSemaine ? weekPtContrat - contratMinSemaine : null });
     }
 
@@ -9559,8 +9572,8 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
           ${empNuit > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Nuit ${minToHM(empNuit)}</span>` : ''}
           ${empPanier > 0 ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">🍱 Panier jour ${empPanier}</span>` : ''}
           ${empPanierNuit > 0 ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">🌙 Panier nuit ${empPanierNuit}</span>` : ''}
-          ${empPanierJourMensualise > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Forfait fixe, indépendant du travail réel">🍱 Panier jour mensualisé ${empPanierJourMensualise}</span>` : ''}
-          ${empPanierNuitMensualise > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Forfait fixe, indépendant du travail réel">🌙 Panier nuit mensualisé ${empPanierNuitMensualise}</span>` : ''}
+          ${empPanierJourMensualise > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Forfait fixe, indépendant du travail réel">🍱 Panier jour mensualisé ${empPanierJourMensualise.toFixed(2)}</span>` : ''}
+          ${empPanierNuitMensualise > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Forfait fixe, indépendant du travail réel">🌙 Panier nuit mensualisé ${empPanierNuitMensualise.toFixed(2)}</span>` : ''}
         </div>
       </div>
       <div style="overflow-x:auto;">
@@ -9613,10 +9626,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       <div class="meta">🌙 Panier nuit</div><div style="font-size:18px;font-weight:800;color:var(--warning);">${gtPanierNuit}</div>
     </div>` : ''}
     ${gtPanierJourMensualise > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;border:1px solid rgba(157,143,255,.3);">
-      <div class="meta">🍱 Panier jour mensualisé</div><div style="font-size:18px;font-weight:800;color:#9d8fff;">${gtPanierJourMensualise}</div>
+      <div class="meta">🍱 Panier jour mensualisé</div><div style="font-size:18px;font-weight:800;color:#9d8fff;">${gtPanierJourMensualise.toFixed(2)}</div>
     </div>` : ''}
     ${gtPanierNuitMensualise > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;border:1px solid rgba(157,143,255,.3);">
-      <div class="meta">🌙 Panier nuit mensualisé</div><div style="font-size:18px;font-weight:800;color:#9d8fff;">${gtPanierNuitMensualise}</div>
+      <div class="meta">🌙 Panier nuit mensualisé</div><div style="font-size:18px;font-weight:800;color:#9d8fff;">${gtPanierNuitMensualise.toFixed(2)}</div>
     </div>` : ''}
     ${gtPrimes > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
       <div class="meta">Primes</div><div style="font-size:18px;font-weight:800;color:var(--warning);">${gtPrimes.toFixed(2)} €</div>
@@ -11824,8 +11837,8 @@ function construireHTMLRecapFragmentEmploye(d, debut, fin) {
     ['Découchages', d.empDecouchage || '—'],
     ['🍱 Panier jour', d.empPanier || '—'],
     ['🌙 Panier nuit', d.empPanierNuit || '—'],
-    ...(d.empPanierJourMensualise ? [['🍱 Panier jour mensualisé', d.empPanierJourMensualise]] : []),
-    ...(d.empPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', d.empPanierNuitMensualise]] : []),
+    ...(d.empPanierJourMensualise ? [['🍱 Panier jour mensualisé', d.empPanierJourMensualise.toFixed(2)]] : []),
+    ...(d.empPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', d.empPanierNuitMensualise.toFixed(2)]] : []),
     ...Object.entries(d.congesParType).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
   ];
 
@@ -11868,8 +11881,8 @@ function construireHTMLRecapGroupe(donnees, debut, fin, g) {
     ['Découchages', g.gtDecouchage || '—'],
     ['🍱 Panier jour', g.gtPanier || '—'],
     ['🌙 Panier nuit', g.gtPanierNuit || '—'],
-    ...(g.gtPanierJourMensualise ? [['🍱 Panier jour mensualisé', g.gtPanierJourMensualise]] : []),
-    ...(g.gtPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', g.gtPanierNuitMensualise]] : []),
+    ...(g.gtPanierJourMensualise ? [['🍱 Panier jour mensualisé', g.gtPanierJourMensualise.toFixed(2)]] : []),
+    ...(g.gtPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', g.gtPanierNuitMensualise.toFixed(2)]] : []),
     ...Object.entries(congesTotal).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
   ];
   const resumeHtml = `<div style="max-width:600px;margin:0 auto 28px;font-family:Arial,Helvetica,sans-serif;">
