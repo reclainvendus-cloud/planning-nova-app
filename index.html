@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.84.6';
+const APP_VERSION = '1.84.7';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2137,6 +2137,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.84.7', items: [
+    'Correction d\'un second cas du même bug (v1.84.6) : pour une tâche à cheval sur minuit RETIRÉE du planning depuis (donc plus reconstituable via le planning), l\'écran Validation ne regroupait que les événements du jour affiché — une embauche pointée la veille pour une telle tâche restait invisible, laissant le pointage "Incomplet" en permanence. Les événements de la veille partageant le même identifiant de tâche sont désormais regroupés avec ceux du jour',
+  ] },
   { v: '1.84.6', items: [
     'Correction d\'un bug bloquant dans l\'écran Validation : une tâche à cheval sur minuit (ex: "22:30-05:00") sans AUCUNE tâche planifiée le lendemain pour la prolonger restait affichée "Incomplet" en permanence, même après suppression et repointage — la recherche de la débauche se faisait à tort dans les événements du jour même au lieu de ceux du lendemain, où elle est réellement enregistrée. Corrigé : la débauche d\'un service à cheval sur minuit est désormais toujours cherchée le lendemain, qu\'une tâche de continuation soit planifiée ou non',
   ] },
@@ -10660,6 +10663,17 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
         // on affiche les événements bruts sans reconstruire les services
         const evtsGroup = {};
         evts.forEach(e => {
+          const key = e.instId || 'inconnu';
+          if (!evtsGroup[key]) evtsGroup[key] = [];
+          evtsGroup[key].push(e);
+        });
+        // Une tâche à cheval sur minuit RETIRÉE ENTRE-TEMPS du planning (donc plus de service
+        // reconstituable via la chaîne ci-dessus) peut avoir son embauche enregistrée hier et sa
+        // débauche aujourd'hui — sans regrouper aussi les événements d'hier partageant le même
+        // instId, l'embauche resterait invisible et le pointage affiché "Incomplet" à vie, quel
+        // que soit le nombre de fois où l'employé repointe (vécu — voir la même correction faite
+        // juste au-dessus pour une tâche encore présente au planning).
+        evtsHier.forEach(e => {
           const key = e.instId || 'inconnu';
           if (!evtsGroup[key]) evtsGroup[key] = [];
           evtsGroup[key].push(e);
