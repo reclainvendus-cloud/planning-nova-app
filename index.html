@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.84.8';
+const APP_VERSION = '1.85.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2137,6 +2137,13 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.85.0', items: [
+    'Les pointages "orphelins" (tâche modifiée/supprimée du planning après avoir déjà été pointée) ne s\'affichent plus en permanence dans l\'écran Pointages — ils n\'y apportaient rien à part de l\'encombrement (les pointages "🔧 hors planning" intentionnels restent, eux, bien visibles)',
+    'Ces pointages orphelins sont désormais proposés en suggestion sur l\'écran Validation, précisément quand un "oubli" est détecté pour le même employé/jour : "💡 Pointage orphelin trouvé : HH:MM" avec un bouton pour reprendre cette heure dans le formulaire manuel — jamais rattaché automatiquement, toujours à la décision de l\'admin',
+  ] },
+  { v: '1.84.9', items: [
+    'Renforcement de l\'avertissement du bouton 🗑️ (écran Pointages) : il précise désormais explicitement qu\'il supprime TOUS les pointages de l\'employé pour toute la journée (pas seulement la tâche affichée sur la ligne cliquée), et signale spécifiquement si une autre ligne "Complet" (donc des données valides) existe aussi ce jour-là',
+  ] },
   { v: '1.84.8', items: [
     'Correction des lignes "Incomplet" fantômes apparues suite au correctif v1.84.7 : quand une embauche/débauche d\'une tâche retirée du planning se complète bien via le jour suivant (déjà affichée "Complet" là-bas), une ligne "Incomplet" en double restait visible sur le jour de l\'embauche seule — elle est désormais masquée puisque le pointage est déjà correctement affiché ailleurs. Les vraies incomplétudes (aucune débauche nulle part, même pas le lendemain) restent bien affichées, à traiter normalement',
   ] },
@@ -10699,10 +10706,16 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
             if (debDemain) return;
           }
           const horsPlanning = grpEvts.some(e => e.horsPlanning);
+          // Une tâche RETIRÉE du planning (pas "hors planning" intentionnel) n'a plus sa place ici
+          // — ces pointages fantômes sont désormais proposés comme suggestion à l'écran Validation,
+          // au moment précis où un admin doit justement résoudre un pointage manquant pour ce
+          // jour-là (voir suggererPointageFantome) — les laisser traîner en permanence dans
+          // Pointages n'apportait rien, à part encombrer l'écran sans jamais se résoudre seul.
+          if (!horsPlanning) return;
           const task = db.tasks.find(t => t.id === (embEvt || debEvt)?.taskId);
           const tachesLabel = task
-            ? `<span class="dot" style="background:${task.color};display:inline-block;margin-right:6px;"></span>${task.nom} <span style="font-size:10px;color:${horsPlanning ? 'var(--warning)' : 'var(--text-dim)'};">${horsPlanning ? '(🔧 hors planning)' : '(tâche retirée)'}</span>`
-            : `<span style="color:var(--text-dim);font-size:11px;">Tâche inconnue${horsPlanning ? ' (hors planning)' : ' (retirée du planning)'}</span>`;
+            ? `<span class="dot" style="background:${task.color};display:inline-block;margin-right:6px;"></span>${task.nom} <span style="font-size:10px;color:var(--warning);">(🔧 hors planning)</span>`
+            : `<span style="color:var(--text-dim);font-size:11px;">Tâche inconnue (hors planning)</span>`;
           const heurePrevue = embEvt?.heure || '—';
           const enAttente = embEnAttente || debEnAttente;
           let statutLabel = 'Complet', statutCls = 'ok';
@@ -10772,6 +10785,17 @@ function saveTolerance() {
 // - "hors_tolerance" : l'employé a pointé, hors tolérance, avec son motif — statut 'attente' déjà en base.
 // - "oubli" : rien n'a été pointé du tout alors que l'heure prévue est passée (avec une marge de
 //   sécurité pour ne pas signaler une tâche qui n'a simplement pas encore eu lieu).
+// Cherche, parmi les événements bruts d'un jour, un pointage dont l'instance de planning n'existe
+// plus aujourd'hui (tâche modifiée/supprimée depuis) — proposé en SUGGESTION à l'admin sur une
+// anomalie "oubli", jamais fusionné automatiquement (voir discussion : impossible de recalculer
+// un écart fiable pour un horaire prévu qui n'existe plus, donc la décision doit rester humaine).
+function trouverEvenementFantome(empId, dk, type, evtsJour) {
+  const instIdsActuels = new Set((db.planning[empId]?.[dk] || []).map(i => i.id));
+  return (evtsJour || [])
+    .filter(e => e.type === type && e.statut !== 'attente' && e.instId && !instIdsActuels.has(e.instId) && !e.horsPlanning)
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0))[0] || null;
+}
+
 function scanAnomalies(nbJours, callback) {
   if (!fbDb) { callback([]); return; }
   let jours = Array.from({ length: nbJours }, (_, i) => dateKey(addDays(new Date(), -i)));
@@ -10823,8 +10847,7 @@ function scanAnomalies(nbJours, callback) {
   }
 
   function buildAnomalies() {
-    const anomalies = [];
-    jours.forEach(dk => {
+    const anomalies = [];    jours.forEach(dk => {
       const evtsParEmp = dataByDay[dk] || {};
       getEmployesTries().forEach(emp => {
         // Pointages hors planning auto-déclarés (débauche pointée sans embauche préalable) — ne
@@ -10933,14 +10956,16 @@ function scanAnomalies(nbJours, callback) {
           // Oubli embauche : on n'alerte qu'après graceMin minutes depuis l'heure prévue
           const embauchePassee = dkEmbauche < todayKey || (dkEmbauche === todayKey && nowMin > premiere.debut + graceMin);
           if (!embEvt && embauchePassee) {
-            anomalies.push({ kind: 'oubli', typePointage: 'embauche', emp, dk: dkEmbauche, inst: premiere, task: db.tasks.find(t => t.id === premiere.taskId), evt: null });
+            const fantome = trouverEvenementFantome(emp.id, dkEmbauche, 'embauche', dataByDay[dkEmbauche]?.[emp.id]);
+            anomalies.push({ kind: 'oubli', typePointage: 'embauche', emp, dk: dkEmbauche, inst: premiere, task: db.tasks.find(t => t.id === premiere.taskId), evt: null, fantome });
           }
 
           // Oubli débauche : comparée au jour réel de fin (dkDebauche), qu'il s'agisse du jour
           // de départ (pas de traversée de minuit) ou d'un jour suivant (service fusionné).
           const debauchePassee = dkDebauche < todayKey || (dkDebauche === todayKey && nowMin > derniere.fin + graceMin);
           if (!debEvt && debauchePassee) {
-            anomalies.push({ kind: 'oubli', typePointage: 'debauche', emp, dk: dkDebauche, inst: derniere, task: db.tasks.find(t => t.id === derniere.taskId), evt: null });
+            const fantome = trouverEvenementFantome(emp.id, dkDebauche, 'debauche', dataByDay[dkDebauche]?.[emp.id]);
+            anomalies.push({ kind: 'oubli', typePointage: 'debauche', emp, dk: dkDebauche, inst: derniere, task: db.tasks.find(t => t.id === derniere.taskId), evt: null, fantome });
           }
         });
       });
@@ -10998,7 +11023,19 @@ function deletePointageEvt(rowIdx, type) {
   if (!r || !fbDb) return;
   const inst = type === 'embauche' ? r.instEmb : r.instDeb;
   const task = db.tasks.find(t => t.id === inst?.taskId);
-  if (!confirm(`Supprimer tous les pointages de ${r.emp.prenom} ${r.emp.nom} pour ce jour (${task?.nom || ''}) ?`)) return;
+
+  // Ce bouton supprime TOUT le nœud Firebase de l'employé pour CETTE journée entière — jamais
+  // seulement l'événement de la ligne cliquée. Si d'autres lignes existent pour le même
+  // employé/jour (notamment une ligne "Complet", donc de vraies données valides), l'avertissement
+  // doit le dire explicitement : sinon on risque de faire croire à tort que seule la tâche entre
+  // parenthèses sera touchée, alors que tout le reste de la journée disparaît aussi.
+  const autresLignesMemeJour = window._ptRows.filter((x, i) => i !== rowIdx && x.emp.id === r.emp.id && x.dk === r.dk);
+  const aUneLigneComplete = autresLignesMemeJour.some(x => x.statutCls === 'ok');
+  const messageBase = `⚠️ Ce bouton supprime TOUS les pointages de ${r.emp.prenom} ${r.emp.nom} pour toute la journée du ${formatDateFR(isoToDate(r.dk))} — pas seulement "${task?.nom || 'cette tâche'}".`;
+  const messageComplement = aUneLigneComplete
+    ? `\n\n🔴 Attention : une autre ligne "Complet" existe aussi ce jour-là pour cet employé — ses pointages VALIDES seront supprimés en même temps.`
+    : (autresLignesMemeJour.length ? `\n\n${autresLignesMemeJour.length} autre(s) ligne(s) existent aussi ce jour-là pour cet employé — elles seront supprimées aussi.` : '');
+  if (!confirm(`${messageBase}${messageComplement}\n\nContinuer ?`)) return;
 
   const year = isoToDate(r.dk).getFullYear();
   const rowEl = document.getElementById(`ptrow-${rowIdx}`);
@@ -11061,7 +11098,12 @@ function renderValidationList(anomalies) {
           </span>
           <span style="font-size:14px;font-weight:700;font-family:var(--mono);">Prévu : ${heurePrevue}</span>
           <span style="font-size:12px;color:var(--text-muted);">rien n'a été pointé</span>
-        </div>`;
+        </div>
+        ${a.fantome ? `<div style="margin-top:8px;padding:8px 10px;background:rgba(157,143,255,.10);border-radius:8px;border:1px solid rgba(157,143,255,.3);">
+          <div style="font-size:12px;color:#9d8fff;font-weight:700;">💡 Pointage orphelin trouvé pour ce jour (tâche modifiée/supprimée depuis) : <span style="font-family:var(--mono);">${a.fantome.heureRetenue || a.fantome.heure}</span></div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">À toi de juger si ça correspond bien à ce pointage — l'appli ne le rattache jamais toute seule.</div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="utiliserFantome(${a.idx},'${(a.fantome.heureRetenue || a.fantome.heure || '').replace(/'/g,"")}')">Utiliser cette heure</button>
+        </div>` : ''}`;
     } else {
       const signe = a.evt.ecart >= 0 ? '+' : '';
       const ecartColor = Math.abs(a.evt.ecart) > (db.params.tolerance || 10) ? 'var(--danger)' : 'var(--warning)';
@@ -11116,6 +11158,17 @@ function renderValidationList(anomalies) {
 function toggleManuel(idx) {
   const el = document.getElementById('manuel-' + idx);
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+// Ouvre le formulaire manuel de l'anomalie et pré-remplit l'heure avec celle du pointage orphelin
+// suggéré — l'admin garde toujours la main pour confirmer (ou modifier) avant validation.
+function utiliserFantome(idx, heure) {
+  const el = document.getElementById('manuel-' + idx);
+  if (el) el.style.display = 'block';
+  const inp = document.getElementById('manuel-heure-' + idx);
+  if (inp && heure) inp.value = heure;
+  const commentaireInp = document.getElementById('manuel-commentaire-' + idx);
+  if (commentaireInp && !commentaireInp.value) commentaireInp.value = 'Heure reprise d\'un pointage orphelin (tâche modifiée/supprimée)';
 }
 
 // Écrit la décision de l'admin dans Firebase : met à jour l'événement existant (cas hors tolérance)
