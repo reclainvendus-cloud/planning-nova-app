@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.84.7';
+const APP_VERSION = '1.84.8';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2137,6 +2137,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.84.8', items: [
+    'Correction des lignes "Incomplet" fantômes apparues suite au correctif v1.84.7 : quand une embauche/débauche d\'une tâche retirée du planning se complète bien via le jour suivant (déjà affichée "Complet" là-bas), une ligne "Incomplet" en double restait visible sur le jour de l\'embauche seule — elle est désormais masquée puisque le pointage est déjà correctement affiché ailleurs. Les vraies incomplétudes (aucune débauche nulle part, même pas le lendemain) restent bien affichées, à traiter normalement',
+  ] },
   { v: '1.84.7', items: [
     'Correction d\'un second cas du même bug (v1.84.6) : pour une tâche à cheval sur minuit RETIRÉE du planning depuis (donc plus reconstituable via le planning), l\'écran Validation ne regroupait que les événements du jour affiché — une embauche pointée la veille pour une telle tâche restait invisible, laissant le pointage "Incomplet" en permanence. Les événements de la veille partageant le même identifiant de tâche sont désormais regroupés avec ceux du jour',
   ] },
@@ -10686,6 +10689,15 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
           const embEnAttente = grpEvts.some(e => e.type === 'embauche' && e.statut === 'attente');
           const debEnAttente = grpEvts.some(e => e.type === 'debauche' && e.statut === 'attente');
           if (!embEvt && !debEvt && !embEnAttente && !debEnAttente) return;
+          // Si on a une embauche mais pas de débauche AUJOURD'HUI, et qu'une débauche pour cette
+          // même tâche existe DEMAIN, ce pointage sera déjà affiché "Complet" sur la ligne de
+          // demain (grâce au regroupement symétrique ci-dessus, vu depuis demain) — on n'affiche
+          // donc pas ici une ligne fantôme "Incomplet" en double pour la même paire d'événements.
+          if (embEvt && !debEvt) {
+            const evtsDemainGrp = (dataDemain[emp.id] || []).filter(e => e.instId === instId);
+            const debDemain = evtsDemainGrp.find(e => e.type === 'debauche' && e.statut !== 'attente');
+            if (debDemain) return;
+          }
           const horsPlanning = grpEvts.some(e => e.horsPlanning);
           const task = db.tasks.find(t => t.id === (embEvt || debEvt)?.taskId);
           const tachesLabel = task
