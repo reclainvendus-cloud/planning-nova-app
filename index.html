@@ -2106,7 +2106,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.84.4';
+const APP_VERSION = '1.84.5';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2137,6 +2137,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.84.5', items: [
+    'Repère visuel "Mensualisé" pour les employés concernés par la règle 4 : la colonne Panier jour et/ou Panier nuit (selon ce qui est mensualisé) est désormais teintée en violet avec la mention "Mens." sur chaque jour, à la place du 🍱/🌙/— habituel — pour signaler d\'un coup d\'œil que ces cases ne reflètent pas le travail réel de ce jour précis. Appliqué au Récap paie à l\'écran, à son export Excel/CSV, et à l\'export Clôture Paie (simulation comme rapport final)',
+  ] },
   { v: '1.84.4', items: [
     'Correction du calcul du panier mensualisé (règle 4) : "5 paniers/semaine" était traduit à tort en "5 × nombre de semaines calendaires du mois affiché" (donc 4 ou 5 selon les mois) — la vraie mensualisation lisse sur l\'année : 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, fixe quel que soit le mois. La Clôture Paie applique ce montant une fois par mois clôturé ; le Récap paie l\'applique une fois par mois calendaire distinct touché par la période sélectionnée',
   ] },
@@ -8832,7 +8835,9 @@ function construireCSV(donnees, regul) {
           l.pointeMin ? minToHM(l.pointeMin) : '',
           l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '',
           '',
-          l.nuitMin ? minToHM(l.nuitMin) : '', l.panierJour ? l.panierJour : '', (l.panierNuitAffiche ?? l.panierNuit) ? (l.panierNuitAffiche ?? l.panierNuit) : '',
+          l.nuitMin ? minToHM(l.nuitMin) : '',
+          d.emp.panierMensualiseJour ? 'Mensualisé' : (l.panierJour ? l.panierJour : ''),
+          d.emp.panierMensualiseNuit ? 'Mensualisé' : ((l.panierNuitAffiche ?? l.panierNuit) ? (l.panierNuitAffiche ?? l.panierNuit) : ''),
           l.primesJour ? l.primesJour.toFixed(2) : '', l.decouchageJour ? 'Oui' : '', libelleCongeJour(l),
         ].map(esc).join(sep));
       } else if (l.type === 'week') {
@@ -9038,7 +9043,9 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
             l.pointeMin ? minToHM(l.pointeMin) : '—',
             l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '—',
             '—', // Écart contrat/HS : concept hebdomadaire, jamais par jour (voir ligne semaine)
-            l.nuitMin ? minToHM(l.nuitMin) : '—', l.panierJour ? l.panierJour : '—', (l.panierNuitAffiche ?? l.panierNuit) ? (l.panierNuitAffiche ?? l.panierNuit) : '—',
+            l.nuitMin ? minToHM(l.nuitMin) : '—',
+            d.emp.panierMensualiseJour ? 'Mens.' : (l.panierJour ? l.panierJour : '—'),
+            d.emp.panierMensualiseNuit ? 'Mens.' : ((l.panierNuitAffiche ?? l.panierNuit) ? (l.panierNuitAffiche ?? l.panierNuit) : '—'),
             l.primesJour ? l.primesJour.toFixed(2) : '—', l.decouchageJour ? 'Oui' : '—', libelleCongeJour(l) || '—',
           ];
           const row = ws.addRow(valeurs);
@@ -9049,6 +9056,11 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
           if (aStatut && l.statutCloture === 'Anticipé') row.getCell(idx.statut).font = { color: { argb: XLS_COULEURS.orangeTxt }, bold: true };
           // Colonnes importantes côté compta, en valeur bleue/gras pour ressortir visuellement.
           [idx.pointeNet, idx.nuit, idx.panierJour, idx.panierNuit, idx.decouchage].forEach(ci => { row.getCell(ci).font = colBleuFont; });
+          // Panier mensualisé : toute la colonne concernée teintée en violet pour cet employé, pour
+          // signaler d'un coup d'œil que ces cases ne reflètent pas le travail réel de ce jour-là
+          // (voir badge "Panier mensualisé" en résumé).
+          if (d.emp.panierMensualiseJour) { row.getCell(idx.panierJour).font = { color: { argb: 'FF9D8FFF' }, italic: true }; row.getCell(idx.panierJour).fill = xlsFill('FFEEEBFF'); }
+          if (d.emp.panierMensualiseNuit) { row.getCell(idx.panierNuit).font = { color: { argb: 'FF9D8FFF' }, italic: true }; row.getCell(idx.panierNuit).fill = xlsFill('FFEEEBFF'); }
           i++;
         } else if (l.type === 'week') {
           const wd = isoToDate(l.label);
@@ -9432,8 +9444,12 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         case 'ecartTotal': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:${ecartColor(l.ecartMin)};">${ecartFmt(l.ecartMin)}</td>`;
         case 'ecartContrat': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:var(--text-dim);" title="Uniquement calculable sur un total semaine">—</td>`;
         case 'nuit': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:#9d8fff;${l.nuitMin > 0 ? 'background:rgba(157,143,255,.08);' : ''}" title="${l.nuitMin > 0 ? 'Heures majorées (nuit)' : ''}">${l.nuitMin > 0 ? minToHM(l.nuitMin) : '—'}</td>`;
-        case 'panier': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierJour > 0 ? '🍱' : '—'}</td>`;
-        case 'panierNuit': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierNuitAffiche > 0 ? '🌙' : '—'}</td>`;
+        case 'panier': return emp.panierMensualiseJour
+          ? `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:#9d8fff;background:rgba(157,143,255,.10);" title="Panier jour mensualisé — forfait fixe, indépendant du travail réel ce jour-là (voir badge en haut)">Mens.</td>`
+          : `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierJour > 0 ? '🍱' : '—'}</td>`;
+        case 'panierNuit': return emp.panierMensualiseNuit
+          ? `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:#9d8fff;background:rgba(157,143,255,.10);" title="Panier nuit mensualisé — forfait fixe, indépendant du travail réel ce jour-là (voir badge en haut)">Mens.</td>`
+          : `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierNuitAffiche > 0 ? '🌙' : '—'}</td>`;
         case 'primes': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.primesJour > 0 ? l.primesJour.toFixed(2) + '€' : '—'}</td>`;
         case 'decouchage': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.decouchageJour > 0 ? 'Oui' : '—'}</td>`;
         default: return '<td></td>';
