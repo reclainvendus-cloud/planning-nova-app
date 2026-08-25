@@ -2119,7 +2119,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.85.1';
+const APP_VERSION = '1.85.3';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2150,6 +2150,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.85.3', items: [
+    'Correction du correctif précédent (v1.85.2) : le "regard en arrière" sur la semaine à cheval ne se déclenche désormais que si cette semaine est entièrement postérieure à l\'activation de la pointeuse (paramètre "Pointeuse active à partir du") — sinon les jours d\'avant activation auraient affiché à tort "0h pointées" comme un déficit, recréant exactement le faux déficit qu\'on cherchait à éviter. Pour le tout premier mois suivi (comme août 2026 ici), la Semaine 31 reste donc exclue comme avant ce correctif',
+  ] },
+  { v: '1.85.2', items: [
+    'Correction importante (Clôture Paie) : une semaine à cheval entre deux mois (ex: lundi 27/07 → dimanche 02/08, comme c\'est le cas pour août 2026) n\'était jamais comptée dans les heures sup — ni dans le mois qui la commence (elle déborde après sa fin), ni dans le mois qui la termine (sa boucle ne regarde jamais avant son propre début). Ces heures sup disparaissaient donc silencieusement, quelle que soit la méthode de clôture. La toute première semaine du mois regarde désormais en arrière si besoin pour se compléter, sans jamais l\'ajouter aux jours visibles du mois en cours (qui appartiennent au rapport du mois précédent)',
+  ] },
   { v: '1.85.1', items: [
     'Première étape (sur plusieurs) vers les 2 méthodes de clôture (Anticipation / Décalage) : ajout du sélecteur de méthode dans la fenêtre Clôture Paie. "Anticipation" reste la seule méthode active et fonctionne exactement comme avant, sans aucun changement. "Décalage" est visible mais désactivé ("🚧 pas encore disponible") — la vraie logique arrivera dans une prochaine étape dédiée. Changement purement additif, aucune clôture existante ni calcul actuel n\'est affecté',
   ] },
@@ -8316,6 +8322,43 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
     let empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
     const lignes = [];
 
+    // Semaine à cheval avec le mois PRÉCÉDENT : si le mois ne commence pas un lundi, la toute
+    // première semaine de la boucle n'est actuellement complète NULLE PART — ni ici (elle déborde
+    // avant le début du mois), ni dans le mois précédent (dont la boucle ne regarde jamais après
+    // sa propre fin) — ses heures sup disparaissent silencieusement des deux côtés. On regarde
+    // donc en arrière jusqu'au vrai lundi de cette semaine pour accumuler ses heures/contrat, SANS
+    // jamais ajouter ces jours à la liste visible du mois en cours (ils appartiennent au rapport
+    // du mois précédent) — seule la comparaison hebdomadaire heures/contrat a besoin de les voir.
+    // IMPORTANT : uniquement si cette semaine est entièrement postérieure à l'activation de la
+    // pointeuse (voir getPremiereSemaineExploitable) — sinon les jours d'avant activation
+    // afficheraient à tort "0h pointées" comme un déficit, alors que rien n'était simplement
+    // encore suivi à ce moment-là (risque de réintroduire exactement le faux déficit qu'on
+    // cherche à éviter).
+    let semaineInitialeEtendue = null;
+    const lundiPremiereSemaine = getMonday(premierJour);
+    const premiereSemaineExploitable = getPremiereSemaineExploitable();
+    const semaineEligible = !premiereSemaineExploitable || dateKey(lundiPremiereSemaine) >= premiereSemaineExploitable;
+    if (dateKey(lundiPremiereSemaine) !== dateKey(premierJour) && semaineEligible) {
+      let dRetour = new Date(lundiPremiereSemaine);
+      while (dRetour < premierJour) {
+        const dkRetour = dateKey(dRetour);
+        const valeursRetour = calculerReelPourRegularisation(emp.id, dkRetour, splitSeuil, pointagesParAnnee);
+        const ligneRetour = construireLigneCloture(emp.id, dkRetour, 'Réel', valeursRetour, pointagesParAnnee, splitSeuil, false);
+        weekPlan += ligneRetour.planMin; weekPt += ligneRetour.pointeMin; weekNuit += ligneRetour.nuitMin;
+        if (ligneRetour.pointeMin === 0 && (ligneRetour.nomFerie || ligneRetour.congeLabel)) {
+          weekAUnJourAbsence = true;
+          const creditMin = ligneRetour.congeFerieMin > 0 ? ligneRetour.congeFerieMin : getObjectifJourMin(emp, jsDayToIndex(dRetour.getDay()));
+          weekPtContrat += creditMin;
+        } else {
+          weekPtContrat += ligneRetour.pointeMin;
+          weekPtReel += ligneRetour.pointeMin;
+        }
+        dRetour = addDays(dRetour, 1);
+      }
+      weekKey = dateKey(lundiPremiereSemaine);
+      semaineInitialeEtendue = weekKey;
+    }
+
     function flushSemaine() {
       if (weekKey === null) return;
       // Le contrat applicable est celui EN VIGUEUR pendant cette semaine précise, d'après
@@ -8323,13 +8366,15 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       // rétroactivement (voir getContratMinPourDate), pour ne jamais fausser une semaine déjà
       // calculée avec un contrat différent à l'époque.
       const contratMin = getContratMinPourDate(emp, weekKey);
-      // Une semaine seulement PARTIELLEMENT dans le mois (la première si le mois démarre en
-      // milieu de semaine, la dernière si le mois se termine en milieu de semaine — comme ici,
-      // "31/08" seul sur 7 jours d'une semaine qui déborde en septembre) ne doit JAMAIS être
-      // comparée à un contrat hebdomadaire complet, sous peine d'un faux déficit énorme (voir le
-      // même correctif déjà fait sur le Récap paie standard en v1.74.9).
+      // Une semaine seulement PARTIELLEMENT dans le mois (la dernière si le mois se termine en
+      // milieu de semaine — comme "31/08" seul sur 7 jours d'une semaine qui déborde en septembre)
+      // ne doit JAMAIS être comparée à un contrat hebdomadaire complet, sous peine d'un faux
+      // déficit énorme (voir le même correctif déjà fait sur le Récap paie standard en v1.74.9).
+      // Exception : la toute première semaine, si on vient de la compléter en regardant en
+      // arrière dans le mois précédent (voir plus haut) — elle EST complète, même si son lundi
+      // est avant le début officiel du mois.
       const weekMonday = isoToDate(weekKey);
-      const weekComplete = weekMonday >= premierJour && addDays(weekMonday, 6) <= dernierJour;
+      const weekComplete = (weekMonday >= premierJour || weekKey === semaineInitialeEtendue) && addDays(weekMonday, 6) <= dernierJour;
       if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
       if (weekComplete && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
       lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekBrute, weekPause, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, contratMin, weekComplete, weekHeuresSup: weekComplete && weekPtContrat > contratMin ? weekPtContrat - contratMin : null });
