@@ -1749,6 +1749,16 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
         </label>
       </div>
       <div id="cp-methode-decalage-warning" class="hint" style="display:none;color:var(--warning);margin-bottom:14px;">La méthode Décalage n'est pas encore implémentée — reviens à "Anticipation" pour continuer, ou ferme cette fenêtre en attendant une prochaine mise à jour.</div>
+      <div id="cp-methode-decalage-dates" style="display:none;background:var(--surface2);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:14px;">
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+          <div><span style="font-size:12px;color:var(--text-dim);">Date de début</span><br><b id="cp-decalage-debut" style="font-family:var(--mono);"></b></div>
+          <div>
+            <label for="cp-decalage-fin" style="font-size:12px;color:var(--text-dim);">Date de fin (coupure) — choisie librement</label><br>
+            <input type="date" id="cp-decalage-fin" onchange="onChangeMethodeCloture()">
+          </div>
+        </div>
+        <div class="hint" style="margin-top:8px;">La date de début est calculée automatiquement (le lendemain de la fin de la dernière clôture) — non modifiable, pour ne jamais laisser de trou ni chevaucher deux clôtures.</div>
+      </div>
 
       <div class="section-label" style="margin-top:0;">1️⃣ Valider les heures supplémentaires</div>
       <div class="hint" style="margin-bottom:10px;">Passe d'abord par le Compteur & modulation pour régler les heures sup du mois — ce montant sera figé dans cette clôture.</div>
@@ -2119,7 +2129,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.85.3';
+const APP_VERSION = '1.85.4';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2150,6 +2160,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.85.4', items: [
+    'Étape suivante (purement additive) vers la méthode Décalage : quand elle est sélectionnée dans la fenêtre Clôture Paie, affiche désormais la date de début calculée automatiquement (le lendemain de la fin de la dernière clôture, quelle que soit sa méthode) et un sélecteur pour choisir librement la date de fin (coupure). Toujours pas de vraie logique de clôture derrière — juste la préparation de l\'interface, le bouton "Clôturer" reste désactivé pour cette méthode',
+  ] },
   { v: '1.85.3', items: [
     'Correction du correctif précédent (v1.85.2) : le "regard en arrière" sur la semaine à cheval ne se déclenche désormais que si cette semaine est entièrement postérieure à l\'activation de la pointeuse (paramètre "Pointeuse active à partir du") — sinon les jours d\'avant activation auraient affiché à tort "0h pointées" comme un déficit, recréant exactement le faux déficit qu\'on cherchait à éviter. Pour le tout premier mois suivi (comme août 2026 ici), la Semaine 31 reste donc exclue comme avant ce correctif',
   ] },
@@ -7807,6 +7820,20 @@ function getMoisACloturer() {
   return suivant.getFullYear() + '-' + String(suivant.getMonth() + 1).padStart(2, '0');
 }
 
+// Date de début pour la PROCHAINE clôture méthode Décalage — toujours le lendemain de ce que la
+// dernière clôture (n'importe quelle méthode) a réellement couvert, pour ne jamais laisser de
+// trou ni chevaucher deux clôtures. Toutes les clôtures existantes étant pour l'instant en
+// méthode Anticipation (calendaire), leur couverture va jusqu'au dernier jour du mois clôturé —
+// cette fonction devra être élargie le jour où une clôture Décalage (période libre) existera
+// elle-même, pour repartir de SA propre date de fin plutôt que d'une fin de mois calendaire.
+function getDateDebutProchaineDecalage() {
+  const derniere = getDerniereCloture();
+  if (!derniere) return db.params.pointageDateDebut || null;
+  const [an, mois] = derniere.mois.split('-').map(Number);
+  const dernierJourMoisCloture = new Date(an, mois, 0); // jour 0 du mois suivant = dernier jour de "mois"
+  return dateKey(addDays(dernierJourMoisCloture, 1));
+}
+
 // Supprime la clôture la PLUS RÉCENTE uniquement (jamais une clôture plus ancienne, pour ne
 // jamais casser la chaîne réel/anticipé/régularisation) — utile en phase de test, ou en cas
 // d'erreur de manipulation. Action tracée dans l'historique, jamais silencieuse.
@@ -7961,6 +7988,16 @@ function onChangeMethodeCloture() {
   document.getElementById('cp-methode-decalage-warning').style.display = decalage ? '' : 'none';
   document.getElementById('cp-btn-cloturer').disabled = decalage || !window._cpApercu;
   document.getElementById('cp-btn-simu-xlsx').disabled = decalage || !window._cpApercu;
+
+  const datesEl = document.getElementById('cp-methode-decalage-dates');
+  datesEl.style.display = decalage ? '' : 'none';
+  if (decalage) {
+    const debut = getDateDebutProchaineDecalage();
+    document.getElementById('cp-decalage-debut').textContent = debut ? formatDateFR(isoToDate(debut)) : '(à définir — aucune donnée de départ trouvée)';
+    const finInput = document.getElementById('cp-decalage-fin');
+    if (!finInput.value) finInput.value = dateKey(new Date()); // suggestion de départ, librement modifiable
+    if (debut) finInput.min = debut;
+  }
 }
 
 function ouvrirModalCloturePaie() {
@@ -7990,6 +8027,8 @@ function ouvrirModalCloturePaie() {
   // voir onChangeMethodeCloture() pour le comportement du sélecteur.
   document.getElementById('cp-methode-anticipation').checked = true;
   document.getElementById('cp-methode-decalage-warning').style.display = 'none';
+  document.getElementById('cp-methode-decalage-dates').style.display = 'none';
+  document.getElementById('cp-decalage-fin').value = '';
   window._cpMois = mois;
   window._cpApercu = null;
   window._cpRegul = null;
