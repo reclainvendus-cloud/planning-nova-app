@@ -1737,6 +1737,19 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
     <div id="cp-actif">
       <div class="hint" style="margin-bottom:14px;">Mois à clôturer : <b id="cp-mois-label"></b> — un relevé envoyé avant la fin du mois anticipe les derniers jours sur la base du planning, et sera automatiquement régularisé lors de la clôture du mois suivant.</div>
 
+      <div class="section-label" style="margin-top:0;">🧭 Méthode de clôture</div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
+        <label class="checkbox-row" style="align-items:flex-start;">
+          <input type="radio" name="cp-methode" id="cp-methode-anticipation" value="anticipation" checked onchange="onChangeMethodeCloture()">
+          <span><b>📊 Anticipation</b> — estime les derniers jours du mois sur la base du planning ; l'écart est automatiquement régularisé à la clôture du mois suivant. <i>(méthode actuelle, inchangée)</i></span>
+        </label>
+        <label class="checkbox-row" style="align-items:flex-start;">
+          <input type="radio" name="cp-methode" id="cp-methode-decalage" value="decalage" onchange="onChangeMethodeCloture()">
+          <span><b>⏭️ Décalage</b> — arrête la clôture à une date choisie librement dans le mois ; rien n'est anticipé, le reste sera payé normalement au tour suivant. <span style="color:var(--warning);">🚧 Pas encore disponible dans cette version.</span></span>
+        </label>
+      </div>
+      <div id="cp-methode-decalage-warning" class="hint" style="display:none;color:var(--warning);margin-bottom:14px;">La méthode Décalage n'est pas encore implémentée — reviens à "Anticipation" pour continuer, ou ferme cette fenêtre en attendant une prochaine mise à jour.</div>
+
       <div class="section-label" style="margin-top:0;">1️⃣ Valider les heures supplémentaires</div>
       <div class="hint" style="margin-bottom:10px;">Passe d'abord par le Compteur & modulation pour régler les heures sup du mois — ce montant sera figé dans cette clôture.</div>
       <button class="btn btn-secondary btn-sm" onclick="closeModal('modal-cloture-paie'); showView('compteur');">⚖️ Aller au Compteur & modulation</button>
@@ -2106,7 +2119,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.85.0';
+const APP_VERSION = '1.85.1';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2137,6 +2150,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.85.1', items: [
+    'Première étape (sur plusieurs) vers les 2 méthodes de clôture (Anticipation / Décalage) : ajout du sélecteur de méthode dans la fenêtre Clôture Paie. "Anticipation" reste la seule méthode active et fonctionne exactement comme avant, sans aucun changement. "Décalage" est visible mais désactivé ("🚧 pas encore disponible") — la vraie logique arrivera dans une prochaine étape dédiée. Changement purement additif, aucune clôture existante ni calcul actuel n\'est affecté',
+  ] },
   { v: '1.85.0', items: [
     'Les pointages "orphelins" (tâche modifiée/supprimée du planning après avoir déjà été pointée) ne s\'affichent plus en permanence dans l\'écran Pointages — ils n\'y apportaient rien à part de l\'encombrement (les pointages "🔧 hors planning" intentionnels restent, eux, bien visibles)',
     'Ces pointages orphelins sont désormais proposés en suggestion sur l\'écran Validation, précisément quand un "oubli" est détecté pour le même employé/jour : "💡 Pointage orphelin trouvé : HH:MM" avec un bouton pour reprendre cette heure dans le formulaire manuel — jamais rattaché automatiquement, toujours à la décision de l\'admin',
@@ -7930,6 +7946,17 @@ function moisPrecedent(mois) {
   return prec.getFullYear() + '-' + String(prec.getMonth() + 1).padStart(2, '0');
 }
 
+// Sélecteur de méthode (Anticipation / Décalage) — pour l'instant, seule "Anticipation" est
+// implémentée : sélectionner "Décalage" désactive juste le bouton de clôture avec un message
+// explicite, sans jamais toucher au flux "Anticipation" existant (qui reste inchangé, testé,
+// fiable). Le vrai câblage de la méthode Décalage arrivera dans une prochaine étape dédiée.
+function onChangeMethodeCloture() {
+  const decalage = document.getElementById('cp-methode-decalage').checked;
+  document.getElementById('cp-methode-decalage-warning').style.display = decalage ? '' : 'none';
+  document.getElementById('cp-btn-cloturer').disabled = decalage || !window._cpApercu;
+  document.getElementById('cp-btn-simu-xlsx').disabled = decalage || !window._cpApercu;
+}
+
 function ouvrirModalCloturePaie() {
   const inactifEl = document.getElementById('cp-inactif');
   const actifEl = document.getElementById('cp-actif');
@@ -7953,6 +7980,10 @@ function ouvrirModalCloturePaie() {
   document.getElementById('cp-btn-cloturer').disabled = true;
   document.getElementById('cp-btn-simu-xlsx').disabled = true;
   document.getElementById('cp-status').textContent = '';
+  // Réinitialise toujours sur "Anticipation" à l'ouverture — seule méthode active pour le moment,
+  // voir onChangeMethodeCloture() pour le comportement du sélecteur.
+  document.getElementById('cp-methode-anticipation').checked = true;
+  document.getElementById('cp-methode-decalage-warning').style.display = 'none';
   window._cpMois = mois;
   window._cpApercu = null;
   window._cpRegul = null;
@@ -8070,8 +8101,7 @@ function rendreApercuCloturePaie() {
     wrap.innerHTML = '<div class="hint">Aucun jour à anticiper — le mois est déjà entièrement écoulé.</div>';
     document.getElementById('cp-resume').innerHTML = '';
     window._cpApercu = { mois, parEmploye: {}, complet: true };
-    document.getElementById('cp-btn-cloturer').disabled = false;
-  document.getElementById('cp-btn-simu-xlsx').disabled = false;
+    onChangeMethodeCloture(); // réactive les boutons SEULEMENT si la méthode le permet
     return;
   }
 
@@ -8183,8 +8213,7 @@ function rendreApercuCloturePaie() {
   `;
 
   window._cpApercu = { mois, parEmploye, complet: true, joursAAnticiper };
-  document.getElementById('cp-btn-cloturer').disabled = false;
-  document.getElementById('cp-btn-simu-xlsx').disabled = false;
+  onChangeMethodeCloture(); // réactive les boutons SEULEMENT si la méthode le permet
 }
 
 // Export de SIMULATION — utilise les données déjà calculées dans l'aperçu (window._cpApercu),
@@ -8443,6 +8472,9 @@ async function telechargerSimulationCloturePaie() {
 async function validerCloturePaie() {
   const apercu = window._cpApercu;
   if (!apercu || !apercu.complet) { notify('Complète l\'aperçu avant de clôturer', 'warning'); return; }
+  // Garde-fou en profondeur : même si le bouton est normalement désactivé pour "Décalage", on
+  // bloque aussi ici — cette méthode n'a pas encore de logique de clôture réelle implémentée.
+  if (document.getElementById('cp-methode-decalage')?.checked) { notify('La méthode Décalage n\'est pas encore disponible', 'warning'); return; }
   const mois = apercu.mois;
   if (getClotureMois(mois)) { notify(`${mois} est déjà clôturé`, 'warning'); return; }
   const regul = window._cpRegul;
@@ -8460,6 +8492,11 @@ async function validerCloturePaie() {
     mois, dateCloture: new Date().toISOString(), verrouille: true,
     parEmploye: apercu.parEmploye, reglementsHS,
     regularisation: regul || null,
+    // Champ additif, préparant le futur choix Anticipation/Décalage — toujours 'anticipation'
+    // pour l'instant (seule méthode réellement implémentée). Ne change rien au comportement
+    // actuel ; sert de base pour une future étape, sans avoir besoin de retoucher les clôtures
+    // déjà enregistrées (absence du champ = 'anticipation' par convention, voir sa lecture).
+    methode: 'anticipation',
   };
   db.clotures.push(cloture);
 
