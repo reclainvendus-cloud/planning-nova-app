@@ -2129,7 +2129,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.85.4';
+const APP_VERSION = '1.85.5';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2160,6 +2160,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.85.5', items: [
+    'Moteur de calcul de la méthode Décalage construit (encore non branché à l\'interface — prochaine étape) : réutilise construireDonneesCloturePaie telle quelle, sur une période libre au lieu d\'un mois calendaire, avec la garantie qu\'aucun jour n\'est jamais anticipé (contrairement à Anticipation). Changement d\'API rétrocompatible à 100% — vérifié qu\'aucun appel existant n\'est affecté',
+  ] },
   { v: '1.85.4', items: [
     'Étape suivante (purement additive) vers la méthode Décalage : quand elle est sélectionnée dans la fenêtre Clôture Paie, affiche désormais la date de début calculée automatiquement (le lendemain de la fin de la dernière clôture, quelle que soit sa méthode) et un sélecteur pour choisir librement la date de fin (coupure). Toujours pas de vraie logique de clôture derrière — juste la préparation de l\'interface, le bouton "Clôturer" reste désactivé pour cette méthode',
   ] },
@@ -8330,10 +8333,20 @@ function construireLigneCloture(empId, dk, statutCloture, valeurs, pointagesParA
 // dans la forme EXACTE attendue par le vrai moteur d'export du Récap paie (construireClasseurExcel
 // / construireCSV) — semaines groupées, écart contrat neutralisé (férié/congé isolé ou semaine
 // entière), majoration des fériés travaillés — pour une cohérence totale entre les deux exports.
-async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnticipesDejaCalcules) {
-  const [an, m] = mois.split('-').map(Number);
-  const premierJour = new Date(an, m - 1, 1);
-  const dernierJour = new Date(an, m, 0);
+// periodeExplicite (optionnel) : { debut: 'YYYY-MM-DD', fin: 'YYYY-MM-DD' } — permet de calculer
+// sur une période LIBRE (méthode Décalage) au lieu d'un mois calendaire complet. Si absent
+// (tous les appels existants), le comportement est STRICTEMENT identique à avant — mois dérivé
+// de la chaîne "mois" comme toujours. Voir construireDonneesClotureDecalage() pour l'usage.
+async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnticipesDejaCalcules, periodeExplicite) {
+  let premierJour, dernierJour;
+  if (periodeExplicite) {
+    premierJour = isoToDate(periodeExplicite.debut);
+    dernierJour = isoToDate(periodeExplicite.fin);
+  } else {
+    const [an, m] = mois.split('-').map(Number);
+    premierJour = new Date(an, m - 1, 1);
+    dernierJour = new Date(an, m, 0);
+  }
   const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
 
   const annees = new Set([String(premierJour.getFullYear()), String(dernierJour.getFullYear())]);
@@ -8523,6 +8536,20 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
 
   const contexteGlobal = { gtPlannifie, gtPointe, gtNuit, gtPanier, gtPanierNuit, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin, gtPanierJourMensualise, gtPanierNuitMensualise };
   return { donnees, contexteGlobal, periode: { debut: premierJour, fin: dernierJour } };
+}
+
+// Méthode DÉCALAGE : période libre (pas forcément un mois calendaire), et surtout, RIEN n'est
+// jamais anticipé — tout ce qui n'est pas encore passé au moment de la clôture est simplement
+// laissé de côté, pour être traité normalement (comme du réel) à la clôture suivante. Réutilise
+// construireDonneesCloturePaie telle quelle (déjà testée à fond) via periodeExplicite, en lui
+// donnant une dateClotureKey TOUJOURS postérieure à la fin de la période : ainsi
+// `estAnticipe = dk >= dateClotureKey` reste FAUX pour chaque jour traité, sans avoir besoin de
+// toucher à la moindre ligne de sa logique interne (aucun jour ne peut donc jamais être anticipé
+// par erreur, même si cette fonction est mal appelée).
+async function construireDonneesClotureDecalage(dateDebutStr, dateFinStr, emps) {
+  const dateClotureFictive = dateKey(addDays(isoToDate(dateFinStr), 1));
+  const moisLabel = dateDebutStr.slice(0, 7); // repère d'affichage uniquement, jamais utilisé pour les dates réelles ici
+  return construireDonneesCloturePaie(moisLabel, dateClotureFictive, emps, null, { debut: dateDebutStr, fin: dateFinStr });
 }
 
 // Génère et télécharge Excel + CSV — mêmes générateurs que le Récap paie habituel, juste nourris
