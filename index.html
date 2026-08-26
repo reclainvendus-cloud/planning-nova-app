@@ -2148,7 +2148,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.86.5';
+const APP_VERSION = '1.87.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2179,6 +2179,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.87.0', items: [
+    'Régularisation enrichie d\'un nouveau champ "Écart heures sup" (⚖️) : chaque semaine anticipée à la clôture précédente est désormais comparée à ce qu\'elle a réellement généré une fois passée, avec indication de ce qui avait déjà été réglé en avance dessus (🔒) — visible dans la fenêtre de clôture, l\'onglet Excel de chaque employé et le CSV',
+    'Correction du même bug de signe négatif qu\'en v1.86.1 (ex: "-6h-35" au lieu de "-6h35"), resté par oubli dans le tableau de régularisation, son export Excel et son export CSV',
+  ] },
   { v: '1.86.5', items: [
     'Correction d\'un bug de validation dans les 3 tableaux de règlement (Clôture Paie) : le maximum saisissable était arrondi au lieu d\'être plafonné (ex: solde 15h35 autorisait à tort de saisir 16h) — remplacé par un plafond strict à l\'heure entière inférieure, cohérent avec ce que transfère la case à cocher',
     'Case à cocher et champ de saisie désormais côte à côte (au lieu de l\'un au-dessus de l\'autre) dans ces mêmes tableaux',
@@ -8022,6 +8026,30 @@ function calculerReelPourRegularisation(empId, dk, splitSeuil, pointagesParAnnee
 // Compare les jours anticipés de la clôture PRÉCÉDENTE à ce qui est réellement connu aujourd'hui,
 // jour par jour, employé par employé — l'écart devient la régularisation à intégrer à la clôture
 // en cours. Ne s'applique jamais deux fois (voir regularisationAppliquee).
+// Recalcule les heures sup RÉELLES d'une semaine précise (lundi → dimanche), une fois qu'elle est
+// entièrement passée — utilisé par la régularisation pour comparer chaque semaine anticipée à ce
+// qu'elle a vraiment généré. Simplification assumée : ne recrédite pas spécifiquement un jour
+// férié chômé (seulement congé via estConge) — un cas plus rare, laissé de côté pour l'instant.
+function calculerHeuresSupSemaineReelle(empId, weekMondayStr, pointagesParAnnee, splitSeuil) {
+  const emp = getEmpById(empId);
+  if (!emp) return 0;
+  const monday = isoToDate(weekMondayStr);
+  let weekPtContrat = 0, weekAUnJourAbsence = false;
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(monday, i);
+    const reel = calculerReelPourRegularisation(empId, dateKey(d), splitSeuil, pointagesParAnnee);
+    if (reel.pointeMin === 0 && reel.estConge) {
+      weekAUnJourAbsence = true;
+      weekPtContrat += getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
+    } else {
+      weekPtContrat += reel.pointeMin;
+    }
+  }
+  const contratMin = getContratMinPourDate(emp, weekMondayStr);
+  if (weekPtContrat === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
+  return weekPtContrat > contratMin ? weekPtContrat - contratMin : 0;
+}
+
 async function calculerRegularisationMoisPrecedent(clotureAReguler) {
   const joursAnnees = new Set();
   Object.values(clotureAReguler.parEmploye).forEach(e => Object.keys(e.joursAnticipes).forEach(dk => joursAnnees.add(dk.slice(0, 4))));
@@ -8047,7 +8075,22 @@ async function calculerRegularisationMoisPrecedent(clotureAReguler) {
       deltaPlanMin += dPlan; deltaNuitMin += dNuit; deltaPanier += dPanier; deltaPanierNuit += dPanierNuit; deltaPrimes += dPrimes; deltaDecouchage += dDecouchage;
       details.push({ dk, anticipe, reel, dPlan, dNuit, dPanier, dPanierNuit, dPrimes, dDecouchage });
     });
-    parEmploye[empId] = { deltaPlanMin, deltaNuitMin, deltaPanier, deltaPanierNuit, deltaPrimes, deltaDecouchage, details };
+
+    // Écart heures sup : compare chaque semaine anticipée (figée à la clôture) à ce qu'elle a
+    // vraiment généré maintenant qu'elle est passée — jamais recalculé au jour le jour comme le
+    // reste ci-dessus, les heures sup sont une notion hebdomadaire, pas journalière.
+    let deltaHeuresSup = 0, dejaRegleAnticipe = 0;
+    const semainesHS = [];
+    const semainesAnticipees = clotureAReguler.weeksAnticipeesHS?.[empId] || [];
+    semainesAnticipees.forEach(sem => {
+      const reelHS = calculerHeuresSupSemaineReelle(empId, sem.semaine, pointagesParAnnee, splitSeuil);
+      const dHS = reelHS - sem.heuresSup;
+      deltaHeuresSup += dHS;
+      semainesHS.push({ semaine: sem.semaine, anticipe: sem.heuresSup, reel: reelHS, delta: dHS });
+    });
+    dejaRegleAnticipe = clotureAReguler.reglementsAnticipeHS?.[empId] || 0;
+
+    parEmploye[empId] = { deltaPlanMin, deltaNuitMin, deltaPanier, deltaPanierNuit, deltaPrimes, deltaDecouchage, deltaHeuresSup, dejaRegleAnticipe, semainesHS, details };
   });
   return { mois: clotureAReguler.mois, parEmploye };
 }
@@ -8151,7 +8194,7 @@ async function chargerRegularisationSiApplicable(mois) {
     const emps = getEmployesTries();
     const lignes = emps
       .map(emp => ({ emp, d: regul.parEmploye[emp.id] }))
-      .filter(x => x.d && (x.d.deltaPlanMin !== 0 || x.d.deltaNuitMin !== 0 || x.d.deltaPanier !== 0 || x.d.deltaPanierNuit !== 0 || x.d.deltaPrimes !== 0 || x.d.deltaDecouchage !== 0));
+      .filter(x => x.d && (x.d.deltaPlanMin !== 0 || x.d.deltaNuitMin !== 0 || x.d.deltaPanier !== 0 || x.d.deltaPanierNuit !== 0 || x.d.deltaPrimes !== 0 || x.d.deltaDecouchage !== 0 || x.d.deltaHeuresSup !== 0));
 
     if (!lignes.length) {
       wrap.innerHTML = '<div class="hint" style="color:var(--success);">✅ Aucun écart entre l\'anticipé et le réel — rien à régulariser.</div>';
@@ -8162,6 +8205,7 @@ async function chargerRegularisationSiApplicable(mois) {
         <th style="padding:6px 9px;text-align:left;font-size:12px;font-weight:700;color:var(--text-muted);">Employé</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Heures</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Nuit</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">⚖️ Écart HS</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🍱 Panier jour</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🌙 Panier nuit</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Primes</th>
@@ -8170,14 +8214,16 @@ async function chargerRegularisationSiApplicable(mois) {
       <tbody>${lignes.map(({ emp, d }) => `
         <tr>
           <td style="padding:6px 9px;font-size:13px;font-weight:700;color:var(--text);">${emp.prenom} ${emp.nom}</td>
-          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaPlanMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaPlanMin >= 0 ? '+' : ''}${minToHM(d.deltaPlanMin)}</td>
-          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaNuitMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaNuitMin >= 0 ? '+' : ''}${minToHM(d.deltaNuitMin)}</td>
+          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaPlanMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaPlanMin >= 0 ? '+' : '-'}${minToHM(Math.abs(d.deltaPlanMin))}</td>
+          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaNuitMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaNuitMin >= 0 ? '+' : '-'}${minToHM(Math.abs(d.deltaNuitMin))}</td>
+          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaHeuresSup >= 0 ? 'var(--success)' : 'var(--danger)'};" title="${d.dejaRegleAnticipe ? 'Dont ' + minToHM(d.dejaRegleAnticipe) + ' déjà réglées en avance à la clôture précédente' : ''}">${d.deltaHeuresSup ? (d.deltaHeuresSup >= 0 ? '+' : '-') + minToHM(Math.abs(d.deltaHeuresSup)) : '—'}${d.dejaRegleAnticipe ? ' 🔒' : ''}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaPanier ? (d.deltaPanier >= 0 ? '+' : '') + d.deltaPanier : '—'}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaPanierNuit ? (d.deltaPanierNuit >= 0 ? '+' : '') + d.deltaPanierNuit : '—'}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaPrimes ? (d.deltaPrimes >= 0 ? '+' : '') + d.deltaPrimes.toFixed(2) + '€' : '—'}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaDecouchage ? (d.deltaDecouchage >= 0 ? '+' : '') + d.deltaDecouchage : '—'}</td>
         </tr>`).join('')}</tbody>
-    </table></div>`;
+    </table></div>
+    <div class="hint" style="margin-top:6px;">🔒 = une partie de l'anticipé de cette semaine avait déjà été réglée en avance à la clôture précédente — l'écart affiché tient compte de ce qui reste, pas du total.</div>`;
 
     const totalDeltaMin = lignes.reduce((s, x) => s + x.d.deltaPlanMin, 0);
     const resumeEl = document.getElementById('cp-resume');
@@ -8377,18 +8423,24 @@ async function rendreReglementAnticipation(mois, joursAAnticiper, emps, parEmplo
     const soldeReelParEmploye = {};
     cartes.forEach(c => { soldeReelParEmploye[c.emp.id] = c.total; });
 
-    // Solde ANTICIPÉ : somme des "weekHeuresSup" des semaines à cheval sur ou après le premier
-    // jour anticipé (donc jamais une semaine déjà entièrement réelle, déjà comptée dans le solde
-    // réel ci-dessus) — réutilisé directement depuis les lignes déjà calculées par
-    // construireDonneesCloturePaie, jamais recalculé en parallèle.
+    // Solde ANTICIPÉ : somme des "weekHeuresSup" des semaines COMPLÈTES à cheval sur ou après le
+    // premier jour anticipé (donc jamais une semaine déjà entièrement réelle, déjà comptée dans le
+    // solde réel ci-dessus) — réutilisé directement depuis les lignes déjà calculées par
+    // construireDonneesCloturePaie, jamais recalculé en parallèle. On garde aussi le détail
+    // semaine par semaine (pas juste le total) : la régularisation du mois prochain doit pouvoir
+    // recomparer CHAQUE semaine anticipée avec ce qu'elle aura réellement généré, y compris une
+    // semaine anticipée à 0h de HS qui finirait par en générer une fois réellement pointée.
     const lundiAnticipation = dateKey(getMonday(isoToDate(dateClotureKey)));
     const soldeAnticipeParEmploye = {};
+    const semainesAnticipeesParEmploye = {};
     donnees.forEach(d => {
-      const totalAnticipe = d.lignes
-        .filter(l => l.type === 'week' && l.label >= lundiAnticipation && l.weekHeuresSup)
-        .reduce((s, l) => s + l.weekHeuresSup, 0);
-      soldeAnticipeParEmploye[d.emp.id] = totalAnticipe;
+      const semaines = d.lignes
+        .filter(l => l.type === 'week' && l.label >= lundiAnticipation && l.weekComplete)
+        .map(l => ({ semaine: l.label, contratMin: l.contratMin, heuresSup: l.weekHeuresSup || 0 }));
+      semainesAnticipeesParEmploye[d.emp.id] = semaines;
+      soldeAnticipeParEmploye[d.emp.id] = semaines.reduce((s, sem) => s + sem.heuresSup, 0);
     });
+    window._cpSemainesAnticipeesHS = semainesAnticipeesParEmploye;
 
     const lignes = donnees.map(d => {
       const soldeReel = soldeReelParEmploye[d.emp.id] ?? 0;
@@ -8891,10 +8943,12 @@ async function validerCloturePaie() {
   });
 
   const reglementsHS = {};
+  const reglementsAnticipeHS = {};
   db.employes.forEach(emp => {
     const r = getReglementMois(emp.id, mois);
     if (r) reglementsHS[emp.id] = r.montantMin;
   });
+  reglementsAFaireCeFlux.forEach(r => { if (r.hAnticipe > 0) reglementsAnticipeHS[r.emp.id] = r.hAnticipe * 60; });
 
   const cloture = {
     id: 'clot_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
@@ -8906,6 +8960,12 @@ async function validerCloturePaie() {
     // actuel ; sert de base pour une future étape, sans avoir besoin de retoucher les clôtures
     // déjà enregistrées (absence du champ = 'anticipation' par convention, voir sa lecture).
     methode: 'anticipation',
+    // Nécessaires pour que la régularisation du mois PROCHAIN puisse comparer chaque semaine
+    // anticipée à ce qu'elle aura réellement généré, et savoir ce qui a déjà été réglé en avance
+    // dessus (voir calculerRegularisationMoisPrecedent) — absents sur les clôtures antérieures à
+    // cette version, traité comme "rien à comparer" dans ce cas (voir sa lecture, jamais une erreur).
+    weeksAnticipeesHS: window._cpSemainesAnticipeesHS || {},
+    reglementsAnticipeHS,
   };
   db.clotures.push(cloture);
 
@@ -9415,7 +9475,7 @@ function construireCSV(donnees, regul) {
     const r = regul?.parEmploye?.[d.emp.id];
     if (r) {
       lignesCsv.push([`RÉGULARISATION DE ${regul.mois}`, ...Array(nbColsVides).fill('')].map(esc).join(sep));
-      lignesCsv.push(['Écart heures', minToHM(r.deltaPlanMin), 'Écart nuit', minToHM(r.deltaNuitMin), 'Écart panier jour', r.deltaPanier, 'Écart panier nuit', r.deltaPanierNuit, 'Écart primes (€)', r.deltaPrimes.toFixed(2), 'Écart découchage', r.deltaDecouchage, ...Array(Math.max(0, nbColsVides - 11)).fill('')].map(esc).join(sep));
+      lignesCsv.push(['Écart heures', (r.deltaPlanMin >= 0 ? '+' : '-') + minToHM(Math.abs(r.deltaPlanMin)), 'Écart nuit', (r.deltaNuitMin >= 0 ? '+' : '-') + minToHM(Math.abs(r.deltaNuitMin)), 'Écart heures sup', r.deltaHeuresSup ? (r.deltaHeuresSup >= 0 ? '+' : '-') + minToHM(Math.abs(r.deltaHeuresSup)) : '', 'Dont déjà réglé en avance', r.dejaRegleAnticipe ? minToHM(r.dejaRegleAnticipe) : '', 'Écart panier jour', r.deltaPanier, 'Écart panier nuit', r.deltaPanierNuit, 'Écart primes (€)', r.deltaPrimes.toFixed(2), 'Écart découchage', r.deltaDecouchage, ...Array(Math.max(0, nbColsVides - 15)).fill('')].map(esc).join(sep));
     }
   });
   return lignesCsv.join('\r\n');
@@ -9650,8 +9710,10 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         ws.getCell(`A${rrg}`).fill = xlsFill(XLS_COULEURS.entete);
         rrg++;
         [
-          ['Écart heures', minToHM(regulEmp.deltaPlanMin)],
-          ['Écart nuit', minToHM(regulEmp.deltaNuitMin)],
+          ['Écart heures', (regulEmp.deltaPlanMin >= 0 ? '+' : '-') + minToHM(Math.abs(regulEmp.deltaPlanMin))],
+          ['Écart nuit', (regulEmp.deltaNuitMin >= 0 ? '+' : '-') + minToHM(Math.abs(regulEmp.deltaNuitMin))],
+          ['Écart heures sup', regulEmp.deltaHeuresSup ? (regulEmp.deltaHeuresSup >= 0 ? '+' : '-') + minToHM(Math.abs(regulEmp.deltaHeuresSup)) : '—'],
+          ...(regulEmp.dejaRegleAnticipe ? [['Dont déjà réglé en avance', minToHM(regulEmp.dejaRegleAnticipe)]] : []),
           ['Écart panier jour', regulEmp.deltaPanier],
           ['Écart panier nuit', regulEmp.deltaPanierNuit],
           ['Écart primes (€)', regulEmp.deltaPrimes.toFixed(2)],
