@@ -2148,7 +2148,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.87.0';
+const APP_VERSION = '1.87.1';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2179,6 +2179,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.87.1', items: [
+    'Correction d\'un vrai bug de fiabilité : supprimer une clôture (Anticipation ou Décalage) n\'annulait jamais les règlements d\'heures sup faits à cette clôture — le compteur de l\'employé restait diminué à tort, sans aucun signalement. La suppression annule désormais précisément le montant ajouté par cette clôture (jamais un règlement fait séparément avant via le Compteur & modulation), avec le détail affiché avant confirmation',
+  ] },
   { v: '1.87.0', items: [
     'Régularisation enrichie d\'un nouveau champ "Écart heures sup" (⚖️) : chaque semaine anticipée à la clôture précédente est désormais comparée à ce qu\'elle a réellement généré une fois passée, avec indication de ce qui avait déjà été réglé en avance dessus (🔒) — visible dans la fenêtre de clôture, l\'onglet Excel de chaque employé et le CSV',
     'Correction du même bug de signe négatif qu\'en v1.86.1 (ex: "-6h-35" au lieu de "-6h35"), resté par oubli dans le tableau de régularisation, son export Excel et son export CSV',
@@ -7750,6 +7753,20 @@ function deverrouillerReglement(empId, mois) {
   if (idx >= 0) { db.reglements[idx].verrouille = false; saveDB(); }
 }
 
+// Retire précisément un montant AJOUTÉ par une clôture qu'on supprime — jamais tout le règlement
+// du mois, seulement la part apportée par cette clôture (un règlement fait séparément avant, via
+// le Compteur & modulation, doit rester intact). Supprime l'enregistrement entier si le montant
+// retiré ramène le total à 0 ou moins. N'appelle pas saveDB() elle-même : à faire une seule fois
+// après la boucle qui l'utilise, pas à chaque itération.
+function retirerReglementAjoute(empId, mois, montantASoustraire) {
+  if (!montantASoustraire) return;
+  const idx = db.reglements.findIndex(r => r.empId === empId && r.mois === mois);
+  if (idx < 0) return; // rien à retirer, déjà absent (ex: clôture d'une version antérieure à ce correctif)
+  const nouveauMontant = db.reglements[idx].montantMin - montantASoustraire;
+  if (nouveauMontant <= 0) db.reglements.splice(idx, 1);
+  else db.reglements[idx].montantMin = nouveauMontant;
+}
+
 // Ouvre la modale de règlement individuel pour un employé, avec le solde actuellement disponible
 // (après déduction de tous les règlements déjà faits) pré-rempli comme montant proposé.
 function ouvrirReglementModal(empId, soldeDisponibleMin) {
@@ -7929,7 +7946,14 @@ function supprimerDerniereCloture() {
     notify('Impossible : une clôture plus récente existe déjà — supprime-la d\'abord', 'danger');
     return;
   }
-  if (!confirm(`Supprimer la clôture de ${derniere.mois} ?\n\nLes données anticipées de fin de mois seront perdues. Le mois suivant redeviendra clôturable comme une toute première clôture (sans régularisation).`)) return;
+  // Règlements ajoutés PAR cette clôture précisément (jamais un règlement fait séparément avant,
+  // via le Compteur & modulation) — absents sur une clôture d'avant ce correctif, traité comme
+  // "rien à annuler" dans ce cas plutôt que de planter.
+  const aAnnuler = Object.entries(derniere.reglementsAjoutesACetteCloture || {});
+  const messageReglements = aAnnuler.length
+    ? `\n\n⚠️ ${aAnnuler.length} règlement(s) seront aussi annulés (remis dans le Compteur & modulation) : ${aAnnuler.map(([empId, m]) => `${getEmpById(empId)?.prenom || '?'} ${getEmpById(empId)?.nom || ''} (${minToHM(m)})`).join(', ')}.`
+    : '';
+  if (!confirm(`Supprimer la clôture de ${derniere.mois} ?\n\nLes données anticipées de fin de mois seront perdues. Le mois suivant redeviendra clôturable comme une toute première clôture (sans régularisation).${messageReglements}`)) return;
   db.clotures = db.clotures.filter(c => c.mois !== derniere.mois);
   // Si cette clôture avait régularisé le mois précédent, on le "libère" pour qu'il puisse être
   // régularisé à nouveau lors d'une prochaine clôture — sinon il resterait bloqué pour toujours.
@@ -7937,9 +7961,10 @@ function supprimerDerniereCloture() {
     const precedente = db.clotures.find(c => c.mois === derniere.regularisation.mois);
     if (precedente) delete precedente.regularisationAppliquee;
   }
+  aAnnuler.forEach(([empId, montant]) => retirerReglementAjoute(empId, derniere.mois, montant));
   saveDB();
-  logAudit('Clôture paie supprimée', derniere.mois);
-  notify(`Clôture de ${derniere.mois} supprimée`);
+  logAudit('Clôture paie supprimée', `${derniere.mois}${aAnnuler.length ? ` — ${aAnnuler.length} règlement(s) annulé(s)` : ''}`);
+  notify(`Clôture de ${derniere.mois} supprimée${aAnnuler.length ? ' — règlements annulés' : ''}`);
   renderClotureListe();
 }
 
@@ -8949,6 +8974,13 @@ async function validerCloturePaie() {
     if (r) reglementsHS[emp.id] = r.montantMin;
   });
   reglementsAFaireCeFlux.forEach(r => { if (r.hAnticipe > 0) reglementsAnticipeHS[r.emp.id] = r.hAnticipe * 60; });
+  // Montant précisément AJOUTÉ par cette clôture (distinct du total cumulé stocké dans
+  // reglementsHS ci-dessus, qui peut inclure un règlement fait séparément avant l'ouverture de
+  // cette fenêtre) — indispensable pour pouvoir annuler exactement la bonne part si cette clôture
+  // est supprimée plus tard (voir supprimerDerniereCloture), sans jamais toucher à un règlement
+  // fait par ailleurs.
+  const reglementsAjoutesACetteCloture = {};
+  reglementsAFaireCeFlux.forEach(r => { reglementsAjoutesACetteCloture[r.emp.id] = r.montantMin; });
 
   const cloture = {
     id: 'clot_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
@@ -8966,6 +8998,7 @@ async function validerCloturePaie() {
     // cette version, traité comme "rien à comparer" dans ce cas (voir sa lecture, jamais une erreur).
     weeksAnticipeesHS: window._cpSemainesAnticipeesHS || {},
     reglementsAnticipeHS,
+    reglementsAjoutesACetteCloture,
   };
   db.clotures.push(cloture);
 
@@ -9056,6 +9089,11 @@ async function validerClotureDecalage() {
     mois: fin, dateDebut: debut, dateFin: fin, dateCloture: new Date().toISOString(), verrouille: true,
     parEmploye: {}, reglementsHS, regularisation: null,
     methode: 'decalage',
+    // Pour la méthode Décalage, "mois" (= fin) est unique à cette clôture — reglementsHS
+    // représente donc déjà entièrement ce qui a été ajouté ici, sans mélange avec un règlement
+    // antérieur. Dupliqué sous ce nom pour que supprimerDerniereCloture() utilise un champ
+    // uniforme, peu importe la méthode.
+    reglementsAjoutesACetteCloture: reglementsHS,
   };
   db.clotures.push(cloture);
 
