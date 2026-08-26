@@ -2148,7 +2148,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.87.1';
+const APP_VERSION = '1.87.2';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2179,6 +2179,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.87.2', items: [
+    'Méthode Anticipation — solde réel et anticipé fusionnés en un seul "solde net" à régler (les deux restent affichés séparément, à titre indicatif, en lecture seule). Une seule case, un seul champ. Priorité automatique en coulisses : le réel confirmé est consommé en premier, l\'anticipé ne sert qu\'en complément — ou pour combler un réel négatif quand c\'est le seul cas possible',
+    'La part exacte du règlement issue de l\'anticipé continue d\'être suivie précisément pour la régularisation du mois suivant, quelle que soit la façon dont le montant net a été réparti',
+  ] },
   { v: '1.87.1', items: [
     'Correction d\'un vrai bug de fiabilité : supprimer une clôture (Anticipation ou Décalage) n\'annulait jamais les règlements d\'heures sup faits à cette clôture — le compteur de l\'employé restait diminué à tort, sans aucun signalement. La suppression annule désormais précisément le montant ajouté par cette clôture (jamais un règlement fait séparément avant via le Compteur & modulation), avec le détail affiché avant confirmation',
   ] },
@@ -8466,25 +8470,28 @@ async function rendreReglementAnticipation(mois, joursAAnticiper, emps, parEmplo
       soldeAnticipeParEmploye[d.emp.id] = semaines.reduce((s, sem) => s + sem.heuresSup, 0);
     });
     window._cpSemainesAnticipeesHS = semainesAnticipeesParEmploye;
+    // Conservé pour le calcul de la répartition réel/anticipé au moment d'enregistrer le règlement
+    // (voir validerCloturePaie) — une seule case "Régler" ci-dessous, mais la répartition exacte
+    // reste nécessaire pour savoir quelle part suivre pour la régularisation du mois prochain.
+    window._cpSoldesReglementAnticipation = {};
+    donnees.forEach(d => {
+      window._cpSoldesReglementAnticipation[d.emp.id] = { soldeReel: soldeReelParEmploye[d.emp.id] ?? 0, soldeAnticipe: soldeAnticipeParEmploye[d.emp.id] ?? 0 };
+    });
 
     const lignes = donnees.map(d => {
       const soldeReel = soldeReelParEmploye[d.emp.id] ?? 0;
       const soldeAnticipe = soldeAnticipeParEmploye[d.emp.id] ?? 0;
+      const soldeNet = soldeReel + soldeAnticipe;
       return `
       <tr>
         <td style="padding:6px 9px;font-size:13px;font-weight:700;color:var(--text);">${d.emp.prenom} ${d.emp.nom}</td>
-        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${soldeReel >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé (hors ce mois anticipé), moins tout ce qui a déjà été réglé">${soldeReel >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeReel))}</td>
+        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);color:${soldeReel >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé (hors ce mois anticipé), moins tout ce qui a déjà été réglé — lecture seule">${soldeReel >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeReel))}</td>
+        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);color:${soldeAnticipe >= 0 ? 'var(--accent)' : 'var(--danger)'};" title="Heures sup projetées sur la ou les semaines encore en cours, sur la base du planning — lecture seule, sera régularisé le mois suivant">${soldeAnticipe >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeAnticipe))}</td>
+        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${soldeNet >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Réel + anticipé — c'est ce montant qui peut être réglé">${soldeNet >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeNet))}</td>
         <td style="padding:6px 9px;text-align:center;">
           <div style="display:flex;align-items:center;justify-content:center;gap:6px;">
-            <input type="checkbox" class="cp-anticip-reel-cb" data-solde="${soldeReel}" data-input="cp-reglement-reel-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${soldeReel <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde">
-            <input type="number" step="1" min="0" max="${Math.max(0, Math.floor(soldeReel / 60))}" value="0" id="cp-reglement-reel-${d.emp.id}" style="width:55px;text-align:center;" ${soldeReel <= 0 ? 'disabled' : ''}> h
-          </div>
-        </td>
-        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${soldeAnticipe >= 0 ? 'var(--accent)' : 'var(--danger)'};" title="Heures sup projetées sur la ou les semaines encore en cours au moment de la clôture, sur la base du planning — sera régularisé le mois suivant selon ce qui est réellement pointé">${soldeAnticipe >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeAnticipe))}</td>
-        <td style="padding:6px 9px;text-align:center;">
-          <div style="display:flex;align-items:center;justify-content:center;gap:6px;">
-            <input type="checkbox" class="cp-anticip-anticipe-cb" data-solde="${soldeAnticipe}" data-input="cp-reglement-anticipe-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${soldeAnticipe <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde">
-            <input type="number" step="1" min="0" max="${Math.max(0, Math.floor(soldeAnticipe / 60))}" value="0" id="cp-reglement-anticipe-${d.emp.id}" style="width:55px;text-align:center;" ${soldeAnticipe <= 0 ? 'disabled' : ''}> h
+            <input type="checkbox" class="cp-anticip-net-cb" data-solde="${soldeNet}" data-input="cp-reglement-net-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${soldeNet <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde net">
+            <input type="number" step="1" min="0" max="${Math.max(0, Math.floor(soldeNet / 60))}" value="0" id="cp-reglement-net-${d.emp.id}" style="width:55px;text-align:center;" ${soldeNet <= 0 ? 'disabled' : ''}> h
           </div>
         </td>
       </tr>`;
@@ -8495,13 +8502,13 @@ async function rendreReglementAnticipation(mois, joursAAnticiper, emps, parEmplo
       <thead><tr>
         <th style="padding:6px 9px;text-align:left;font-size:12px;font-weight:700;color:var(--text-muted);">Employé</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">⚖️ Solde réel</th>
-        <th class="cp-th-nowrap" style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Régler réel <input type="checkbox" class="cp-th-cb-tout" onchange="toggleTousReglementsClasse('cp-anticip-reel-cb', this.checked)" title="Tout cocher / tout décocher"></th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🔮 Solde anticipé</th>
-        <th class="cp-th-nowrap" style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Régler anticipé <input type="checkbox" class="cp-th-cb-tout" onchange="toggleTousReglementsClasse('cp-anticip-anticipe-cb', this.checked)" title="Tout cocher / tout décocher"></th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">= Solde net</th>
+        <th class="cp-th-nowrap" style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Régler <input type="checkbox" class="cp-th-cb-tout" onchange="toggleTousReglementsClasse('cp-anticip-net-cb', this.checked)" title="Tout cocher / tout décocher"></th>
       </tr></thead>
       <tbody>${lignes}</tbody>
     </table></div>
-    <div class="hint" style="margin-top:8px;">Laisse à 0 pour ne rien régler maintenant — tout reste alors au Compteur & modulation (réel) ou sera confirmé/ajusté à la prochaine clôture (anticipé). Le solde réel inclut le solde initial et tout l'historique. La case à cocher transfère les heures ENTIÈRES du solde (les minutes restent au Compteur).</div>`;
+    <div class="hint" style="margin-top:8px;">Le réel et l'anticipé sont affichés séparément à titre indicatif (lecture seule) ; seul le solde net (leur somme) se règle. Priorité automatique : le réel confirmé est utilisé en premier, l'anticipé ne sert qu'en complément (ou pour combler un réel négatif) — la part exacte issue de l'anticipé reste suivie pour la régularisation du mois prochain. Laisse à 0 pour ne rien régler maintenant.</div>`;
   } catch (e) {
     wrap.innerHTML = '<div class="hint" style="color:var(--danger);">Erreur lors du calcul du règlement — réessaie.</div>';
     console.error('Règlement Anticipation:', e);
@@ -8936,21 +8943,25 @@ async function validerCloturePaie() {
   if (getClotureMois(mois)) { notify(`${mois} est déjà clôturé`, 'warning'); return; }
   const regul = window._cpRegul;
 
-  // Lit les montants saisis dans la section 1️⃣ (réel + anticipé, séparément par employé) — jamais
+  // Lit le montant net saisi (section 1️⃣, un seul champ par employé désormais) et calcule la
+  // répartition réel/anticipé avec la règle de priorité convenue : le réel confirmé est consommé
+  // EN PREMIER (s'il est positif) ; l'anticipé ne sert qu'en complément, ou pour combler un réel
+  // négatif (cas où AUCUNE part du règlement ne peut venir du réel, forcément négatif). Jamais
   // plus que ce qui a été affiché comme disponible (double vérification, en plus du "max" déjà
-  // posé sur chaque champ). S'ADDITIONNE à un éventuel règlement déjà fait ce mois-ci via le
-  // Compteur & modulation avant l'ouverture de cette fenêtre (upsertReglement REMPLACE tout
-  // l'enregistrement du mois, jamais l'écraser sans le sommer d'abord).
+  // posé sur le champ). S'ADDITIONNE à un éventuel règlement déjà fait ce mois-ci via le Compteur
+  // & modulation avant l'ouverture de cette fenêtre (upsertReglement REMPLACE tout l'enregistrement
+  // du mois, jamais l'écraser sans le sommer d'abord).
   const reglementsAFaireCeFlux = [];
   let totalReglerCeFlux = 0;
   for (const emp of db.employes) {
-    const inputReel = document.getElementById(`cp-reglement-reel-${emp.id}`);
-    const inputAnticipe = document.getElementById(`cp-reglement-anticipe-${emp.id}`);
-    const hReel = inputReel ? parseInt(inputReel.value, 10) || 0 : 0;
-    const hAnticipe = inputAnticipe ? parseInt(inputAnticipe.value, 10) || 0 : 0;
-    if (hReel <= 0 && hAnticipe <= 0) continue;
-    const montantMin = (hReel + hAnticipe) * 60;
-    reglementsAFaireCeFlux.push({ emp, montantMin, hReel, hAnticipe });
+    const inputNet = document.getElementById(`cp-reglement-net-${emp.id}`);
+    const hNet = inputNet ? parseInt(inputNet.value, 10) || 0 : 0;
+    if (hNet <= 0) continue;
+    const montantMin = hNet * 60;
+    const soldes = window._cpSoldesReglementAnticipation?.[emp.id] || { soldeReel: 0, soldeAnticipe: 0 };
+    const montantSourceReel = Math.max(0, Math.min(montantMin, soldes.soldeReel));
+    const montantSourceAnticipe = montantMin - montantSourceReel;
+    reglementsAFaireCeFlux.push({ emp, montantMin, montantSourceReel, montantSourceAnticipe });
     totalReglerCeFlux += montantMin;
   }
 
@@ -8963,7 +8974,7 @@ async function validerCloturePaie() {
   reglementsAFaireCeFlux.forEach(r => {
     const existant = getReglementMois(r.emp.id, mois);
     const montantCumule = (existant?.montantMin || 0) + r.montantMin;
-    const noteDetail = `Réel: ${minToHM(r.hReel*60)}, Anticipé: ${minToHM(r.hAnticipe*60)} (réglé à la clôture)`;
+    const noteDetail = `Réel: ${minToHM(r.montantSourceReel)}, Anticipé: ${minToHM(r.montantSourceAnticipe)} (réglé à la clôture)`;
     upsertReglement(r.emp.id, mois, montantCumule, existant?.note ? `${existant.note} · ${noteDetail}` : noteDetail);
   });
 
@@ -8973,7 +8984,7 @@ async function validerCloturePaie() {
     const r = getReglementMois(emp.id, mois);
     if (r) reglementsHS[emp.id] = r.montantMin;
   });
-  reglementsAFaireCeFlux.forEach(r => { if (r.hAnticipe > 0) reglementsAnticipeHS[r.emp.id] = r.hAnticipe * 60; });
+  reglementsAFaireCeFlux.forEach(r => { if (r.montantSourceAnticipe > 0) reglementsAnticipeHS[r.emp.id] = r.montantSourceAnticipe; });
   // Montant précisément AJOUTÉ par cette clôture (distinct du total cumulé stocké dans
   // reglementsHS ci-dessus, qui peut inclure un règlement fait séparément avant l'ouverture de
   // cette fenêtre) — indispensable pour pouvoir annuler exactement la bonne part si cette clôture
