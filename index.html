@@ -2140,7 +2140,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.85.7';
+const APP_VERSION = '1.85.8';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2171,6 +2171,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.85.8', items: [
+    'Méthode Décalage — la méthode 1 est maintenant complète : le règlement des heures sup se fait directement dans la fenêtre Clôture (solde initial + tout le réel accumulé, moins ce qui a déjà été réglé — même calcul fiable que le Compteur & modulation, figé à la date de fin choisie), au lieu de devoir passer par le Compteur & modulation. Un champ "Régler" par employé, plafonné à son solde disponible, réglable en partie ou en totalité ou laissé à 0 pour ne rien payer maintenant',
+  ] },
   { v: '1.85.7', items: [
     'Méthode Décalage : la clôture réelle est désormais disponible (bouton "Clôturer" activé une fois l\'aperçu calculé) — enregistre la période, génère l\'export Excel/CSV automatiquement, et s\'enchaîne correctement avec les clôtures suivantes (Anticipation ou Décalage). Aucune régularisation générée par cette méthode (rien n\'y est jamais anticipé)',
     '⚠️ Limite connue et assumée pour cette version : le règlement des heures sup pour la méthode Décalage n\'est pas encore intégré à la clôture — passe par le Compteur & modulation comme avant en attendant une prochaine étape dédiée',
@@ -8007,7 +8010,8 @@ function moisPrecedent(mois) {
 // fiable). Le vrai câblage de la méthode Décalage arrivera dans une prochaine étape dédiée.
 function onChangeMethodeCloture() {
   const decalage = document.getElementById('cp-methode-decalage').checked;
-  document.getElementById('cp-methode-decalage-warning').style.display = decalage ? '' : 'none';
+  // Le règlement est désormais intégré directement dans le tableau d'aperçu (voir
+  // rendreApercuClotureDecalage) — plus d'avertissement à afficher ici pour cette méthode.
   document.getElementById('cp-sections-anticipation').style.display = decalage ? 'none' : '';
   document.getElementById('cp-sections-decalage').style.display = decalage ? '' : 'none';
   document.getElementById('cp-btn-cloturer').disabled = decalage ? !window._cpDecalageApercu : !window._cpApercu;
@@ -8600,9 +8604,17 @@ async function rendreApercuClotureDecalage() {
   try {
     const emps = getEmployesTries();
     const { donnees, contexteGlobal } = await construireDonneesClotureDecalage(debut, fin, emps);
-    window._cpDecalageApercu = { debut, fin, donnees, contexteGlobal };
+    // Solde disponible pour règlement : réutilise le moteur du Compteur & modulation (déjà testé,
+    // gère solde initial + cumul historique - déjà réglé), figé à la date de fin choisie plutôt
+    // qu'à aujourd'hui — voir calculerCartesCompteurPures(..., jusquauStr).
+    const { cartes } = await calculerCartesCompteurPures(getCompteurDepuis(), '', fin);
+    const soldeParEmploye = {};
+    cartes.forEach(c => { soldeParEmploye[c.emp.id] = c.total; });
+    window._cpDecalageApercu = { debut, fin, donnees, contexteGlobal, soldeParEmploye };
 
-    const lignes = donnees.map(d => `
+    const lignes = donnees.map(d => {
+      const solde = soldeParEmploye[d.emp.id] ?? 0;
+      return `
       <tr>
         <td style="padding:6px 9px;font-size:13px;font-weight:700;color:var(--text);">${d.emp.prenom} ${d.emp.nom}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);color:var(--accent);font-weight:700;">${d.empPointe ? minToHM(d.empPointe) : '—'}</td>
@@ -8610,7 +8622,12 @@ async function rendreApercuClotureDecalage() {
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);">${d.empNuit ? minToHM(d.empNuit) : '—'}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);">${d.empPanier || '—'}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);">${d.empPanierNuit || '—'}</td>
-      </tr>`).join('');
+        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${solde >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé depuis le début du suivi, moins tout ce qui a déjà été réglé — même calcul que le Compteur & modulation, figé à la date de fin choisie">${minToHM(solde)}</td>
+        <td style="padding:6px 9px;text-align:center;">
+          <input type="number" step="1" min="0" max="${Math.max(0, Math.round(solde / 60))}" value="0" id="cp-decalage-reglement-${d.emp.id}" style="width:70px;text-align:center;" ${solde <= 0 ? 'disabled' : ''}> h
+        </td>
+      </tr>`;
+    }).join('');
 
     wrap.innerHTML = `<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
       <thead><tr>
@@ -8620,10 +8637,12 @@ async function rendreApercuClotureDecalage() {
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Nuit</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🍱</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🌙</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">⚖️ Solde dispo</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Régler (h, entier)</th>
       </tr></thead>
       <tbody>${lignes}</tbody>
     </table></div>
-    <div class="hint" style="margin-top:8px;">Du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} — uniquement du réel, rien n'est anticipé.</div>`;
+    <div class="hint" style="margin-top:8px;">Du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} — uniquement du réel, rien n'est anticipé. Le solde disponible inclut le solde initial et tout l'historique — laisse "Régler" à 0 pour ne rien payer maintenant et tout garder au Compteur & modulation.</div>`;
     document.getElementById('cp-btn-cloturer').disabled = false;
   } catch (e) {
     wrap.innerHTML = '<div class="hint" style="color:var(--danger);">Erreur lors du calcul — réessaie.</div>';
@@ -8734,7 +8753,7 @@ async function validerCloturePaie() {
 async function validerClotureDecalage() {
   const decalageApercu = window._cpDecalageApercu;
   if (!decalageApercu) { notify('Calcule l\'aperçu avant de clôturer', 'warning'); return; }
-  const { debut, fin, donnees } = decalageApercu;
+  const { debut, fin, donnees, soldeParEmploye } = decalageApercu;
 
   // Garde-fou : la période doit toujours commencer exactement où la précédente clôture s'est
   // arrêtée — jamais de trou, jamais de chevauchement, même si l'aperçu affiché est resté ouvert
@@ -8746,12 +8765,41 @@ async function validerClotureDecalage() {
   }
   if (getClotureMois(fin)) { notify('Cette clôture semble déjà enregistrée', 'warning'); return; }
 
-  if (!confirm(`Clôturer la période du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} (méthode Décalage) ?\n\nSeul le réel jusqu'à cette date est pris en compte — rien n'est anticipé, rien à régulariser. Un export Excel et CSV complet sera généré automatiquement. Cette action pourra être annulée uniquement tant qu'aucune clôture plus récente n'existe.\n\n⚠️ Le règlement des heures sup pour cette méthode n'est pas encore disponible dans cette version — passe par le Compteur & modulation comme aujourd'hui en attendant.`)) return;
+  // Lit les montants à régler saisis dans le tableau — jamais plus que le solde disponible affiché
+  // (double vérification ici, en plus du "max" déjà posé sur chaque champ, au cas où le DOM aurait
+  // été manipulé). Un montant à 0 ou vide ne crée aucun règlement — tout reste alors au Compteur &
+  // modulation, exactement comme si rien n'avait été réglé ici.
+  const reglementsAFaire = [];
+  let totalAReglerMin = 0;
+  for (const d of donnees) {
+    const input = document.getElementById(`cp-decalage-reglement-${d.emp.id}`);
+    const heures = input ? parseInt(input.value, 10) || 0 : 0;
+    if (heures <= 0) continue;
+    const montantMin = heures * 60;
+    const solde = soldeParEmploye[d.emp.id] ?? 0;
+    if (montantMin > solde) { notify(`Le montant à régler pour ${d.emp.prenom} ${d.emp.nom} dépasse son solde disponible — corrige avant de continuer`, 'danger'); return; }
+    reglementsAFaire.push({ emp: d.emp, montantMin });
+    totalAReglerMin += montantMin;
+  }
+
+  const messageReglement = reglementsAFaire.length
+    ? `\n\n${reglementsAFaire.length} employé(s) seront réglés pour un total de ${minToHM(totalAReglerMin)} : ${reglementsAFaire.map(r => `${r.emp.prenom} ${r.emp.nom} (${minToHM(r.montantMin)})`).join(', ')}.`
+    : '\n\nAucun règlement — tout reste au Compteur & modulation.';
+  if (!confirm(`Clôturer la période du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} (méthode Décalage) ?\n\nSeul le réel jusqu'à cette date est pris en compte — rien n'est anticipé, rien à régulariser. Un export Excel et CSV complet sera généré automatiquement. Cette action pourra être annulée uniquement tant qu'aucune clôture plus récente n'existe.${messageReglement}`)) return;
+
+  // Règlements enregistrés via le MÊME mécanisme que le Compteur & modulation (upsertReglement),
+  // avec la date de fin de la période comme repère — jamais un mois calendaire, pour ne jamais
+  // entrer en collision avec un règlement fait depuis le Compteur pour un vrai mois.
+  const reglementsHS = {};
+  reglementsAFaire.forEach(r => {
+    upsertReglement(r.emp.id, fin, r.montantMin, `Réglé à la clôture Décalage du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))}`);
+    reglementsHS[r.emp.id] = r.montantMin;
+  });
 
   const cloture = {
     id: 'clot_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
     mois: fin, dateDebut: debut, dateFin: fin, dateCloture: new Date().toISOString(), verrouille: true,
-    parEmploye: {}, reglementsHS: {}, regularisation: null,
+    parEmploye: {}, reglementsHS, regularisation: null,
     methode: 'decalage',
   };
   db.clotures.push(cloture);
@@ -8863,7 +8911,11 @@ function rafraichirBadgesCompteurPlanning() {
   });
 }
 
-async function calculerCartesCompteurPures(depuisStr, equipeFiltre) {
+// jusquauStr (optionnel) : calcule "jusqu'à cette date incluse" au lieu de "jusqu'à hier depuis
+// aujourd'hui" — utilisé par la clôture méthode Décalage pour figer le solde disponible à la
+// date de fin choisie, plutôt qu'à la date du jour. Si absent (tous les appels existants),
+// comportement STRICTEMENT identique à avant.
+async function calculerCartesCompteurPures(depuisStr, equipeFiltre, jusquauStr) {
   if (!depuisStr) return { cartes: [], debutEffectif: null, hier: null, aucuneSemaineComplete: false };
 
   const debut = getMonday(isoToDate(depuisStr));
@@ -8871,7 +8923,7 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre) {
   const debutEffectif = premiereSemExploitable && isoToDate(premiereSemExploitable) > debut
     ? isoToDate(premiereSemExploitable)
     : debut;
-  const hier = addDays(new Date(), -1);
+  const hier = jusquauStr ? isoToDate(jusquauStr) : addDays(new Date(), -1);
   hier.setHours(0, 0, 0, 0);
   if (hier < debutEffectif) return { cartes: [], debutEffectif, hier, aucuneSemaineComplete: true };
 
