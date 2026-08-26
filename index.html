@@ -148,8 +148,8 @@ label { display: block; font-size: 11px; font-weight: 700; text-transform: upper
 /* Pied de fenêtre Clôture Paie toujours visible, sans avoir à défiler jusqu'en bas */
 #cp-footer-sticky { position: sticky; bottom: -26px; margin: 18px -26px -26px; padding: 14px 26px; background: var(--surface); border-top: 1px solid var(--border); z-index: 5; }
 /* Petits boutons "tout cocher/décocher" intégrés directement dans les en-têtes de colonne */
-.cp-th-toggle { background: none; border: none; cursor: pointer; font-size: 13px; padding: 0 2px; opacity: .75; }
-.cp-th-toggle:hover { opacity: 1; }
+.cp-th-cb-tout { vertical-align: middle; margin-left: 4px; width: 15px; height: 15px; cursor: pointer; accent-color: var(--accent); }
+th.cp-th-nowrap { white-space: nowrap; }
 #modal-cloture-paie .checkbox-row span { font-size: 13px; }
 #modal-cloture-paie #cp-status { font-size: 13px !important; }
 
@@ -2148,7 +2148,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.86.3';
+const APP_VERSION = '1.86.4';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2179,6 +2179,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.86.4', items: [
+    'Correction "Tout cocher/décocher" (Clôture Paie) : les 2 boutons emoji (☑️/☐) passaient à la ligne dans l\'en-tête étroit, et le caractère "case vide" était quasi invisible sur fond sombre — donnant l\'impression qu\'un seul bouton existait. Remplacés par une seule vraie case à cocher "tout/rien" par colonne, bien visible et toujours sur la même ligne que le titre',
+  ] },
   { v: '1.86.3', items: [
     'Refonte visuelle de la fenêtre Clôture Paie : sélecteur de méthode en pilules compactes avec infobulle au survol (au lieu de longs paragraphes) ; boutons "Tout cocher/décocher" déplacés dans les en-têtes de colonne (à côté de "Régler") au lieu d\'une rangée de boutons au-dessus des tableaux ; pied de page (Clôturer, Aperçu simulation, Annuler) désormais toujours visible en bas de la fenêtre, sans avoir à défiler',
     'Retiré les mentions "🚧 pas encore disponible" devenues fausses depuis que la méthode Décalage est pleinement fonctionnelle',
@@ -8407,13 +8410,9 @@ async function rendreReglementAnticipation(mois, joursAAnticiper, emps, parEmplo
       <thead><tr>
         <th style="padding:6px 9px;text-align:left;font-size:12px;font-weight:700;color:var(--text-muted);">Employé</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">⚖️ Solde réel</th>
-        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Régler réel
-          <button class="cp-th-toggle" onclick="toggleTousReglementsClasse('cp-anticip-reel-cb', true)" title="Tout cocher">☑️</button><button class="cp-th-toggle" onclick="toggleTousReglementsClasse('cp-anticip-reel-cb', false)" title="Tout décocher">☐</button>
-        </th>
+        <th class="cp-th-nowrap" style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Régler réel <input type="checkbox" class="cp-th-cb-tout" onchange="toggleTousReglementsClasse('cp-anticip-reel-cb', this.checked)" title="Tout cocher / tout décocher"></th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🔮 Solde anticipé</th>
-        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Régler anticipé
-          <button class="cp-th-toggle" onclick="toggleTousReglementsClasse('cp-anticip-anticipe-cb', true)" title="Tout cocher">☑️</button><button class="cp-th-toggle" onclick="toggleTousReglementsClasse('cp-anticip-anticipe-cb', false)" title="Tout décocher">☐</button>
-        </th>
+        <th class="cp-th-nowrap" style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Régler anticipé <input type="checkbox" class="cp-th-cb-tout" onchange="toggleTousReglementsClasse('cp-anticip-anticipe-cb', this.checked)" title="Tout cocher / tout décocher"></th>
       </tr></thead>
       <tbody>${lignes}</tbody>
     </table></div>
@@ -8764,9 +8763,7 @@ async function rendreApercuClotureDecalage() {
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🍱</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🌙</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">⚖️ Solde dispo</th>
-        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Régler (h)
-          <button class="cp-th-toggle" onclick="toggleTousReglementsClasse('cp-decalage-cb', true)" title="Tout cocher">☑️</button><button class="cp-th-toggle" onclick="toggleTousReglementsClasse('cp-decalage-cb', false)" title="Tout décocher">☐</button>
-        </th>
+        <th class="cp-th-nowrap" style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Régler (h) <input type="checkbox" class="cp-th-cb-tout" onchange="toggleTousReglementsClasse('cp-decalage-cb', this.checked)" title="Tout cocher / tout décocher"></th>
       </tr></thead>
       <tbody>${lignes}</tbody>
     </table></div>
