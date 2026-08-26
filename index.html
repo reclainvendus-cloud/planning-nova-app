@@ -1748,7 +1748,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <span><b>⏭️ Décalage</b> — arrête la clôture à une date choisie librement dans le mois ; rien n'est anticipé, le reste sera payé normalement au tour suivant. <span style="color:var(--warning);">🚧 Pas encore disponible dans cette version.</span></span>
         </label>
       </div>
-      <div id="cp-methode-decalage-warning" class="hint" style="display:none;color:var(--warning);margin-bottom:14px;">🚧 L'aperçu est disponible pour tester, mais la clôture réelle (bouton "Clôturer") n'est pas encore activée pour cette méthode — reviens à "Anticipation" pour clôturer pour de vrai.</div>
+      <div id="cp-methode-decalage-warning" class="hint" style="display:none;color:var(--warning);margin-bottom:14px;">⚠️ Le règlement des heures sup pour cette méthode n'est pas encore intégré à la clôture — passe par le Compteur & modulation comme aujourd'hui en attendant une prochaine mise à jour.</div>
       <div id="cp-methode-decalage-dates" style="display:none;background:var(--surface2);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:14px;">
         <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
           <div><span style="font-size:12px;color:var(--text-dim);">Date de début</span><br><b id="cp-decalage-debut" style="font-family:var(--mono);"></b></div>
@@ -1797,7 +1797,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <div class="hint" style="margin:4px 0 0;">Ces fichiers ne sont que des simulations — rien n'est enregistré tant que tu ne cliques pas "Clôturer".</div>
 
       <div style="display:flex;gap:10px;margin-top:14px;align-items:center;">
-        <button class="btn btn-primary" id="cp-btn-cloturer" onclick="validerCloturePaie()" disabled>🔒 Clôturer <span id="cp-mois-btn-label"></span></button>
+        <button class="btn btn-primary" id="cp-btn-cloturer" onclick="validerCloturePaieSelonMethode()" disabled>🔒 Clôturer <span id="cp-mois-btn-label"></span></button>
         <button class="btn btn-secondary" onclick="closeModal('modal-cloture-paie')">Annuler</button>
         <span id="cp-status" style="font-size:12px;color:var(--text-dim);"></span>
       </div>
@@ -2140,7 +2140,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.85.6';
+const APP_VERSION = '1.85.7';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2171,6 +2171,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.85.7', items: [
+    'Méthode Décalage : la clôture réelle est désormais disponible (bouton "Clôturer" activé une fois l\'aperçu calculé) — enregistre la période, génère l\'export Excel/CSV automatiquement, et s\'enchaîne correctement avec les clôtures suivantes (Anticipation ou Décalage). Aucune régularisation générée par cette méthode (rien n\'y est jamais anticipé)',
+    '⚠️ Limite connue et assumée pour cette version : le règlement des heures sup pour la méthode Décalage n\'est pas encore intégré à la clôture — passe par le Compteur & modulation comme avant en attendant une prochaine étape dédiée',
+  ] },
   { v: '1.85.6', items: [
     'Méthode Décalage : l\'aperçu (lecture seule, rien n\'est enregistré) est maintenant testable de bout en bout — sélectionne "Décalage", choisis une date de fin, clique "Calculer l\'aperçu" pour voir le récapitulatif par employé (pointé net, écart contrat, nuit, paniers) sur la période choisie, uniquement en réel, rien d\'anticipé. La clôture réelle (bouton "Clôturer") reste désactivée pour cette méthode — ce sera la prochaine étape',
   ] },
@@ -7839,13 +7843,14 @@ function getMoisACloturer() {
 
 // Date de début pour la PROCHAINE clôture méthode Décalage — toujours le lendemain de ce que la
 // dernière clôture (n'importe quelle méthode) a réellement couvert, pour ne jamais laisser de
-// trou ni chevaucher deux clôtures. Toutes les clôtures existantes étant pour l'instant en
-// méthode Anticipation (calendaire), leur couverture va jusqu'au dernier jour du mois clôturé —
-// cette fonction devra être élargie le jour où une clôture Décalage (période libre) existera
-// elle-même, pour repartir de SA propre date de fin plutôt que d'une fin de mois calendaire.
+// trou ni chevaucher deux clôtures. Une clôture Décalage porte sa propre date de fin réelle
+// (dateFin, période libre) ; une clôture Anticipation reste calée sur son mois calendaire.
 function getDateDebutProchaineDecalage() {
   const derniere = getDerniereCloture();
   if (!derniere) return db.params.pointageDateDebut || null;
+  if (derniere.methode === 'decalage' && derniere.dateFin) {
+    return dateKey(addDays(isoToDate(derniere.dateFin), 1));
+  }
   const [an, mois] = derniere.mois.split('-').map(Number);
   const dernierJourMoisCloture = new Date(an, mois, 0); // jour 0 du mois suivant = dernier jour de "mois"
   return dateKey(addDays(dernierJourMoisCloture, 1));
@@ -7889,7 +7894,7 @@ function renderClotureListe() {
   wrap.innerHTML = `<div class="hint" style="margin-bottom:6px;">Clôtures enregistrées :</div>` + triees.map(c => `
     <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;">
       <div style="flex:1;">
-        <b>${c.mois}</b>
+        <b>${c.methode === 'decalage' ? `⏭️ Décalage : ${formatDateFR(isoToDate(c.dateDebut))} → ${formatDateFR(isoToDate(c.dateFin))}` : c.mois}</b>
         <span style="color:var(--text-dim);font-size:12px;"> — clôturé le ${new Date(c.dateCloture).toLocaleDateString('fr-FR')}${c.verrouille === false ? ' · 🔓 déverrouillé' : ' · 🔒'}</span>
       </div>
       ${c.mois === derniereMois ? `<button class="btn btn-danger btn-sm" onclick="supprimerDerniereCloture()">🗑️ Supprimer</button>` : ''}
@@ -8005,10 +8010,8 @@ function onChangeMethodeCloture() {
   document.getElementById('cp-methode-decalage-warning').style.display = decalage ? '' : 'none';
   document.getElementById('cp-sections-anticipation').style.display = decalage ? 'none' : '';
   document.getElementById('cp-sections-decalage').style.display = decalage ? '' : 'none';
-  // Clôturer reste désactivé pour Décalage tant que la sauvegarde réelle n'est pas construite —
-  // seul l'aperçu (lecture seule, rien n'est enregistré) est disponible à ce stade.
-  document.getElementById('cp-btn-cloturer').disabled = decalage || !window._cpApercu;
-  document.getElementById('cp-btn-simu-xlsx').disabled = decalage || !window._cpApercu;
+  document.getElementById('cp-btn-cloturer').disabled = decalage ? !window._cpDecalageApercu : !window._cpApercu;
+  document.getElementById('cp-btn-simu-xlsx').disabled = decalage ? true : !window._cpApercu; // aperçu Excel/CSV à part pour Décalage : à construire dans une étape suivante si besoin
 
   const datesEl = document.getElementById('cp-methode-decalage-dates');
   datesEl.style.display = decalage ? '' : 'none';
@@ -8018,6 +8021,13 @@ function onChangeMethodeCloture() {
     const finInput = document.getElementById('cp-decalage-fin');
     if (!finInput.value) finInput.value = dateKey(new Date()); // suggestion de départ, librement modifiable
     if (debut) finInput.min = debut;
+    // Le bouton Clôturer ne doit s'activer que pour l'aperçu ACTUELLEMENT affiché — si la date de
+    // fin change après un calcul, l'aperçu précédent devient obsolète tant qu'il n'est pas
+    // recalculé, pour ne jamais clôturer sur des chiffres qui ne correspondent plus à l'écran.
+    if (window._cpDecalageApercu && window._cpDecalageApercu.fin !== finInput.value) {
+      window._cpDecalageApercu = null;
+      document.getElementById('cp-btn-cloturer').disabled = true;
+    }
   }
 }
 
@@ -8055,6 +8065,7 @@ function ouvrirModalCloturePaie() {
   document.getElementById('cp-decalage-fin').value = '';
   window._cpMois = mois;
   window._cpApercu = null;
+  window._cpDecalageApercu = null;
   window._cpRegul = null;
   document.getElementById('cp-regul-section').style.display = 'none';
   document.getElementById('cp-regul').innerHTML = '';
@@ -8612,7 +8623,8 @@ async function rendreApercuClotureDecalage() {
       </tr></thead>
       <tbody>${lignes}</tbody>
     </table></div>
-    <div class="hint" style="margin-top:8px;">Du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} — uniquement du réel, rien n'est anticipé. Aperçu lecture seule : rien n'est enregistré, la clôture réelle pour cette méthode arrive dans une prochaine étape.</div>`;
+    <div class="hint" style="margin-top:8px;">Du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} — uniquement du réel, rien n'est anticipé.</div>`;
+    document.getElementById('cp-btn-cloturer').disabled = false;
   } catch (e) {
     wrap.innerHTML = '<div class="hint" style="color:var(--danger);">Erreur lors du calcul — réessaie.</div>';
     console.error('Aperçu Décalage:', e);
@@ -8647,12 +8659,17 @@ async function telechargerSimulationCloturePaie() {
   }
 }
 
+// Aiguille vers la bonne fonction de clôture selon la méthode sélectionnée dans le sélecteur —
+// point d'entrée unique du bouton "Clôturer", pour ne jamais risquer d'appeler la mauvaise
+// logique selon ce qui est coché.
+function validerCloturePaieSelonMethode() {
+  if (document.getElementById('cp-methode-decalage')?.checked) { validerClotureDecalage(); return; }
+  validerCloturePaie();
+}
+
 async function validerCloturePaie() {
   const apercu = window._cpApercu;
   if (!apercu || !apercu.complet) { notify('Complète l\'aperçu avant de clôturer', 'warning'); return; }
-  // Garde-fou en profondeur : même si le bouton est normalement désactivé pour "Décalage", on
-  // bloque aussi ici — cette méthode n'a pas encore de logique de clôture réelle implémentée.
-  if (document.getElementById('cp-methode-decalage')?.checked) { notify('La méthode Décalage n\'est pas encore disponible', 'warning'); return; }
   const mois = apercu.mois;
   if (getClotureMois(mois)) { notify(`${mois} est déjà clôturé`, 'warning'); return; }
   const regul = window._cpRegul;
@@ -8700,6 +8717,63 @@ async function validerCloturePaie() {
   } catch (e) {
     console.error('Export clôture paie:', e);
     notify('Clôture enregistrée, mais échec de la génération des fichiers — réessaie depuis Paramètres si besoin', 'warning');
+  }
+}
+
+// Clôture RÉELLE méthode Décalage — construite en parallèle de validerCloturePaie() plutôt qu'en
+// la modifiant, pour ne jamais risquer de perturber le flux Anticipation (déjà en production).
+// Différences volontaires avec Anticipation : jamais de régularisation À ENVOYER (parEmploye
+// reste vide, donc la garde déjà en place dans chargerRegularisationSiApplicable — voir
+// `!Object.keys(clotureAReguler.parEmploye || {}).length` — empêche automatiquement toute
+// tentative de régulariser une clôture Décalage plus tard) ; "mois" est ici la date de FIN réelle
+// (pas un mois calendaire), choisie spécifiquement parce qu'elle trie et compare correctement
+// dans le temps avec getDerniereCloture()/getClotureMois(), sans jamais entrer en collision entre
+// deux clôtures Décalage du même mois calendaire (vérifié).
+// LIMITE CONNUE : le règlement des heures sup pour cette méthode (le futur système "solde réel +
+// solde anticipé" à 5 lignes) n'est pas encore construit — reglementsHS reste vide pour l'instant.
+async function validerClotureDecalage() {
+  const decalageApercu = window._cpDecalageApercu;
+  if (!decalageApercu) { notify('Calcule l\'aperçu avant de clôturer', 'warning'); return; }
+  const { debut, fin, donnees } = decalageApercu;
+
+  // Garde-fou : la période doit toujours commencer exactement où la précédente clôture s'est
+  // arrêtée — jamais de trou, jamais de chevauchement, même si l'aperçu affiché est resté ouvert
+  // pendant qu'une autre clôture aurait été enregistrée entre-temps.
+  const debutAttendu = getDateDebutProchaineDecalage();
+  if (debutAttendu && debut !== debutAttendu) {
+    notify(`La période a changé depuis le calcul de l'aperçu (devrait commencer le ${formatDateFR(isoToDate(debutAttendu))}) — recalcule l'aperçu avant de clôturer`, 'warning');
+    return;
+  }
+  if (getClotureMois(fin)) { notify('Cette clôture semble déjà enregistrée', 'warning'); return; }
+
+  if (!confirm(`Clôturer la période du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} (méthode Décalage) ?\n\nSeul le réel jusqu'à cette date est pris en compte — rien n'est anticipé, rien à régulariser. Un export Excel et CSV complet sera généré automatiquement. Cette action pourra être annulée uniquement tant qu'aucune clôture plus récente n'existe.\n\n⚠️ Le règlement des heures sup pour cette méthode n'est pas encore disponible dans cette version — passe par le Compteur & modulation comme aujourd'hui en attendant.`)) return;
+
+  const cloture = {
+    id: 'clot_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+    mois: fin, dateDebut: debut, dateFin: fin, dateCloture: new Date().toISOString(), verrouille: true,
+    parEmploye: {}, reglementsHS: {}, regularisation: null,
+    methode: 'decalage',
+  };
+  db.clotures.push(cloture);
+
+  saveDB();
+  logAudit('Clôture paie (Décalage)', `${debut} → ${fin} — ${donnees.length} employé(s)`);
+  notify(`Clôture du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} enregistrée — génération des fichiers…`);
+  closeModal('modal-cloture-paie');
+  renderClotureListe();
+
+  try {
+    const emps = getEmployesTries();
+    const { donnees: donneesExport, contexteGlobal } = await construireDonneesClotureDecalage(debut, fin, emps);
+    const titre = `Clôture Paie (Décalage) — du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))}`;
+    const nomFichier = `cloture-decalage-${debut}-au-${fin}`;
+    const buffer = await construireClasseurExcel(donneesExport, 'both', { contexteGlobal, periode: { debut: isoToDate(debut), fin: isoToDate(fin) }, titre });
+    downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${nomFichier}.xlsx`);
+    downloadBlob(new Blob(['\uFEFF' + construireCSV(donneesExport)], { type: 'text/csv;charset=utf-8' }), `${nomFichier}.csv`);
+    notify('Fichiers de clôture générés');
+  } catch (e) {
+    console.error('Export clôture Décalage:', e);
+    notify('Clôture enregistrée, mais échec de la génération des fichiers', 'warning');
   }
 }
 
