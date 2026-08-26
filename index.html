@@ -1792,7 +1792,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <div id="cp-resume" style="margin-top:10px;"></div>
 
       <div style="display:flex;gap:10px;margin-top:18px;align-items:center;flex-wrap:wrap;">
-        <button class="btn btn-secondary btn-sm" id="cp-btn-simu-xlsx" onclick="telechargerSimulationCloturePaie()" disabled>👁️ Aperçu Excel + CSV (simulation)</button>
+        <button class="btn btn-secondary btn-sm" id="cp-btn-simu-xlsx" onclick="telechargerSimulationSelonMethode()" disabled>👁️ Aperçu Excel + CSV (simulation)</button>
       </div>
       <div class="hint" style="margin:4px 0 0;">Ces fichiers ne sont que des simulations — rien n'est enregistré tant que tu ne cliques pas "Clôturer".</div>
 
@@ -2140,7 +2140,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.85.8';
+const APP_VERSION = '1.85.9';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2171,6 +2171,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.85.9', items: [
+    '"👁️ Aperçu Excel + CSV (simulation)" fonctionne désormais aussi pour la méthode Décalage — permet de générer et télécharger les fichiers pour vérifier les chiffres SANS rien enregistrer ni clôturer, exactement comme pour Anticipation. S\'active une fois l\'aperçu calculé, se désactive si la date de fin change ensuite (aperçu obsolète)',
+  ] },
   { v: '1.85.8', items: [
     'Méthode Décalage — la méthode 1 est maintenant complète : le règlement des heures sup se fait directement dans la fenêtre Clôture (solde initial + tout le réel accumulé, moins ce qui a déjà été réglé — même calcul fiable que le Compteur & modulation, figé à la date de fin choisie), au lieu de devoir passer par le Compteur & modulation. Un champ "Régler" par employé, plafonné à son solde disponible, réglable en partie ou en totalité ou laissé à 0 pour ne rien payer maintenant',
   ] },
@@ -8015,7 +8018,7 @@ function onChangeMethodeCloture() {
   document.getElementById('cp-sections-anticipation').style.display = decalage ? 'none' : '';
   document.getElementById('cp-sections-decalage').style.display = decalage ? '' : 'none';
   document.getElementById('cp-btn-cloturer').disabled = decalage ? !window._cpDecalageApercu : !window._cpApercu;
-  document.getElementById('cp-btn-simu-xlsx').disabled = decalage ? true : !window._cpApercu; // aperçu Excel/CSV à part pour Décalage : à construire dans une étape suivante si besoin
+  document.getElementById('cp-btn-simu-xlsx').disabled = decalage ? !window._cpDecalageApercu : !window._cpApercu;
 
   const datesEl = document.getElementById('cp-methode-decalage-dates');
   datesEl.style.display = decalage ? '' : 'none';
@@ -8031,6 +8034,7 @@ function onChangeMethodeCloture() {
     if (window._cpDecalageApercu && window._cpDecalageApercu.fin !== finInput.value) {
       window._cpDecalageApercu = null;
       document.getElementById('cp-btn-cloturer').disabled = true;
+      document.getElementById('cp-btn-simu-xlsx').disabled = true;
     }
   }
 }
@@ -8644,6 +8648,7 @@ async function rendreApercuClotureDecalage() {
     </table></div>
     <div class="hint" style="margin-top:8px;">Du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} — uniquement du réel, rien n'est anticipé. Le solde disponible inclut le solde initial et tout l'historique — laisse "Régler" à 0 pour ne rien payer maintenant et tout garder au Compteur & modulation.</div>`;
     document.getElementById('cp-btn-cloturer').disabled = false;
+    document.getElementById('cp-btn-simu-xlsx').disabled = false;
   } catch (e) {
     wrap.innerHTML = '<div class="hint" style="color:var(--danger);">Erreur lors du calcul — réessaie.</div>';
     console.error('Aperçu Décalage:', e);
@@ -8676,6 +8681,36 @@ async function telechargerSimulationCloturePaie() {
     console.error('Simulation clôture paie:', e);
     notify('Échec de la génération — réessaie', 'danger');
   }
+}
+
+// Simulation Excel + CSV pour la méthode Décalage — même esprit que telechargerSimulationCloturePaie
+// ci-dessus (téléchargement seul, RIEN n'est enregistré ni modifié) : recalcule les données à la
+// volée à partir de l'aperçu affiché, sans jamais toucher à db.clotures ni à db.reglements.
+async function telechargerSimulationClotureDecalage() {
+  const decalageApercu = window._cpDecalageApercu;
+  if (!decalageApercu) { notify('Calcule d\'abord l\'aperçu', 'warning'); return; }
+  const { debut, fin } = decalageApercu;
+  notify('Génération du fichier…');
+  try {
+    const emps = getEmployesTries();
+    const { donnees: donneesExport, contexteGlobal } = await construireDonneesClotureDecalage(debut, fin, emps);
+    const titre = `⚠️ SIMULATION — Clôture Paie (Décalage) — du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} — rien n'est enregistré`;
+    const nomFichier = `simulation-cloture-decalage-${debut}-au-${fin}`;
+    const buffer = await construireClasseurExcel(donneesExport, 'both', { contexteGlobal, periode: { debut: isoToDate(debut), fin: isoToDate(fin) }, titre });
+    downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${nomFichier}.xlsx`);
+    downloadBlob(new Blob(['\uFEFF' + construireCSV(donneesExport)], { type: 'text/csv;charset=utf-8' }), `${nomFichier}.csv`);
+    notify('Fichiers de simulation générés — rien n\'a été enregistré');
+  } catch (e) {
+    console.error('Simulation clôture Décalage:', e);
+    notify('Échec de la génération — réessaie', 'danger');
+  }
+}
+
+// Aiguille vers la bonne fonction de simulation selon la méthode sélectionnée — même principe que
+// validerCloturePaieSelonMethode() juste en dessous.
+function telechargerSimulationSelonMethode() {
+  if (document.getElementById('cp-methode-decalage')?.checked) { telechargerSimulationClotureDecalage(); return; }
+  telechargerSimulationCloturePaie();
 }
 
 // Aiguille vers la bonne fonction de clôture selon la méthode sélectionnée dans le sélecteur —
