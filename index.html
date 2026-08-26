@@ -2140,7 +2140,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.86.1';
+const APP_VERSION = '1.86.2';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2171,6 +2171,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.86.2', items: [
+    'Une case à cocher devant chaque ligne des tableaux de règlement (Décalage, et Anticipation réel/anticipé séparément) transfère automatiquement les heures ENTIÈRES du solde disponible vers le champ "Régler" — plus besoin de saisir chaque montant à la main. Boutons "Tout cocher"/"Tout décocher" par groupe pour traiter tous les employés d\'un coup. Les minutes ne sont jamais transférées automatiquement (restent au Compteur & modulation), pour rester sur des montants ronds faciles à vérifier',
+  ] },
   { v: '1.86.1', items: [
     'Correction d\'un bug d\'affichage sur les soldes négatifs (ex: "-5h-35" au lieu de "-5h35") dans les nouveaux tableaux de règlement (Anticipation et Décalage) — minToHM() ne gère pas les nombres négatifs nativement (convention du code : c\'est à l\'appelant de gérer le signe avant), ce que mon nouveau code avait oublié de faire. Corrigé aux 3 endroits concernés, plus une occurrence préexistante du même oubli dans le solde affiché par le Compteur & modulation',
   ] },
@@ -7683,6 +7686,27 @@ function getTotalRegleEmploye(empId) {
 function getReglementMois(empId, mois) {
   return db.reglements.find(r => r.empId === empId && r.mois === mois) || null;
 }
+// Transfère en un clic le solde disponible (heures ENTIÈRES uniquement, minutes ignorées — pour
+// éviter les montants type "18h31" impossibles à saisir proprement) vers le champ "Régler"
+// correspondant — réutilisé par les 3 tableaux de règlement (Décalage, Anticipation réel,
+// Anticipation anticipé). Chaque case à cocher porte son solde et l'id de son champ en attributs
+// data-*, pour rester générique sans dépendre d'une fermeture JS particulière.
+function appliquerReglementCheckbox(cb) {
+  const input = document.getElementById(cb.dataset.input);
+  if (!input) return;
+  const soldeMin = parseInt(cb.dataset.solde, 10) || 0;
+  input.value = cb.checked ? Math.max(0, Math.floor(soldeMin / 60)) : 0;
+}
+// "Tout cocher" / "Tout décocher" — ignore les cases désactivées (solde nul ou négatif, rien à
+// transférer de toute façon).
+function toggleTousReglementsClasse(classe, checked) {
+  document.querySelectorAll('.' + classe).forEach(cb => {
+    if (cb.disabled) return;
+    cb.checked = checked;
+    appliquerReglementCheckbox(cb);
+  });
+}
+
 function upsertReglement(empId, mois, montantMin, note) {
   const idx = db.reglements.findIndex(r => r.empId === empId && r.mois === mois);
   const rec = {
@@ -8355,16 +8379,25 @@ async function rendreReglementAnticipation(mois, joursAAnticiper, emps, parEmplo
         <td style="padding:6px 9px;font-size:13px;font-weight:700;color:var(--text);">${d.emp.prenom} ${d.emp.nom}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${soldeReel >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé (hors ce mois anticipé), moins tout ce qui a déjà été réglé">${soldeReel >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeReel))}</td>
         <td style="padding:6px 9px;text-align:center;">
-          <input type="number" step="1" min="0" max="${Math.max(0, Math.round(soldeReel / 60))}" value="0" id="cp-reglement-reel-${d.emp.id}" style="width:65px;text-align:center;" ${soldeReel <= 0 ? 'disabled' : ''}> h
+          <input type="checkbox" class="cp-anticip-reel-cb" data-solde="${soldeReel}" data-input="cp-reglement-reel-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${soldeReel <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde">
+          <input type="number" step="1" min="0" max="${Math.max(0, Math.round(soldeReel / 60))}" value="0" id="cp-reglement-reel-${d.emp.id}" style="width:55px;text-align:center;" ${soldeReel <= 0 ? 'disabled' : ''}> h
         </td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${soldeAnticipe >= 0 ? 'var(--accent)' : 'var(--danger)'};" title="Heures sup projetées sur la ou les semaines encore en cours au moment de la clôture, sur la base du planning — sera régularisé le mois suivant selon ce qui est réellement pointé">${soldeAnticipe >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeAnticipe))}</td>
         <td style="padding:6px 9px;text-align:center;">
-          <input type="number" step="1" min="0" max="${Math.max(0, Math.round(soldeAnticipe / 60))}" value="0" id="cp-reglement-anticipe-${d.emp.id}" style="width:65px;text-align:center;" ${soldeAnticipe <= 0 ? 'disabled' : ''}> h
+          <input type="checkbox" class="cp-anticip-anticipe-cb" data-solde="${soldeAnticipe}" data-input="cp-reglement-anticipe-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${soldeAnticipe <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde">
+          <input type="number" step="1" min="0" max="${Math.max(0, Math.round(soldeAnticipe / 60))}" value="0" id="cp-reglement-anticipe-${d.emp.id}" style="width:55px;text-align:center;" ${soldeAnticipe <= 0 ? 'disabled' : ''}> h
         </td>
       </tr>`;
     }).join('');
 
-    wrap.innerHTML = `<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
+    wrap.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+      <button class="btn btn-secondary btn-sm" onclick="toggleTousReglementsClasse('cp-anticip-reel-cb', true)">☑️ Tout cocher (réel)</button>
+      <button class="btn btn-secondary btn-sm" onclick="toggleTousReglementsClasse('cp-anticip-reel-cb', false)">☐ Tout décocher (réel)</button>
+      <button class="btn btn-secondary btn-sm" onclick="toggleTousReglementsClasse('cp-anticip-anticipe-cb', true)">☑️ Tout cocher (anticipé)</button>
+      <button class="btn btn-secondary btn-sm" onclick="toggleTousReglementsClasse('cp-anticip-anticipe-cb', false)">☐ Tout décocher (anticipé)</button>
+    </div>
+    <div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
       <thead><tr>
         <th style="padding:6px 9px;text-align:left;font-size:12px;font-weight:700;color:var(--text-muted);">Employé</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">⚖️ Solde réel</th>
@@ -8374,7 +8407,7 @@ async function rendreReglementAnticipation(mois, joursAAnticiper, emps, parEmplo
       </tr></thead>
       <tbody>${lignes}</tbody>
     </table></div>
-    <div class="hint" style="margin-top:8px;">Laisse à 0 pour ne rien régler maintenant — tout reste alors au Compteur & modulation (réel) ou sera confirmé/ajusté à la prochaine clôture (anticipé). Le solde réel inclut le solde initial et tout l'historique.</div>`;
+    <div class="hint" style="margin-top:8px;">Laisse à 0 pour ne rien régler maintenant — tout reste alors au Compteur & modulation (réel) ou sera confirmé/ajusté à la prochaine clôture (anticipé). Le solde réel inclut le solde initial et tout l'historique. La case à cocher transfère les heures ENTIÈRES du solde (les minutes restent au Compteur).</div>`;
   } catch (e) {
     wrap.innerHTML = '<div class="hint" style="color:var(--danger);">Erreur lors du calcul du règlement — réessaie.</div>';
     console.error('Règlement Anticipation:', e);
@@ -8705,12 +8738,18 @@ async function rendreApercuClotureDecalage() {
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);">${d.empPanierNuit || '—'}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${solde >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé depuis le début du suivi, moins tout ce qui a déjà été réglé — même calcul que le Compteur & modulation, figé à la date de fin choisie">${solde >= 0 ? '+' : '-'}${minToHM(Math.abs(solde))}</td>
         <td style="padding:6px 9px;text-align:center;">
-          <input type="number" step="1" min="0" max="${Math.max(0, Math.round(solde / 60))}" value="0" id="cp-decalage-reglement-${d.emp.id}" style="width:70px;text-align:center;" ${solde <= 0 ? 'disabled' : ''}> h
+          <input type="checkbox" class="cp-decalage-cb" data-solde="${solde}" data-input="cp-decalage-reglement-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${solde <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde">
+          <input type="number" step="1" min="0" max="${Math.max(0, Math.round(solde / 60))}" value="0" id="cp-decalage-reglement-${d.emp.id}" style="width:60px;text-align:center;" ${solde <= 0 ? 'disabled' : ''}> h
         </td>
       </tr>`;
     }).join('');
 
-    wrap.innerHTML = `<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
+    wrap.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:6px;">
+      <button class="btn btn-secondary btn-sm" onclick="toggleTousReglementsClasse('cp-decalage-cb', true)">☑️ Tout cocher</button>
+      <button class="btn btn-secondary btn-sm" onclick="toggleTousReglementsClasse('cp-decalage-cb', false)">☐ Tout décocher</button>
+    </div>
+    <div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
       <thead><tr>
         <th style="padding:6px 9px;text-align:left;font-size:12px;font-weight:700;color:var(--text-muted);">Employé</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Pointé net</th>
@@ -8723,7 +8762,7 @@ async function rendreApercuClotureDecalage() {
       </tr></thead>
       <tbody>${lignes}</tbody>
     </table></div>
-    <div class="hint" style="margin-top:8px;">Du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} — uniquement du réel, rien n'est anticipé. Le solde disponible inclut le solde initial et tout l'historique — laisse "Régler" à 0 pour ne rien payer maintenant et tout garder au Compteur & modulation.</div>`;
+    <div class="hint" style="margin-top:8px;">Du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} — uniquement du réel, rien n'est anticipé. Le solde disponible inclut le solde initial et tout l'historique — laisse "Régler" à 0 pour ne rien payer maintenant et tout garder au Compteur & modulation. La case à cocher transfère les heures ENTIÈRES du solde (les minutes restent au Compteur).</div>`;
     document.getElementById('cp-btn-cloturer').disabled = false;
     document.getElementById('cp-btn-simu-xlsx').disabled = false;
   } catch (e) {
