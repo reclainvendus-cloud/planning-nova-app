@@ -2148,7 +2148,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.86.4';
+const APP_VERSION = '1.86.5';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2179,6 +2179,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.86.5', items: [
+    'Correction d\'un bug de validation dans les 3 tableaux de règlement (Clôture Paie) : le maximum saisissable était arrondi au lieu d\'être plafonné (ex: solde 15h35 autorisait à tort de saisir 16h) — remplacé par un plafond strict à l\'heure entière inférieure, cohérent avec ce que transfère la case à cocher',
+    'Case à cocher et champ de saisie désormais côte à côte (au lieu de l\'un au-dessus de l\'autre) dans ces mêmes tableaux',
+  ] },
   { v: '1.86.4', items: [
     'Correction "Tout cocher/décocher" (Clôture Paie) : les 2 boutons emoji (☑️/☐) passaient à la ligne dans l\'en-tête étroit, et le caractère "case vide" était quasi invisible sur fond sombre — donnant l\'impression qu\'un seul bouton existait. Remplacés par une seule vraie case à cocher "tout/rien" par colonne, bien visible et toujours sur la même ligne que le titre',
   ] },
@@ -8394,13 +8398,17 @@ async function rendreReglementAnticipation(mois, joursAAnticiper, emps, parEmplo
         <td style="padding:6px 9px;font-size:13px;font-weight:700;color:var(--text);">${d.emp.prenom} ${d.emp.nom}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${soldeReel >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé (hors ce mois anticipé), moins tout ce qui a déjà été réglé">${soldeReel >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeReel))}</td>
         <td style="padding:6px 9px;text-align:center;">
-          <input type="checkbox" class="cp-anticip-reel-cb" data-solde="${soldeReel}" data-input="cp-reglement-reel-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${soldeReel <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde">
-          <input type="number" step="1" min="0" max="${Math.max(0, Math.round(soldeReel / 60))}" value="0" id="cp-reglement-reel-${d.emp.id}" style="width:55px;text-align:center;" ${soldeReel <= 0 ? 'disabled' : ''}> h
+          <div style="display:flex;align-items:center;justify-content:center;gap:6px;">
+            <input type="checkbox" class="cp-anticip-reel-cb" data-solde="${soldeReel}" data-input="cp-reglement-reel-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${soldeReel <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde">
+            <input type="number" step="1" min="0" max="${Math.max(0, Math.floor(soldeReel / 60))}" value="0" id="cp-reglement-reel-${d.emp.id}" style="width:55px;text-align:center;" ${soldeReel <= 0 ? 'disabled' : ''}> h
+          </div>
         </td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${soldeAnticipe >= 0 ? 'var(--accent)' : 'var(--danger)'};" title="Heures sup projetées sur la ou les semaines encore en cours au moment de la clôture, sur la base du planning — sera régularisé le mois suivant selon ce qui est réellement pointé">${soldeAnticipe >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeAnticipe))}</td>
         <td style="padding:6px 9px;text-align:center;">
-          <input type="checkbox" class="cp-anticip-anticipe-cb" data-solde="${soldeAnticipe}" data-input="cp-reglement-anticipe-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${soldeAnticipe <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde">
-          <input type="number" step="1" min="0" max="${Math.max(0, Math.round(soldeAnticipe / 60))}" value="0" id="cp-reglement-anticipe-${d.emp.id}" style="width:55px;text-align:center;" ${soldeAnticipe <= 0 ? 'disabled' : ''}> h
+          <div style="display:flex;align-items:center;justify-content:center;gap:6px;">
+            <input type="checkbox" class="cp-anticip-anticipe-cb" data-solde="${soldeAnticipe}" data-input="cp-reglement-anticipe-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${soldeAnticipe <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde">
+            <input type="number" step="1" min="0" max="${Math.max(0, Math.floor(soldeAnticipe / 60))}" value="0" id="cp-reglement-anticipe-${d.emp.id}" style="width:55px;text-align:center;" ${soldeAnticipe <= 0 ? 'disabled' : ''}> h
+          </div>
         </td>
       </tr>`;
     }).join('');
@@ -8747,8 +8755,10 @@ async function rendreApercuClotureDecalage() {
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);">${d.empPanierNuit || '—'}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${solde >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé depuis le début du suivi, moins tout ce qui a déjà été réglé — même calcul que le Compteur & modulation, figé à la date de fin choisie">${solde >= 0 ? '+' : '-'}${minToHM(Math.abs(solde))}</td>
         <td style="padding:6px 9px;text-align:center;">
-          <input type="checkbox" class="cp-decalage-cb" data-solde="${solde}" data-input="cp-decalage-reglement-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${solde <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde">
-          <input type="number" step="1" min="0" max="${Math.max(0, Math.round(solde / 60))}" value="0" id="cp-decalage-reglement-${d.emp.id}" style="width:60px;text-align:center;" ${solde <= 0 ? 'disabled' : ''}> h
+          <div style="display:flex;align-items:center;justify-content:center;gap:6px;">
+            <input type="checkbox" class="cp-decalage-cb" data-solde="${solde}" data-input="cp-decalage-reglement-${d.emp.id}" onchange="appliquerReglementCheckbox(this)" ${solde <= 0 ? 'disabled' : ''} title="Cocher pour transférer les heures entières du solde">
+            <input type="number" step="1" min="0" max="${Math.max(0, Math.floor(solde / 60))}" value="0" id="cp-decalage-reglement-${d.emp.id}" style="width:60px;text-align:center;" ${solde <= 0 ? 'disabled' : ''}> h
+          </div>
         </td>
       </tr>`;
     }).join('');
