@@ -2140,7 +2140,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.86.0';
+const APP_VERSION = '1.86.1';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2171,6 +2171,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.86.1', items: [
+    'Correction d\'un bug d\'affichage sur les soldes négatifs (ex: "-5h-35" au lieu de "-5h35") dans les nouveaux tableaux de règlement (Anticipation et Décalage) — minToHM() ne gère pas les nombres négatifs nativement (convention du code : c\'est à l\'appelant de gérer le signe avant), ce que mon nouveau code avait oublié de faire. Corrigé aux 3 endroits concernés, plus une occurrence préexistante du même oubli dans le solde affiché par le Compteur & modulation',
+  ] },
   { v: '1.86.0', items: [
     'Méthode Anticipation — le règlement des heures sup se fait désormais directement dans la fenêtre Clôture (étape 1️⃣), fini le renvoi vers le Compteur & modulation : deux montants distincts par employé, "Solde réel" (solde initial + historique, même calcul fiable que le Compteur) et "Solde anticipé" (heures sup projetées sur la semaine encore en cours, sur la base du planning) — chacun réglable en partie, en totalité, ou laissé à 0',
     'Un règlement fait ici s\'additionne à un éventuel règlement déjà réalisé ce mois-ci via le Compteur & modulation avant l\'ouverture de la fenêtre — jamais écrasé',
@@ -7717,7 +7720,7 @@ function ouvrirReglementModal(empId, soldeDisponibleMin) {
   document.getElementById('rgl-montant-h').value = Math.floor(montantInitialMin / 60);
   document.getElementById('rgl-montant-m').value = montantInitialMin % 60;
   document.getElementById('rgl-note').value = existant?.note || '';
-  document.getElementById('rgl-solde-hint').textContent = `Solde disponible avant ce règlement : ${soldeAvantCeReglement >= 0 ? '+' : ''}${minToHM(soldeAvantCeReglement)}`;
+  document.getElementById('rgl-solde-hint').textContent = `Solde disponible avant ce règlement : ${soldeAvantCeReglement >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeAvantCeReglement))}`;
 
   const lockInfo = document.getElementById('rgl-lock-info');
   const btnDeverr = document.getElementById('rgl-btn-deverrouiller');
@@ -8350,11 +8353,11 @@ async function rendreReglementAnticipation(mois, joursAAnticiper, emps, parEmplo
       return `
       <tr>
         <td style="padding:6px 9px;font-size:13px;font-weight:700;color:var(--text);">${d.emp.prenom} ${d.emp.nom}</td>
-        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${soldeReel >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé (hors ce mois anticipé), moins tout ce qui a déjà été réglé">${minToHM(soldeReel)}</td>
+        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${soldeReel >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé (hors ce mois anticipé), moins tout ce qui a déjà été réglé">${soldeReel >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeReel))}</td>
         <td style="padding:6px 9px;text-align:center;">
           <input type="number" step="1" min="0" max="${Math.max(0, Math.round(soldeReel / 60))}" value="0" id="cp-reglement-reel-${d.emp.id}" style="width:65px;text-align:center;" ${soldeReel <= 0 ? 'disabled' : ''}> h
         </td>
-        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${soldeAnticipe >= 0 ? 'var(--accent)' : 'var(--danger)'};" title="Heures sup projetées sur la ou les semaines encore en cours au moment de la clôture, sur la base du planning — sera régularisé le mois suivant selon ce qui est réellement pointé">${minToHM(soldeAnticipe)}</td>
+        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${soldeAnticipe >= 0 ? 'var(--accent)' : 'var(--danger)'};" title="Heures sup projetées sur la ou les semaines encore en cours au moment de la clôture, sur la base du planning — sera régularisé le mois suivant selon ce qui est réellement pointé">${soldeAnticipe >= 0 ? '+' : '-'}${minToHM(Math.abs(soldeAnticipe))}</td>
         <td style="padding:6px 9px;text-align:center;">
           <input type="number" step="1" min="0" max="${Math.max(0, Math.round(soldeAnticipe / 60))}" value="0" id="cp-reglement-anticipe-${d.emp.id}" style="width:65px;text-align:center;" ${soldeAnticipe <= 0 ? 'disabled' : ''}> h
         </td>
@@ -8700,7 +8703,7 @@ async function rendreApercuClotureDecalage() {
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);">${d.empNuit ? minToHM(d.empNuit) : '—'}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);">${d.empPanier || '—'}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);">${d.empPanierNuit || '—'}</td>
-        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${solde >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé depuis le début du suivi, moins tout ce qui a déjà été réglé — même calcul que le Compteur & modulation, figé à la date de fin choisie">${minToHM(solde)}</td>
+        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${solde >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé depuis le début du suivi, moins tout ce qui a déjà été réglé — même calcul que le Compteur & modulation, figé à la date de fin choisie">${solde >= 0 ? '+' : '-'}${minToHM(Math.abs(solde))}</td>
         <td style="padding:6px 9px;text-align:center;">
           <input type="number" step="1" min="0" max="${Math.max(0, Math.round(solde / 60))}" value="0" id="cp-decalage-reglement-${d.emp.id}" style="width:70px;text-align:center;" ${solde <= 0 ? 'disabled' : ''}> h
         </td>
