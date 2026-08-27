@@ -1758,6 +1758,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           </label>
         </div>
       </div>
+      <div id="cp-changement-methode-warning" style="display:none;background:rgba(212,163,52,.12);border:1px solid rgba(212,163,52,.35);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--warning);line-height:1.5;"></div>
       <div id="cp-methode-decalage-dates" style="display:none;background:var(--surface2);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:14px;">
         <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
           <div><span style="font-size:12px;color:var(--text-muted);">Date de début</span><br><b id="cp-decalage-debut" style="font-family:var(--mono);"></b></div>
@@ -2157,7 +2158,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.87.4';
+const APP_VERSION = '1.87.5';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2188,6 +2189,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.87.5', items: [
+    'Ajout de l\'avertissement (promis dès la conception du chantier méthodes de clôture, oublié en route) affiché quand la méthode choisie diffère de celle de la dernière clôture — avec le détail des conséquences réelles (semaines anticipées privées de rapport d\'écart si on bascule vers Décalage). Calculé dès l\'ouverture de la fenêtre, pas seulement au clic',
+  ] },
   { v: '1.87.4', items: [
     'Le Compteur & modulation devient lecture seule, comme prévu depuis le début du chantier des méthodes de clôture : les boutons "Régler" par employé et "📅 Clôture mensuelle" sont retirés (le règlement se fait désormais uniquement depuis la fenêtre Clôture Paie). Un repère "🔒 Xh" reste affiché, non cliquable, quand un règlement a déjà été fait ce mois-ci',
   ] },
@@ -8152,12 +8156,29 @@ function moisPrecedent(mois) {
 // fiable). Le vrai câblage de la méthode Décalage arrivera dans une prochaine étape dédiée.
 function onChangeMethodeCloture() {
   const decalage = document.getElementById('cp-methode-decalage').checked;
-  // Le règlement est désormais intégré directement dans le tableau d'aperçu (voir
-  // rendreApercuClotureDecalage) — plus d'avertissement à afficher ici pour cette méthode.
   document.getElementById('cp-sections-anticipation').style.display = decalage ? 'none' : '';
   document.getElementById('cp-sections-decalage').style.display = decalage ? '' : 'none';
   document.getElementById('cp-btn-cloturer').disabled = decalage ? !window._cpDecalageApercu : !window._cpApercu;
   document.getElementById('cp-btn-simu-xlsx').disabled = decalage ? !window._cpDecalageApercu : !window._cpApercu;
+
+  // Avertissement si la méthode choisie diffère de celle de la dernière clôture — demandé
+  // explicitement, jamais silencieux : basculer de méthode a de vraies conséquences (voir détail
+  // ci-dessous), même si le choix reste entièrement libre à chaque clôture.
+  const methodeChoisie = decalage ? 'decalage' : 'anticipation';
+  const derniere = getDerniereCloture();
+  const methodePrecedente = derniere ? (derniere.methode || 'anticipation') : null;
+  const avertEl = document.getElementById('cp-changement-methode-warning');
+  if (derniere && methodePrecedente !== methodeChoisie) {
+    const nomPrecedente = methodePrecedente === 'decalage' ? 'Décalage' : 'Anticipation';
+    const nomChoisie = decalage ? 'Décalage' : 'Anticipation';
+    const consequence = decalage
+      ? 'Les semaines encore anticipées de la dernière clôture ne recevront pas de rapport d\'écart formel à la clôture suivante (leurs heures réelles seront tout de même comptées normalement, sans risque de perte) — la méthode Décalage ne fait jamais de régularisation.'
+      : 'Rien de spécifique à signaler pour ce sens (Décalage n\'anticipe jamais rien, donc rien n\'était en attente de régularisation).';
+    avertEl.style.display = '';
+    avertEl.innerHTML = `⚠️ La dernière clôture (${derniere.mois}) a été faite en méthode <b>${nomPrecedente}</b> — tu es sur le point de clôturer celle-ci en <b>${nomChoisie}</b>. ${consequence}`;
+  } else {
+    avertEl.style.display = 'none';
+  }
 
   const datesEl = document.getElementById('cp-methode-decalage-dates');
   datesEl.style.display = decalage ? '' : 'none';
@@ -8205,6 +8226,7 @@ function ouvrirModalCloturePaie() {
   // pleinement actives, voir onChangeMethodeCloture() pour le comportement du sélecteur.
   document.getElementById('cp-methode-anticipation').checked = true;
   document.getElementById('cp-methode-decalage-dates').style.display = 'none';
+  document.getElementById('cp-changement-methode-warning').style.display = 'none';
   document.getElementById('cp-sections-anticipation').style.display = '';
   document.getElementById('cp-sections-decalage').style.display = 'none';
   document.getElementById('cp-decalage-apercu').innerHTML = '';
@@ -8216,6 +8238,7 @@ function ouvrirModalCloturePaie() {
   document.getElementById('cp-regul-section').style.display = 'none';
   document.getElementById('cp-regul').innerHTML = '';
   openModal('modal-cloture-paie');
+  onChangeMethodeCloture(); // calcule l'avertissement de changement de méthode dès l'ouverture, pas seulement au clic
   rendreApercuCloturePaie(); // calcul automatique dès l'ouverture, plus besoin de cliquer d'abord
   chargerRegularisationSiApplicable(mois);
 }
