@@ -2170,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.92.0';
+const APP_VERSION = '1.93.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2201,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.93.0', items: [
+    'Correction importante (découverte avec Laura NEGRIER, 2 tournées distinctes dans la journée) : un pointage intérieur manquant (débauche de la 1ère tournée, ou embauche de la 2ème) faisait perdre TOUTE la tournée concernée, plutôt que de se rabattre sur son horaire prévu — jusqu\'à faire disparaître des heures entières d\'une journée. Chaque service se rabat désormais sur le prévu uniquement pour le côté qui manque réellement, jamais les deux',
+    'La pause affichée entre deux tournées reflète maintenant l\'écart RÉEL entre elles (calculé, jamais figé) — qu\'il soit de 45 minutes, de 3 heures ou de toute autre durée, et qu\'il y ait ou non un pointage intérieur pour la mesurer précisément',
+  ] },
   { v: '1.92.0', items: [
     'Récapitulatif Excel enrichi de la traçabilité complète du règlement : "🏁 Solde initial" (visible maintenant, présenté comme la régularisation d\'avant la mise en service de la pointeuse), "⚖️ Solde réel" et "🔮 Solde anticipé" disponibles AVANT le règlement, et "📊 Solde restant" APRÈS — disponible → réglé → restant, à chaque clôture',
     'Le détail réel/anticipé du règlement (ex: "44h00 dont 44h00 réel + 0h00 anticipé") s\'affiche désormais systématiquement, même quand une des deux parts est nulle — plus besoin de deviner d\'où vient le montant',
@@ -7079,7 +7083,15 @@ function construireEmbDebInfo(empId, dk, pointagesParAnnee, splitSeuil) {
     }
   }
 
-  const pauseJourMin = insts.reduce((s, i) => s + prePauseMinutes(i), 0) + instsHierCross.reduce((s, i) => s + postPauseMinutes(i), 0);
+  // Pause totale du jour = pauses internes CONFIGURÉES sur chaque tâche (ex: 30min de pause
+  // déjeuner au sein d'un même service continu) + l'écart RÉEL entre deux services DISTINCTS
+  // séparés par plus que le seuil de séparation (ex: 45min entre deux tournées) — jamais oubliée,
+  // même quand le pointage intérieur manque (voir la découverte du 27/08 avec Laura NEGRIER).
+  let pauseJourMin = insts.reduce((s, i) => s + prePauseMinutes(i), 0) + instsHierCross.reduce((s, i) => s + postPauseMinutes(i), 0);
+  for (let i = 1; i < instsAujProprement.length; i++) {
+    const gap = instsAujProprement[i].debut - instsAujProprement[i - 1].fin;
+    if (gap > splitSeuil) pauseJourMin += gap;
+  }
 
   let embInfo = null, debInfo = null;
   let chaineDebut = null, chaineFinInitiale = null;
@@ -7251,17 +7263,24 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
 
       const embEvt = evts.find(e => e.instId === prem.id && e.type === 'embauche' && e.heureRetenue);
       const debEvt = [...evts].reverse().find(e => e.instId === dern.id && e.type === 'debauche' && e.heureRetenue);
-      if (embEvt && debEvt) {
-        let dMin = timeToMin(embEvt.heureRetenue), fMin = timeToMin(debEvt.heureRetenue);
-        if (fMin <= dMin) fMin += 1440;
-        const pauseTotal = srv.reduce((s, i) => s + (i.pauseDuree || 0), 0);
-        pointeMin += Math.max(0, fMin - dMin - pauseTotal);
-        nuitReelMin += computeNuitMinutes(dMin, fMin, false);
-        nuitSoireeMin += Math.max(0, Math.min(fMin, 1440) - Math.max(dMin, 1260));
-        // Service standalone démarré tôt ce matin (ex: 00:30-08:30), sans lien de chaînage avec
-        // hier — sa portion 0h-6h compte quand même pour "la nuit d'hier" (voir note plus haut).
-        nuitMatineeMin += Math.max(0, Math.min(fMin, 360) - Math.max(dMin, 0));
-      }
+      // Repli sur l'heure PRÉVUE uniquement pour le côté manquant — jamais les deux à la fois
+      // silencieusement, et jamais tout le service perdu faute d'un seul pointage (voir la
+      // découverte du 27/08 avec Laura NEGRIER : deux tournées bien distinctes dans la journée,
+      // dont les pointages intérieurs manquent régulièrement puisqu'elle ne repasse pas au dépôt
+      // entre les deux — perdre toute la tournée faute d'un seul pointage était une vraie perte
+      // d'heures). Comportement cohérent avec le reste de l'appli : un jour sans AUCUN pointage
+      // retombe déjà sur le planning (voir calculerReelPourRegularisation) — ici, c'est le même
+      // principe appliqué à l'échelle d'un service au lieu du jour entier.
+      let dMin = embEvt ? timeToMin(embEvt.heureRetenue) : prem.debut;
+      let fMin = debEvt ? timeToMin(debEvt.heureRetenue) : dern.fin;
+      if (fMin <= dMin) fMin += 1440;
+      const pauseTotal = srv.reduce((s, i) => s + (i.pauseDuree || 0), 0);
+      pointeMin += Math.max(0, fMin - dMin - pauseTotal);
+      nuitReelMin += computeNuitMinutes(dMin, fMin, false);
+      nuitSoireeMin += Math.max(0, Math.min(fMin, 1440) - Math.max(dMin, 1260));
+      // Service standalone démarré tôt ce matin (ex: 00:30-08:30), sans lien de chaînage avec
+      // hier — sa portion 0h-6h compte quand même pour "la nuit d'hier" (voir note plus haut).
+      nuitMatineeMin += Math.max(0, Math.min(fMin, 360) - Math.max(dMin, 0));
     });
   }
 
