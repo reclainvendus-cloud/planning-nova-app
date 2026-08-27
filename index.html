@@ -1859,6 +1859,15 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
   </div>
 </div>
 
+<div class="modal-overlay" id="modal-impact-proratisation">
+  <div class="modal" style="width:720px;max-width:94vw;max-height:85vh;overflow-y:auto;">
+    <button class="modal-close" onclick="closeModal('modal-impact-proratisation')">✕</button>
+    <h2>🔍 Vérification du correctif</h2>
+    <div class="hint" style="margin-bottom:14px;">Compare le solde de chaque employé avec et sans le correctif du 27/08/2026 (les absences ne comptant pas pour les heures sup, comme un accident du travail ou une maladie, ne créent plus de déficit artificiel face au contrat). Seuls les employés dont le solde change sont listés ci-dessous.</div>
+    <div id="impact-proratisation-corps"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-cloture-mensuelle">
   <div class="modal" style="width:720px;max-width:92vw;">
     <button class="modal-close" onclick="closeModal('modal-cloture-mensuelle')">✕</button>
@@ -2161,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.90.0';
+const APP_VERSION = '1.91.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2192,6 +2201,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.91.0', items: [
+    'Correction importante : une absence "ne comptant pas pour les heures sup" (accident du travail, maladie...) créait à tort un déficit face au contrat COMPLET de la semaine, comme si l\'employé devait rattraper ces heures — découvert avec Noé LACHENY (-40h25 au lieu d\'un solde correct). Le seuil hebdomadaire de comparaison est désormais réduit du nombre d\'heures de ce type d\'absence, pour ne jamais créer de dette artificielle sur une absence protégée. Appliqué aux 5 mêmes moteurs que la semaine dernière',
+    'Nouveau bouton "🔍 Vérifier le correctif" dans le Compteur & modulation : liste tous les employés dont le solde change avec ce correctif, avec l\'avant/après précis pour chacun',
+  ] },
   { v: '1.90.0', items: [
     'Nouvelle alerte dans la fenêtre Clôture Paie : détecte les services à cheval sur minuit dont la débauche n\'a pas encore d\'heure validée, sur toute la partie RÉELLE de la période (jamais la partie anticipée, qui a déjà son propre filet de sécurité via la régularisation) — car un jour réel calculé dans cet état sous-évalue silencieusement ses heures, sans jamais être rattrapé ensuite. Liste les employés et jours concernés, avant de clôturer. Appliqué aux deux méthodes (Anticipation et Décalage)',
   ] },
@@ -8194,18 +8207,27 @@ function calculerHeuresSupSemaineReelle(empId, weekMondayStr, pointagesParAnnee,
   const emp = getEmpById(empId);
   if (!emp) return 0;
   const monday = isoToDate(weekMondayStr);
-  let weekPtContrat = 0, weekAUnJourAbsence = false;
+  let weekPtContrat = 0, weekAUnJourAbsence = false, weekReductionContrat = 0;
   for (let i = 0; i < 7; i++) {
     const d = addDays(monday, i);
     const reel = calculerReelPourRegularisation(empId, dateKey(d), splitSeuil, pointagesParAnnee);
-    if (reel.pointeMin === 0 && reel.estConge && congeCompteVersHS(reel.congeTaskId)) {
-      weekAUnJourAbsence = true;
-      weekPtContrat += getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
+    if (reel.pointeMin === 0 && reel.estConge) {
+      const creditMin = getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
+      // Un congé qui compte crédite normalement la semaine ; un congé qui ne compte pas (ex:
+      // accident du travail, maladie) ne doit JAMAIS créer de déficit artificiel — le seuil de
+      // comparaison de cette semaine est réduit d'autant, plutôt que de laisser le jour "manquer"
+      // face à un contrat resté entier (voir la découverte du 27/08 avec Noé LACHENY).
+      if (congeCompteVersHS(reel.congeTaskId)) {
+        weekAUnJourAbsence = true;
+        weekPtContrat += creditMin;
+      } else {
+        weekReductionContrat += creditMin;
+      }
     } else {
       weekPtContrat += reel.pointeMin;
     }
   }
-  const contratMin = getContratMinPourDate(emp, weekMondayStr);
+  const contratMin = Math.max(0, getContratMinPourDate(emp, weekMondayStr) - weekReductionContrat);
   if (weekPtContrat === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
   return weekPtContrat > contratMin ? weekPtContrat - contratMin : 0;
 }
@@ -8791,6 +8813,11 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
 
   const donnees = emps.map(emp => {
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0;
+    // Réduction du seuil hebdomadaire de comparaison — chaque jour d'absence qui NE compte pas
+    // pour les HS (ex: accident du travail, maladie) réduit d'autant le contrat de la semaine,
+    // pour ne jamais créer de déficit artificiel face à une absence protégée (voir la découverte
+    // du 27/08 avec Noé LACHENY). Remise à 0 à chaque flushSemaine(), comme les autres compteurs.
+    let weekReductionContrat = 0;
     let weekBrute = 0, weekPause = 0, weekPanierJour = 0, weekPanierNuit = 0, weekPrimes = 0, weekDecouchage = 0;
     let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPanierNuit = 0, empPrimes = 0, empDecouchage = 0;
     // Point 2 : heures d'absence créditées, détaillées PAR TYPE de tâche congé (même principe que
@@ -8838,6 +8865,9 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
             weekAUnJourAbsence = true;
             const creditMin = ligneRetour.congeFerieMin > 0 ? ligneRetour.congeFerieMin : getObjectifJourMin(emp, jsDayToIndex(dRetour.getDay()));
             weekPtContrat += creditMin;
+          } else {
+            const creditMinNonCompte = ligneRetour.congeFerieMin > 0 ? ligneRetour.congeFerieMin : getObjectifJourMin(emp, jsDayToIndex(dRetour.getDay()));
+            weekReductionContrat += creditMinNonCompte;
           }
         } else {
           weekPtContrat += ligneRetour.pointeMin;
@@ -8855,7 +8885,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       // l'historique des contrats de l'employé — jamais la valeur actuelle appliquée
       // rétroactivement (voir getContratMinPourDate), pour ne jamais fausser une semaine déjà
       // calculée avec un contrat différent à l'époque.
-      const contratMin = getContratMinPourDate(emp, weekKey);
+      const contratMin = Math.max(0, getContratMinPourDate(emp, weekKey) - weekReductionContrat);
       // Une semaine seulement PARTIELLEMENT dans le mois (la dernière si le mois se termine en
       // milieu de semaine — comme "31/08" seul sur 7 jours d'une semaine qui déborde en septembre)
       // ne doit JAMAIS être comparée à un contrat hebdomadaire complet, sous peine d'un faux
@@ -8878,7 +8908,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
         flushSemaine();
         weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0;
         weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0;
-        weekBrute = 0; weekPause = 0;
+        weekBrute = 0; weekPause = 0; weekReductionContrat = 0;
       }
       weekKey = dayWeekKey;
 
@@ -8913,6 +8943,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
           weekPtContrat += creditMin;
           empAbsenceCompteParType[labelType] = (empAbsenceCompteParType[labelType] || 0) + creditMin;
         } else {
+          weekReductionContrat += creditMin;
           empAbsenceNonCompteParType[labelType] = (empAbsenceNonCompteParType[labelType] || 0) + creditMin;
         }
       } else {
@@ -9409,6 +9440,45 @@ function construireJournalCompteur(empId) {
 
 // Ouvre la fenêtre d'historique pour un employé — construit le tableau à partir du journal
 // ci-dessus, purement en lecture, aucune action possible depuis cette fenêtre.
+// Rapport de vérification de l'impact du correctif de proratisation (27/08/2026) — compare, pour
+// chaque employé, le solde réel (avec le correctif) au solde qu'aurait montré l'ancien calcul
+// (sans), en réutilisant les cartes déjà calculées par le Compteur & modulation (voir
+// impactCorrectifMin, déjà présent sur chaque carte). Ne relance jamais son propre calcul —
+// clique d'abord "⚖️ Recalculer" si la liste est vide ou périmée.
+function afficherRapportImpactProratisation() {
+  const wrap = document.getElementById('impact-proratisation-corps');
+  if (!_dernieresCartesCompteur || !_dernieresCartesCompteur.length) {
+    wrap.innerHTML = '<div class="hint">Calcule d\'abord le Compteur & modulation (bouton "⚖️ Recalculer") avant d\'ouvrir ce rapport.</div>';
+    openModal('modal-impact-proratisation');
+    return;
+  }
+  const concernes = _dernieresCartesCompteur.filter(c => c.impactCorrectifMin);
+  if (!concernes.length) {
+    wrap.innerHTML = '<div class="hint" style="color:var(--success);">✅ Aucun employé affecté par le correctif sur la période actuellement affichée.</div>';
+    openModal('modal-impact-proratisation');
+    return;
+  }
+  wrap.innerHTML = `<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">
+    <thead><tr>
+      <th style="padding:6px 9px;text-align:left;font-size:12px;font-weight:700;color:var(--text-muted);">Employé</th>
+      <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Avant le correctif</th>
+      <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Après (solde actuel)</th>
+      <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Écart</th>
+    </tr></thead>
+    <tbody>${concernes.map(c => {
+      const avant = c.total - c.impactCorrectifMin;
+      return `<tr>
+        <td style="padding:6px 9px;font-size:13px;font-weight:700;color:var(--text);">${c.emp.prenom} ${c.emp.nom}</td>
+        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);color:var(--text-muted);">${avant >= 0 ? '+' : '-'}${minToHM(Math.abs(avant))}</td>
+        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${c.total >= 0 ? 'var(--success)' : 'var(--danger)'};">${c.total >= 0 ? '+' : '-'}${minToHM(Math.abs(c.total))}</td>
+        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:var(--accent);">${c.impactCorrectifMin >= 0 ? '+' : '-'}${minToHM(Math.abs(c.impactCorrectifMin))}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>
+  <div class="hint" style="margin-top:8px;">"Écart" = ce que le correctif a changé pour cet employé sur la période affichée — toujours positif ou nul (le correctif ne peut jamais désavantager un employé, seulement retirer un déficit qui n'aurait jamais dû exister).</div>`;
+  openModal('modal-impact-proratisation');
+}
+
 function ouvrirHistoriqueCompteur(empId) {
   const emp = getEmpById(empId);
   if (!emp) return;
@@ -9464,6 +9534,10 @@ function initCompteurModulation() {
       <div class="form-group" style="margin:0;">
         <label style="visibility:hidden;">_</label>
         <button class="btn btn-primary btn-sm" onclick="calculerCompteurModulation()">⚖️ Recalculer</button>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label style="visibility:hidden;">_</label>
+        <button class="btn btn-secondary btn-sm" onclick="afficherRapportImpactProratisation()" title="Compare le solde de chaque employé avec et sans le correctif du 27/08/2026 sur les absences ne comptant pas pour les heures sup (accident du travail, maladie...)">🔍 Vérifier le correctif</button>
       </div>
     `;
     wrap.insertBefore(bar, wrap.firstChild);
@@ -9559,7 +9633,13 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre, jusquauStr) 
 
   const cartes = emps.map(emp => {
     let weekKey = null, weekPtReel = 0, weekCredit = 0, weekAUnJourAbsence = false;
+    let weekReductionContrat = 0;
     let totalBrut = Math.round((emp.soldeInitial || 0) * 60);
+    // Calcul en parallèle SANS le correctif de proratisation (ligne suivante), pour permettre au
+    // rapport de vérification (voir genererRapportImpactProratisation) de montrer précisément
+    // l'écart avant/après pour chaque employé — n'affecte jamais le résultat réellement utilisé
+    // ailleurs (totalBrut, seule valeur qui compte), juste une donnée de comparaison en plus.
+    let totalBrutSansCorrectif = Math.round((emp.soldeInitial || 0) * 60);
     let semainesComptees = 0;
 
     const premiereSemEmp = emp.dateDebutContrat ? premiereSemaineCompleteApres(emp.dateDebutContrat) : null;
@@ -9571,11 +9651,16 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre, jusquauStr) 
       if (weekKey === null) return;
       // Contrat EN VIGUEUR pendant cette semaine précise (voir getContratMinPourDate) — jamais la
       // valeur actuelle appliquée à tort sur une semaine antérieure à un changement de contrat.
-      const contratMin = getContratMinPourDate(emp, weekKey);
+      // Réduit d'autant les jours d'absence qui NE comptent PAS pour les HS (ex: accident du
+      // travail, maladie) — sinon ces jours créeraient un déficit artificiel face à un contrat
+      // resté entier (voir la découverte du 27/08 avec Noé LACHENY).
+      const contratMinBrut = getContratMinPourDate(emp, weekKey);
+      const contratMin = Math.max(0, contratMinBrut - weekReductionContrat);
       if (weekPtReel === 0 && weekAUnJourAbsence) {
         semainesComptees++;
       } else if (weekPtReel + weekCredit > 0) {
         totalBrut += (weekPtReel + weekCredit) - contratMin;
+        totalBrutSansCorrectif += (weekPtReel + weekCredit) - contratMinBrut;
         semainesComptees++;
       }
     }
@@ -9586,20 +9671,25 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre, jusquauStr) 
       const dayWeekKey = dateKey(getMonday(d));
       if (weekKey !== null && dayWeekKey !== weekKey) {
         flushSemaine();
-        weekPtReel = 0; weekCredit = 0; weekAUnJourAbsence = false;
+        weekPtReel = 0; weekCredit = 0; weekAUnJourAbsence = false; weekReductionContrat = 0;
       }
       weekKey = dayWeekKey;
       const { pointeMin } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
       if (pointeMin === 0) {
         const estFerie = !!getJoursFeries(d.getFullYear())[dk];
         const estConge = estJourCongePose(emp.id, dk);
+        const congeCompte = estConge && congeCompteVersHS(getCongeTaskIdDuJour(emp.id, dk));
         // Un férié compte toujours ; un congé ne compte que si son type le permet (voir
-        // congeCompteVersHS) — sinon (ex: arrêt maladie) le jour ne neutralise rien du tout.
-        if (estFerie || (estConge && congeCompteVersHS(getCongeTaskIdDuJour(emp.id, dk)))) {
+        // congeCompteVersHS) — sinon (ex: arrêt maladie) le jour ne neutralise rien, mais réduit
+        // le seuil de comparaison de la semaine plutôt que de créer un déficit artificiel.
+        if (estFerie || congeCompte) {
           weekAUnJourAbsence = true;
           const ferieMinJour = calculerFerieMinJour(emp.id, dk);
           const creditMin = ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
           if (creditMin > 0) { weekCredit += creditMin; jourNeutralise++; }
+        } else if (estConge) {
+          const creditMinNonCompte = getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
+          weekReductionContrat += creditMinNonCompte;
         }
       } else {
         weekPtReel += pointeMin;
@@ -9611,9 +9701,14 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre, jusquauStr) 
 
     const totalRegle = getTotalRegleEmploye(emp.id);
     const total = totalBrut - totalRegle;
+    // Écart entre le résultat réel (avec le correctif de proratisation) et ce qu'aurait montré
+    // l'ancien calcul (sans) — sert uniquement au rapport de vérification, jamais utilisé pour
+    // "total" lui-même. Non nul seulement pour un employé ayant eu au moins un jour d'absence ne
+    // comptant pas pour les HS sur la période couverte par ce calcul.
+    const impactCorrectifMin = totalBrut - totalBrutSansCorrectif;
     const reglementCeMois = getReglementMois(emp.id, moisActuelKey());
 
-    return { emp, total, totalBrut, totalRegle, semainesComptees, contratMin: getContratMinPourDate(emp, dateKey(new Date())), reglementCeMois, jourDebutEmp, jourNeutralise };
+    return { emp, total, totalBrut, totalRegle, semainesComptees, contratMin: getContratMinPourDate(emp, dateKey(new Date())), reglementCeMois, jourDebutEmp, jourNeutralise, impactCorrectifMin };
   });
 
   return { cartes, debutEffectif, hier, aucuneSemaineComplete: false };
@@ -10230,6 +10325,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     let empPanierNuitMensualise = emp.panierMensualiseNuit ? nbMoisTouchesPeriode * PANIER_MENSUALISE_PAR_MOIS : 0;
     let weekFerieChomeMin = 0;
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0, weekPause = 0;
+    let weekReductionContrat = 0;
     let weekBrute = 0, weekPanierJour = 0, weekPanierNuit = 0, weekPrimes = 0, weekDecouchage = 0;
     const badgeBg = { ok: 'rgba(46,204,113,.12)', under: 'rgba(245,166,35,.12)', over: 'rgba(255,77,106,.12)', empty: 'transparent' };
     const badgeCol = { ok: 'var(--success)', under: 'var(--warning)', over: 'var(--danger)', empty: 'var(--text-dim)' };
@@ -10319,7 +10415,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       if (weekKey !== null && dayWeekKey !== weekKey) {
         // Contrat EN VIGUEUR pendant CETTE semaine (voir getContratMinPourDate) — jamais la valeur
         // actuelle appliquée à tort sur une semaine antérieure à un changement de contrat.
-        const contratMinSemaine = getContratMinPourDate(emp, weekKey);
+        const contratMinSemaine = Math.max(0, getContratMinPourDate(emp, weekKey) - weekReductionContrat);
         const cls = badgeClass(weekPlan, contratMinSemaine);
         // Une semaine à cheval sur le bord de la période sélectionnée (ex: "Août" alors que la
         // semaine commence le 27/07) ne contient qu'une partie de ses jours dans "jours" — la
@@ -10335,7 +10431,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         if (weekCompleteFlush && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMinSemaine; empSemainesComptees++; }
         lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, weekBrute, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush, weekHeuresSup: weekCompleteFlush && weekPtContrat > contratMinSemaine ? weekPtContrat - contratMinSemaine : null });
         weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0;
-        weekBrute = 0; weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0;
+        weekBrute = 0; weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0; weekReductionContrat = 0;
       }
       weekKey = dayWeekKey;
       weekPlan += planMin; weekPt += pointeMin; weekNuit += nuitMin; weekPause += pauseJourMin;
@@ -10368,6 +10464,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
           weekPtContrat += creditMinJour;
           empAbsenceCompteParType[labelType] = (empAbsenceCompteParType[labelType] || 0) + creditMinJour;
         } else {
+          weekReductionContrat += creditMinJour;
           empAbsenceNonCompteParType[labelType] = (empAbsenceNonCompteParType[labelType] || 0) + creditMinJour;
         }
       } else {
