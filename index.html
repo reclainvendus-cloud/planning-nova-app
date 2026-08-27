@@ -2170,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.91.0';
+const APP_VERSION = '1.91.1';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2201,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.91.1', items: [
+    'Correction d\'une incohérence d\'affichage découverte en vérifiant le correctif de la veille : la colonne hebdomadaire "Écart contrat / HS" affichait "+0h00" dès qu\'une semaine était complète, sans vérifier si elle avait réellement contribué au total du récapitulatif — révélée par deux employés (accident du travail vs maladie, un samedi férié) montrant chacun "+0h00" au niveau des semaines mais un total différent ("+0h00" vs "—"). Affiche maintenant "—" pour une semaine qui n\'a rien apporté au calcul, dans l\'Excel comme dans le CSV',
+  ] },
   { v: '1.91.0', items: [
     'Correction importante : une absence "ne comptant pas pour les heures sup" (accident du travail, maladie...) créait à tort un déficit face au contrat COMPLET de la semaine, comme si l\'employé devait rattraper ces heures — découvert avec Noé LACHENY (-40h25 au lieu d\'un solde correct). Le seuil hebdomadaire de comparaison est désormais réduit du nombre d\'heures de ce type d\'absence, pour ne jamais créer de dette artificielle sur une absence protégée. Appliqué aux 5 mêmes moteurs que la semaine dernière',
     'Nouveau bouton "🔍 Vérifier le correctif" dans le Compteur & modulation : liste tous les employés dont le solde change avec ce correctif, avec l\'avant/après précis pour chacun',
@@ -9922,7 +9925,7 @@ function construireCSV(donnees, regul) {
           l.weekBrute ? minToHM(l.weekBrute) : '', l.weekPause ? '-' + minToHM(l.weekPause) : '',
           l.weekPt ? minToHM(l.weekPt) : '',
           ecartPlanningSemaine !== null ? (ecartPlanningSemaine >= 0 ? '+' : '-') + minToHM(Math.abs(ecartPlanningSemaine)) : '',
-          l.weekHeuresSup ? '+' + minToHM(l.weekHeuresSup) + ' (HS)' : (l.weekComplete ? '+0h00' : ''),
+          l.weekHeuresSup ? '+' + minToHM(l.weekHeuresSup) + ' (HS)' : (l.weekComplete && l.weekPtContrat > 0 ? '+0h00' : ''),
           l.weekNuit ? minToHM(l.weekNuit) : '',
           l.weekPanierJour || '', l.weekPanierNuit || '',
           l.weekPrimes ? l.weekPrimes.toFixed(2) : '', l.weekDecouchage || '', '',
@@ -10150,7 +10153,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
             l.weekBrute ? minToHM(l.weekBrute) : '—', l.weekPause ? '-' + minToHM(l.weekPause) : '—',
             l.weekPt ? minToHM(l.weekPt) : '—',
             ecartPlanningSemaine !== null ? (ecartPlanningSemaine >= 0 ? '+' : '-') + minToHM(Math.abs(ecartPlanningSemaine)) : '—',
-            l.weekHeuresSup ? '+' + minToHM(l.weekHeuresSup) + ' (HS)' : (l.weekComplete ? '+0h00' : '—'),
+            l.weekHeuresSup ? '+' + minToHM(l.weekHeuresSup) + ' (HS)' : (l.weekComplete && l.weekPtContrat > 0 ? '+0h00' : '—'),
             l.weekNuit ? minToHM(l.weekNuit) : '—',
             l.weekPanierJour || '—', l.weekPanierNuit || '—',
             l.weekPrimes ? l.weekPrimes.toFixed(2) : '—', l.weekDecouchage || '—', '',
