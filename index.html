@@ -1761,6 +1761,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
         </div>
       </div>
       <div id="cp-changement-methode-warning" style="display:none;background:rgba(212,163,52,.12);border:1px solid rgba(212,163,52,.35);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--warning);line-height:1.5;"></div>
+      <div id="cp-crossminuit-warning" style="display:none;background:rgba(212,88,52,.12);border:1px solid rgba(212,88,52,.4);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--danger);line-height:1.5;"></div>
       <div id="cp-methode-decalage-dates" style="display:none;background:var(--surface2);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:14px;">
         <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
           <div><span style="font-size:12px;color:var(--text-muted);">Date de début</span><br><b id="cp-decalage-debut" style="font-family:var(--mono);"></b></div>
@@ -2160,7 +2161,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.89.1';
+const APP_VERSION = '1.90.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2191,6 +2192,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.90.0', items: [
+    'Nouvelle alerte dans la fenêtre Clôture Paie : détecte les services à cheval sur minuit dont la débauche n\'a pas encore d\'heure validée, sur toute la partie RÉELLE de la période (jamais la partie anticipée, qui a déjà son propre filet de sécurité via la régularisation) — car un jour réel calculé dans cet état sous-évalue silencieusement ses heures, sans jamais être rattrapé ensuite. Liste les employés et jours concernés, avant de clôturer. Appliqué aux deux méthodes (Anticipation et Décalage)',
+  ] },
   { v: '1.89.1', items: [
     'Récapitulatif Excel : les heures d\'absence sont maintenant détaillées par type de congé (ex: "🏖️ Absences comptant pour les HS — Congé Parental" et "— Congés Payés" sur deux lignes séparées) plutôt qu\'un seul total agrégé — appliqué au récapitulatif par employé et à la synthèse globale',
   ] },
@@ -8118,6 +8122,68 @@ function fusionnerMinutesParType(cible, source) {
   Object.entries(source).forEach(([type, min]) => { cible[type] = (cible[type] || 0) + min; });
 }
 
+// Détecte les services à cheval sur minuit dont la débauche n'a pas (encore) d'heure retenue —
+// un jour "Réel" calculé dans cet état voit ses heures sous-évaluées SANS JAMAIS être rattrapé
+// par la régularisation (qui ne surveille que les jours ANTICIPÉS, jamais les jours réels). Suit
+// EXACTEMENT le même chaînage que calculerPointeMinJour (services, gap, crosseMinuit) pour
+// identifier le service final concerné, avant de vérifier s'il a bien une débauche validée.
+async function detecterCrossMinuitIncomplets(emps, premierJour, dernierJour) {
+  const annees = new Set();
+  let d = new Date(premierJour);
+  while (d <= dernierJour) { annees.add(d.getFullYear()); d = addDays(d, 1); }
+  annees.add(addDays(dernierJour, 6).getFullYear()); // la chaîne peut déborder sur l'année suivante
+  const pointagesParAnnee = {};
+  await Promise.all([...annees].map(async an => {
+    try { const snap = await fbDb.ref(`pointages/${an}`).once('value'); pointagesParAnnee[an] = snap.val() || {}; }
+    catch { pointagesParAnnee[an] = {}; }
+  }));
+
+  const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
+  const alertes = [];
+  emps.forEach(emp => {
+    let dd = new Date(premierJour);
+    while (dd <= dernierJour) {
+      const dk = dateKey(dd);
+      const insts = (db.planning[emp.id]?.[dk] || [])
+        .filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge)
+        .sort((a, b) => a.debut - b.debut);
+      if (insts.length) {
+        const services = [[insts[0]]];
+        for (let i = 1; i < insts.length; i++) {
+          const gap = insts[i].debut - services[services.length - 1].at(-1).fin;
+          if (gap > splitSeuil) services.push([insts[i]]); else services[services.length - 1].push(insts[i]);
+        }
+        services.forEach(srv => {
+          const dern = srv[srv.length - 1];
+          if (!dern.crosseMinuit) return;
+          let curInst = dern, curDk = dk, guard = 0;
+          while (curInst.crosseMinuit && guard++ < 5) {
+            const dkSuiv = dateKey(addDays(isoToDate(curDk), 1));
+            const instsSuiv = (db.planning[emp.id]?.[dkSuiv] || [])
+              .filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge)
+              .sort((a, b) => a.debut - b.debut);
+            if (!instsSuiv.length || instsSuiv[0].debut - curInst.fin > splitSeuil) { curDk = dkSuiv; break; }
+            let derniereSuiv = instsSuiv[0];
+            for (let i = 1; i < instsSuiv.length; i++) {
+              const gap = instsSuiv[i].debut - derniereSuiv.fin;
+              if (gap > splitSeuil) break;
+              derniereSuiv = instsSuiv[i];
+            }
+            curInst = derniereSuiv; curDk = dkSuiv;
+          }
+          const evtsFinales = Object.values(pointagesParAnnee[curDk.slice(0, 4)]?.[curDk]?.[emp.id]?.evenements || {});
+          const debEvt = [...evtsFinales].reverse().find(e => e.instId === curInst.id && e.type === 'debauche');
+          if (!debEvt || !debEvt.heureRetenue) {
+            alertes.push({ emp, dk, dkFin: curDk });
+          }
+        });
+      }
+      dd = addDays(dd, 1);
+    }
+  });
+  return alertes;
+}
+
 function congeCompteVersHS(taskId) {
   if (!taskId) return true;
   const task = db.tasks.find(t => t.id === taskId);
@@ -8272,6 +8338,7 @@ function ouvrirModalCloturePaie() {
   document.getElementById('cp-methode-anticipation').checked = true;
   document.getElementById('cp-methode-decalage-dates').style.display = 'none';
   document.getElementById('cp-changement-methode-warning').style.display = 'none';
+  document.getElementById('cp-crossminuit-warning').style.display = 'none';
   document.getElementById('cp-sections-anticipation').style.display = '';
   document.getElementById('cp-sections-decalage').style.display = 'none';
   document.getElementById('cp-decalage-apercu').innerHTML = '';
@@ -8521,10 +8588,34 @@ function rendreApercuCloturePaie() {
 // - déjà réglé). Fonction ASYNC séparée déclenchée en fin d'aperçu (fire-and-forget), pour ne
 // jamais changer la signature de rendreApercuCloturePaie (synchrone, appelée à plusieurs endroits
 // existants qui ne s'attendent pas à une Promise).
+// Affiche (ou masque) l'alerte de services à cheval sur minuit dont la débauche n'a pas encore
+// d'heure retenue — partagée entre Anticipation et Décalage, chacune fournissant sa propre plage
+// de jours "réels" à vérifier.
+function afficherAlerteCrossMinuit(alertes) {
+  const el = document.getElementById('cp-crossminuit-warning');
+  if (!alertes.length) { el.style.display = 'none'; return; }
+  const parEmp = {};
+  alertes.forEach(a => { (parEmp[a.emp.id] ??= { emp: a.emp, jours: [] }).jours.push(a.dk); });
+  const liste = Object.values(parEmp).map(x => `${x.emp.prenom} ${x.emp.nom} (${x.jours.map(dk => formatDateFR(isoToDate(dk))).join(', ')})`).join(' · ');
+  el.style.display = '';
+  el.innerHTML = `🌙 <b>Service(s) à cheval sur minuit avec une débauche pas encore validée</b> — leurs heures seront sous-évaluées dans cette clôture, et ce sera invisible ensuite (la régularisation ne surveille que les jours anticipés, jamais les jours réels) : ${liste}. Valide leurs pointages avant de clôturer si possible, ou vérifie-les après coup et régularise manuellement.`;
+}
+
 async function rendreReglementAnticipation(mois, joursAAnticiper, emps, parEmploye) {
   const wrap = document.getElementById('cp-reglement-anticipation');
   if (!wrap) return;
   wrap.innerHTML = '<div class="hint">Calcul du solde disponible…</div>';
+  // Détection des services à cheval sur minuit avec débauche non validée, sur toute la partie
+  // RÉELLE du mois (jamais la partie anticipée, qui a son propre filet de sécurité via la
+  // régularisation) — lancée en parallèle, sans bloquer le reste de cette fonction.
+  const [an, m] = mois.split('-').map(Number);
+  const premierJourMois = new Date(an, m - 1, 1);
+  const veilleAnticipationCM = addDays(isoToDate(joursAAnticiper[0]), -1);
+  if (veilleAnticipationCM >= premierJourMois) {
+    detecterCrossMinuitIncomplets(emps, premierJourMois, veilleAnticipationCM).then(afficherAlerteCrossMinuit);
+  } else {
+    afficherAlerteCrossMinuit([]);
+  }
   try {
     const dateClotureKey = joursAAnticiper[0];
     const { donnees } = await construireDonneesCloturePaie(mois, dateClotureKey, emps, parEmploye);
@@ -8925,8 +9016,11 @@ async function rendreApercuClotureDecalage() {
   if (fin < debut) { wrap.innerHTML = '<div class="hint" style="color:var(--danger);">La date de fin doit être après la date de début.</div>'; return; }
 
   wrap.innerHTML = '<div class="hint">Calcul en cours…</div>';
+  // Décalage traite TOUJOURS du réel (jamais d'anticipé) — toute la période est donc concernée
+  // par la détection des services à cheval sur minuit non validés, lancée en parallèle.
+  const emps = getEmployesTries();
+  detecterCrossMinuitIncomplets(emps, isoToDate(debut), isoToDate(fin)).then(afficherAlerteCrossMinuit);
   try {
-    const emps = getEmployesTries();
     const { donnees, contexteGlobal } = await construireDonneesClotureDecalage(debut, fin, emps);
     // Solde disponible pour règlement : réutilise le moteur du Compteur & modulation (déjà testé,
     // gère solde initial + cumul historique - déjà réglé), figé à la date de fin choisie plutôt
