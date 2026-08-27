@@ -2170,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.91.1';
+const APP_VERSION = '1.92.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2201,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.92.0', items: [
+    'Récapitulatif Excel enrichi de la traçabilité complète du règlement : "🏁 Solde initial" (visible maintenant, présenté comme la régularisation d\'avant la mise en service de la pointeuse), "⚖️ Solde réel" et "🔮 Solde anticipé" disponibles AVANT le règlement, et "📊 Solde restant" APRÈS — disponible → réglé → restant, à chaque clôture',
+    'Le détail réel/anticipé du règlement (ex: "44h00 dont 44h00 réel + 0h00 anticipé") s\'affiche désormais systématiquement, même quand une des deux parts est nulle — plus besoin de deviner d\'où vient le montant',
+    'Colonnes B et C encore élargies (34 et 26) — plus aucun texte du récapitulatif tronqué',
+    'Les lignes de référence (Contrat, Mensualisé, Méthode, Solde initial, Réglé, Solde restant) sont maintenant mises en valeur visuellement (fond bleu) pour ressortir immédiatement du reste du récapitulatif',
+  ] },
   { v: '1.91.1', items: [
     'Correction d\'une incohérence d\'affichage découverte en vérifiant le correctif de la veille : la colonne hebdomadaire "Écart contrat / HS" affichait "+0h00" dès qu\'une semaine était complète, sans vérifier si elle avait réellement contribué au total du récapitulatif — révélée par deux employés (accident du travail vs maladie, un samedi férié) montrant chacun "+0h00" au niveau des semaines mais un total différent ("+0h00" vs "—"). Affiche maintenant "—" pour une semaine qui n\'a rien apporté au calcul, dans l\'Excel comme dans le CSV',
   ] },
@@ -9109,7 +9115,7 @@ async function rendreApercuClotureDecalage() {
 
 // Génère et télécharge Excel + CSV — mêmes générateurs que le Récap paie habituel, juste nourris
 // avec les données réel+anticipé de la Clôture Paie (voir construireDonneesCloturePaie).
-async function genererFichiersCloturePaie(mois, dateClotureKey, parEmployeAnticipe, regul, estSimulation, reglementsAjoutesACetteCloture, reglementsAnticipeHS) {
+async function genererFichiersCloturePaie(mois, dateClotureKey, parEmployeAnticipe, regul, estSimulation, reglementsAjoutesACetteCloture, reglementsAnticipeHS, soldesAvantReglement) {
   const emps = getEmployesTries();
   const { donnees, contexteGlobal, periode } = await construireDonneesCloturePaie(mois, dateClotureKey, emps, parEmployeAnticipe);
   const titre = (estSimulation ? '⚠️ SIMULATION — ' : '') + `Clôture Paie — ${mois}` + (estSimulation ? ' — rien n\'est enregistré' : '');
@@ -9118,7 +9124,7 @@ async function genererFichiersCloturePaie(mois, dateClotureKey, parEmployeAntici
   // La régularisation du mois précédent (si applicable) est intégrée directement dans l'onglet de
   // chaque employé concerné (Excel) et juste après ses lignes (CSV) — plus de fichier séparé à
   // consulter à part, moins de risque de l'oublier.
-  const buffer = await construireClasseurExcel(donnees, 'both', { contexteGlobal, periode, titre, regul, methode: 'anticipation', reglementsAjoutesACetteCloture, reglementsAnticipeHS });
+  const buffer = await construireClasseurExcel(donnees, 'both', { contexteGlobal, periode, titre, regul, methode: 'anticipation', reglementsAjoutesACetteCloture, reglementsAnticipeHS, soldesAvantReglement });
   downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${nomFichier}.xlsx`);
   downloadBlob(new Blob(['\uFEFF' + construireCSV(donnees, regul)], { type: 'text/csv;charset=utf-8' }), `${nomFichier}.csv`);
 }
@@ -9143,7 +9149,7 @@ async function telechargerSimulationCloturePaie() {
       reglementsAjoutees[emp.id] = montantMin;
       if (montantSourceAnticipe > 0) reglementsAnticipe[emp.id] = montantSourceAnticipe;
     });
-    await genererFichiersCloturePaie(apercu.mois, apercu.joursAAnticiper[0], apercu.parEmploye, window._cpRegul, true, reglementsAjoutees, reglementsAnticipe);
+    await genererFichiersCloturePaie(apercu.mois, apercu.joursAAnticiper[0], apercu.parEmploye, window._cpRegul, true, reglementsAjoutees, reglementsAnticipe, window._cpSoldesReglementAnticipation);
   } catch (e) {
     console.error('Simulation clôture paie:', e);
     notify('Échec de la génération — réessaie', 'danger');
@@ -9171,7 +9177,12 @@ async function telechargerSimulationClotureDecalage() {
       const h = input ? parseInt(input.value, 10) || 0 : 0;
       if (h > 0) reglementsAjoutees[emp.id] = h * 60;
     });
-    const buffer = await construireClasseurExcel(donneesExport, 'both', { contexteGlobal, periode: { debut: isoToDate(debut), fin: isoToDate(fin) }, titre, methode: 'decalage', reglementsAjoutesACetteCloture: reglementsAjoutees });
+    // Enveloppe soldeParEmploye (juste un nombre par employé) dans la même forme
+    // {soldeReel, soldeAnticipe} que la méthode Anticipation, pour que le récapitulatif partage
+    // un seul et même bloc d'affichage — soldeAnticipe reste toujours 0 ici.
+    const soldesAvantReglement = {};
+    Object.entries(decalageApercu.soldeParEmploye || {}).forEach(([empId, solde]) => { soldesAvantReglement[empId] = { soldeReel: solde, soldeAnticipe: 0 }; });
+    const buffer = await construireClasseurExcel(donneesExport, 'both', { contexteGlobal, periode: { debut: isoToDate(debut), fin: isoToDate(fin) }, titre, methode: 'decalage', reglementsAjoutesACetteCloture: reglementsAjoutees, soldesAvantReglement });
     downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${nomFichier}.xlsx`);
     downloadBlob(new Blob(['\uFEFF' + construireCSV(donneesExport)], { type: 'text/csv;charset=utf-8' }), `${nomFichier}.csv`);
     notify('Fichiers de simulation générés — rien n\'a été enregistré');
@@ -9290,7 +9301,7 @@ async function validerCloturePaie() {
   // distinction Réel/Anticipé et la régularisation intégrée — comme demandé, à chaque vraie
   // clôture, sans action supplémentaire de l'admin.
   try {
-    await genererFichiersCloturePaie(mois, apercu.joursAAnticiper[0], apercu.parEmploye, regul, false, cloture.reglementsAjoutesACetteCloture, cloture.reglementsAnticipeHS);
+    await genererFichiersCloturePaie(mois, apercu.joursAAnticiper[0], apercu.parEmploye, regul, false, cloture.reglementsAjoutesACetteCloture, cloture.reglementsAnticipeHS, window._cpSoldesReglementAnticipation);
     notify('Fichiers de clôture générés');
   } catch (e) {
     console.error('Export clôture paie:', e);
@@ -9379,7 +9390,9 @@ async function validerClotureDecalage() {
     const { donnees: donneesExport, contexteGlobal } = await construireDonneesClotureDecalage(debut, fin, emps);
     const titre = `Clôture Paie (Décalage) — du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))}`;
     const nomFichier = `cloture-decalage-${debut}-au-${fin}`;
-    const buffer = await construireClasseurExcel(donneesExport, 'both', { contexteGlobal, periode: { debut: isoToDate(debut), fin: isoToDate(fin) }, titre, methode: 'decalage', reglementsAjoutesACetteCloture: cloture.reglementsAjoutesACetteCloture });
+    const soldesAvantReglement = {};
+    Object.entries(soldeParEmploye || {}).forEach(([empId, solde]) => { soldesAvantReglement[empId] = { soldeReel: solde, soldeAnticipe: 0 }; });
+    const buffer = await construireClasseurExcel(donneesExport, 'both', { contexteGlobal, periode: { debut: isoToDate(debut), fin: isoToDate(fin) }, titre, methode: 'decalage', reglementsAjoutesACetteCloture: cloture.reglementsAjoutesACetteCloture, soldesAvantReglement });
     downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${nomFichier}.xlsx`);
     downloadBlob(new Blob(['\uFEFF' + construireCSV(donneesExport)], { type: 'text/csv;charset=utf-8' }), `${nomFichier}.csv`);
     notify('Fichiers de clôture générés');
@@ -10076,8 +10089,9 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
       const nbCols = entetes.length;
       // Colonnes B et C élargies : elles servent aussi de support au récapitulatif en bas de page
       // (labels sur A:B fusionnées, valeurs sur C) — doivent rester assez larges pour ne jamais
-      // tronquer visuellement un libellé un peu long (ex: "📋 Mensualisé (× 52 ÷ 12)").
-      ws.columns = entetes.map((h, i) => ({ width: i === 0 ? 8 : (i === 1 ? 22 : (i === 2 ? 16 : (h === 'Congé' ? 20 : 11))) }));
+      // tronquer visuellement un libellé ou une valeur un peu longue (ex: "🏁 Solde initial (avant
+      // la mise en service de la pointeuse)", ou "44h00 (dont 44h00 réel + 0h00 anticipé)").
+      ws.columns = entetes.map((h, i) => ({ width: i === 0 ? 8 : (i === 1 ? 34 : (i === 2 ? 26 : (h === 'Congé' ? 20 : 11))) }));
       const dernCol = String.fromCharCode(64 + nbCols > 90 ? 90 : 64 + nbCols); // sécurité, table reste < 26 col normalement
 
       ws.mergeCells(`A1:${dernCol}1`);
@@ -10208,15 +10222,27 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
       // Détail du règlement fait À CETTE clôture précisément (opts.reglementsAnticipeHS, distinct
       // du total cumulé d.reglementRecap qui peut inclure un règlement fait à un autre moment) —
       // uniquement disponible pour un export Clôture Paie, jamais pour un Récap paie classique.
+      const estDecalage = opts.methode === 'decalage';
       const montantRegleCetteCloture = opts.reglementsAjoutesACetteCloture?.[d.emp.id];
       const anticipeRegleCetteCloture = opts.reglementsAnticipeHS?.[d.emp.id] || 0;
       const reelRegleCetteCloture = montantRegleCetteCloture ? montantRegleCetteCloture - anticipeRegleCetteCloture : 0;
+      // Solde disponible AVANT ce règlement (déjà calculé côté écran, voir
+      // window._cpSoldesReglementAnticipation / soldeParEmploye) — permet d'afficher la
+      // traçabilité complète disponible → réglé → restant, demandée explicitement.
+      const soldesAvant = opts.soldesAvantReglement?.[d.emp.id];
+      const soldeReelRestant = soldesAvant ? soldesAvant.soldeReel - reelRegleCetteCloture : null;
+      const soldeAnticipeRestant = soldesAvant ? (soldesAvant.soldeAnticipe || 0) - anticipeRegleCetteCloture : null;
+      // Solde initial (simule les heures dues avant la mise en service de la pointeuse — le
+      // "point de départ" de l'employé, comme une régularisation antérieure à tout suivi réel).
+      const soldeInitialMin = d.emp.soldeInitial ? Math.round(d.emp.soldeInitial * 60) : 0;
       const recapLignes = [
         // Contrat + mensualisation légale (5×52÷12) — un simple rappel informatif, jamais utilisé
         // pour un calcul (le vrai calcul reste toujours semaine par semaine, voir Écart contrat).
-        ['📋 Contrat', `${(d.contratMin / 60).toFixed(2).replace(/\.00$/, '')}h/semaine`],
-        ['📋 Mensualisé (× 52 ÷ 12)', `${(d.contratMin / 60 * 52 / 12).toFixed(2)}h/mois`],
-        ...(opts.methode ? [['🧭 Méthode de clôture', opts.methode === 'decalage' ? '⏭️ Décalage' : '📊 Anticipation']] : []),
+        // Le dernier élément (true) marque une ligne de référence importante, mise en valeur.
+        ['📋 Contrat', `${(d.contratMin / 60).toFixed(2).replace(/\.00$/, '')}h/semaine`, true],
+        ['📋 Mensualisé (× 52 ÷ 12)', `${(d.contratMin / 60 * 52 / 12).toFixed(2)}h/mois`, true],
+        ...(opts.methode ? [['🧭 Méthode de clôture', estDecalage ? '⏭️ Décalage' : '📊 Anticipation', true]] : []),
+        ...(soldeInitialMin ? [[`🏁 Solde initial (avant la mise en service de la pointeuse)`, (soldeInitialMin >= 0 ? '+' : '-') + minToHM(Math.abs(soldeInitialMin)), true]] : []),
         ['Total planifié', minToHM(d.empPlannifie) + (d.empFerieChomeMin ? ` (dont ${minToHM(d.empFerieChomeMin)} férié)` : '')],
         ['Total pointé (net)', d.empPointe ? minToHM(d.empPointe) : '—'],
         ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '-') + minToHM(Math.abs(d.ecartTotal)) : '—'],
@@ -10224,7 +10250,15 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         ...Object.entries(d.empAbsenceCompteParType || {}).map(([type, min]) => [`🏖️ Absences comptant pour les HS — ${type}`, minToHM(min)]),
         ...Object.entries(d.empAbsenceNonCompteParType || {}).map(([type, min]) => [`🤒 Absences NE comptant PAS pour les HS — ${type}`, minToHM(min)]),
         [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non validées', hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—')],
-        ...(montantRegleCetteCloture ? [['🔒 Réglé à cette clôture', `${minToHM(montantRegleCetteCloture)}${anticipeRegleCetteCloture ? ` (dont ${minToHM(reelRegleCetteCloture)} réel + ${minToHM(anticipeRegleCetteCloture)} anticipé)` : ''}`]] : []),
+        ...(soldesAvant ? [
+          ['⚖️ Solde réel disponible avant ce règlement', (soldesAvant.soldeReel >= 0 ? '+' : '-') + minToHM(Math.abs(soldesAvant.soldeReel))],
+          ...(estDecalage ? [] : [['🔮 Solde anticipé disponible avant ce règlement', ((soldesAvant.soldeAnticipe || 0) >= 0 ? '+' : '-') + minToHM(Math.abs(soldesAvant.soldeAnticipe || 0))]]),
+        ] : []),
+        ...(montantRegleCetteCloture ? [['🔒 Réglé à cette clôture', `${minToHM(montantRegleCetteCloture)}${estDecalage ? '' : ` (dont ${minToHM(reelRegleCetteCloture)} réel + ${minToHM(anticipeRegleCetteCloture)} anticipé)`}`, true]] : []),
+        ...(soldesAvant && montantRegleCetteCloture ? [
+          ['📊 Solde réel restant après ce règlement', (soldeReelRestant >= 0 ? '+' : '-') + minToHM(Math.abs(soldeReelRestant)), true],
+          ...(estDecalage ? [] : [['📊 Solde anticipé restant après ce règlement', (soldeAnticipeRestant >= 0 ? '+' : '-') + minToHM(Math.abs(soldeAnticipeRestant)), true]]),
+        ] : []),
         ['🔶 Fériés travaillés', d.empFerieTravailleJours ? `${d.empFerieTravailleJours} j.${d.empHeuresMajorees ? ' (majoration +' + minToHM(d.empHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
         ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
         ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
@@ -10235,12 +10269,13 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         ...(d.empPanierNuitMensualise ? [['🌙 Panier nuit mensualisé', d.empPanierNuitMensualise.toFixed(2)]] : []),
         ...Object.entries(d.congesParType).map(([nom, n]) => [`Congé — ${nom}`, n + ' j']),
       ];
-      recapLignes.forEach(([label, val], idx2) => {
+      recapLignes.forEach(([label, val, important], idx2) => {
         ws.mergeCells(`A${rr}:B${rr}`);
         ws.getCell(`A${rr}`).value = label;
         ws.getCell(`C${rr}`).value = val;
-        ws.getCell(`C${rr}`).font = { bold: true };
-        if (idx2 % 2 === 1) { ['A','C'].forEach(col => ws.getCell(`${col}${rr}`).fill = xlsFill(XLS_COULEURS.ligneAlt)); }
+        ws.getCell(`C${rr}`).font = { bold: true, color: important ? { argb: XLS_COULEURS.bleuTxt } : undefined };
+        if (important) { ['A','C'].forEach(col => { ws.getCell(`${col}${rr}`).fill = xlsFill(XLS_COULEURS.bleu); }); ws.getCell(`A${rr}`).font = { bold: true, color: { argb: XLS_COULEURS.bleuTxt } }; }
+        else if (idx2 % 2 === 1) { ['A','C'].forEach(col => ws.getCell(`${col}${rr}`).fill = xlsFill(XLS_COULEURS.ligneAlt)); }
         ['A','C'].forEach(col => ws.getCell(`${col}${rr}`).border = xlsBordureFine());
         rr++;
       });
