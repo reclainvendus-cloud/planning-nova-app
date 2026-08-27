@@ -1380,6 +1380,8 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
         <option value="calendaires">Jours calendaires (tous les jours, dimanche inclus)</option>
       </select>
       <div class="hint">Détermine si le samedi est décompté, et sert au calcul du solde. Les jours fériés chômés ne sont jamais décomptés (sauf en calendaires).</div>
+      <label class="checkbox-row" style="margin-top:10px;"><input type="checkbox" id="tk-conge-compte-hs" checked><span>Compte dans le seuil de déclenchement des heures sup (ex: congés payés, congé maternité)</span></label>
+      <div class="hint">Depuis l'arrêt de la Cour de cassation du 10/09/2025, les congés payés comptent désormais dans le calcul des heures sup — décoche pour un type d'absence qui ne doit PAS compter (ex: arrêt maladie, RTT).</div>
     </div>
     <label class="checkbox-row"><input type="checkbox" id="tk-repos" onchange="onFlagsChange()"><span>Repos</span></label>
     <label class="checkbox-row" id="tk-compteur-row" style="display:none;"><input type="checkbox" id="tk-compteur" onchange="onFlagsChange()"><span>Suivi par compteur (jours acquis / pris)</span></label>
@@ -2158,7 +2160,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.88.0';
+const APP_VERSION = '1.89.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2189,6 +2191,11 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.89.0', items: [
+    'Colonnes B et C élargies dans l\'export Excel par employé, pour ne plus jamais tronquer visuellement un libellé du récapitulatif',
+    'Nouveau paramètre sur les tâches congé : "Compte dans le seuil de déclenchement des heures sup" (coché par défaut, rétrocompatible) — conformément à Cass. soc. 10 sept. 2025, les congés payés comptent désormais, mais un arrêt maladie ou une RTT peuvent être décochés pour ne plus compter. Appliqué dans tous les moteurs de calcul : Récap paie, Compteur & modulation, Clôture Paie (Anticipation et Décalage), régularisation',
+    'Le récapitulatif Excel (par employé et synthèse globale) affiche désormais séparément les heures d\'absence qui comptent pour les heures sup et celles qui ne comptent pas, pour aider à comprendre le détail d\'un écart planning/contrat',
+  ] },
   { v: '1.88.0', items: [
     'Récapitulatif Excel par employé enrichi de 4 nouvelles lignes : "📋 Contrat" (ex: 35h/semaine), "📋 Mensualisé" (35h × 52 ÷ 12 = 151,67h/mois), "🧭 Méthode de clôture" (Anticipation/Décalage, uniquement pour les exports de clôture) et "🔒 Réglé à cette clôture" (montant, avec le détail réel/anticipé quand applicable) — appliqué au Récap paie classique, aux simulations et aux rapports finaux des deux méthodes de clôture',
   ] },
@@ -3345,6 +3352,7 @@ function openTaskModal() {
   document.getElementById('tk-primes-list').innerHTML = '';
   document.getElementById('tk-conge').checked = false;
   document.getElementById('tk-methode-decompte').value = 'ouvrables';
+  document.getElementById('tk-conge-compte-hs').checked = true;
   document.getElementById('tk-repos').checked = false;
   document.getElementById('tk-compteur').checked = false;
   document.getElementById('tk-nuit').checked = false;
@@ -3387,6 +3395,10 @@ function editTask(id) {
   (t.primes || []).forEach(p => addPrimeRow(p.label, p.montant));
   document.getElementById('tk-conge').checked = !!t.conge;
   document.getElementById('tk-methode-decompte').value = t.methodeDecompte || 'ouvrables';
+  // Rétrocompatible : une tâche congé jamais retouchée depuis l'ajout de ce paramètre
+  // (t.congeCompteHS === undefined) doit rester cochée, pour ne rien changer à son comportement
+  // existant tant que l'admin n'a pas fait de choix explicite.
+  document.getElementById('tk-conge-compte-hs').checked = t.congeCompteHS !== false;
   document.getElementById('tk-repos').checked = !!t.repos;
   document.getElementById('tk-compteur').checked = !!t.compteur;
   document.getElementById('tk-nuit').checked = !!t.nuit;
@@ -3437,6 +3449,10 @@ function saveTask() {
     primes,
     conge,
     methodeDecompte: conge ? document.getElementById('tk-methode-decompte').value : null,
+    // Compte pour le seuil de déclenchement des heures sup (voir Cass. soc., 10 sept. 2025) —
+    // vrai par défaut (rétrocompatible : une tâche congé déjà existante, jamais retouchée depuis,
+    // doit continuer à se comporter EXACTEMENT comme avant, donc toujours créditée).
+    congeCompteHS: conge ? document.getElementById('tk-conge-compte-hs').checked : null,
     repos: document.getElementById('tk-repos').checked,
     compteur: conge ? compteur : false,
     nuit: document.getElementById('tk-nuit').checked,
@@ -7331,6 +7347,12 @@ function getCompteurDepuis() {
 function estJourCongePose(empId, dk) {
   return (db.planning[empId]?.[dk] || []).some(i => db.tasks.find(t => t.id === i.taskId)?.conge);
 }
+// Identifiant de la tâche congé posée ce jour-là (s'il y en a une) — pour vérifier ensuite si ce
+// type précis compte vers le seuil des heures sup (voir congeCompteVersHS).
+function getCongeTaskIdDuJour(empId, dk) {
+  const inst = (db.planning[empId]?.[dk] || []).find(i => db.tasks.find(t => t.id === i.taskId)?.conge);
+  return inst ? inst.taskId : null;
+}
 
 // ===================================================
 // TÂCHE SYSTÈME "FÉRIÉ"
@@ -8045,7 +8067,7 @@ function calculerAnticipationJour(empId, dk, splitSeuil, utiliserSemaineType) {
   const panierJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.panier || 0); }, 0);
   const primesJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.primeMontant || 0); }, 0);
   const decouchageJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.decouchage || 0); }, 0);
-  return { planMin, nuitMin, panierJour, primesJour, decouchageJour, source, estConge: congeInsts.length > 0 };
+  return { planMin, nuitMin, panierJour, primesJour, decouchageJour, source, estConge: congeInsts.length > 0, congeTaskId: congeInsts.length ? congeInsts[0].taskId : null };
 }
 
 // Estimation "réelle" d'un jour désormais passé — reprend les heures réellement pointées si elles
@@ -8071,7 +8093,7 @@ function calculerReelPourRegularisation(empId, dk, splitSeuil, pointagesParAnnee
     pointeMin, // vraie durée pointée (0 si rien pointé)
     nuitMin: pointeMin > 0 ? nuitReelMin : base.nuitMin,
     panierJour: paniers.panierJour, panierNuit: paniers.panierNuit, primesJour: base.primesJour, decouchageJour: paniers.decouchage,
-    estConge: base.estConge,
+    estConge: base.estConge, congeTaskId: base.congeTaskId,
   };
 }
 
@@ -8082,6 +8104,17 @@ function calculerReelPourRegularisation(empId, dk, splitSeuil, pointagesParAnnee
 // entièrement passée — utilisé par la régularisation pour comparer chaque semaine anticipée à ce
 // qu'elle a vraiment généré. Simplification assumée : ne recrédite pas spécifiquement un jour
 // férié chômé (seulement congé via estConge) — un cas plus rare, laissé de côté pour l'instant.
+// Vrai si ce type de congé compte vers le seuil hebdomadaire de déclenchement des heures sup (voir
+// Cass. soc., 10 sept. 2025 — les congés payés comptent désormais, contrairement à un arrêt
+// maladie ou une RTT par exemple). Vrai par défaut si la tâche n'existe plus, n'a pas ce champ
+// (rétrocompatible : toute tâche congé créée avant ce paramètre continue de compter comme avant),
+// ou s'il ne s'agit pas d'un congé du tout (ex: jour férié, qui suit ses propres règles ailleurs).
+function congeCompteVersHS(taskId) {
+  if (!taskId) return true;
+  const task = db.tasks.find(t => t.id === taskId);
+  return task?.congeCompteHS !== false;
+}
+
 function calculerHeuresSupSemaineReelle(empId, weekMondayStr, pointagesParAnnee, splitSeuil) {
   const emp = getEmpById(empId);
   if (!emp) return 0;
@@ -8090,7 +8123,7 @@ function calculerHeuresSupSemaineReelle(empId, weekMondayStr, pointagesParAnnee,
   for (let i = 0; i < 7; i++) {
     const d = addDays(monday, i);
     const reel = calculerReelPourRegularisation(empId, dateKey(d), splitSeuil, pointagesParAnnee);
-    if (reel.pointeMin === 0 && reel.estConge) {
+    if (reel.pointeMin === 0 && reel.estConge && congeCompteVersHS(reel.congeTaskId)) {
       weekAUnJourAbsence = true;
       weekPtContrat += getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
     } else {
@@ -8569,11 +8602,12 @@ async function rendreReglementAnticipation(mois, joursAAnticiper, emps, parEmplo
 function getCongeEtFerieInfoCloture(empId, dk) {
   const d = isoToDate(dk);
   const congeInsts = (db.planning[empId]?.[dk] || []).filter(i => db.tasks.find(t => t.id === i.taskId)?.conge);
+  const congeTaskId = congeInsts.length ? congeInsts[0].taskId : null;
   const congeLabel = congeInsts.length ? db.tasks.find(t => t.id === congeInsts[0].taskId)?.nom || 'Congé' : null;
   const ferieInstJour = congeInsts.find(i => db.tasks.find(t => t.id === i.taskId)?.ferie);
   const congeFerieMin = ferieInstJour ? ownDayMinutes(ferieInstJour) : 0;
   const nomFerie = getJoursFeries(d.getFullYear())[dk] || null;
-  return { congeLabel, congeFerieMin, nomFerie };
+  return { congeLabel, congeTaskId, congeFerieMin, nomFerie };
 }
 
 function construireLigneCloture(empId, dk, statutCloture, valeurs, pointagesParAnnee, splitSeuil, estPremierJourPeriode) {
@@ -8615,7 +8649,7 @@ function construireLigneCloture(empId, dk, statutCloture, valeurs, pointagesParA
     type: 'jour', dk, d, dow: d.getDay(),
     planMin: planMinAffiche, pointeMin: pointeMinAffiche, ecartMin: pointeMinAffiche > 0 ? pointeMinAffiche - planMinAffiche : null,
     nuitMin: valeurs.nuitMin, panierJour: paniers.panierJour, panierNuit: paniers.panierNuit, panierNuitBordure, primesJour: valeurs.primesJour, decouchageJour: paniers.decouchage,
-    congeLabel: info.congeLabel, congeFerieMin: info.congeFerieMin, nomFerie: info.nomFerie,
+    congeLabel: info.congeLabel, congeTaskId: info.congeTaskId, congeFerieMin: info.congeFerieMin, nomFerie: info.nomFerie,
     ferieTravaille, pctMajoration, heuresMajorees, statutCloture,
     embInfo: embDeb?.embInfo || null, debInfo: embDeb?.debInfo || null, ecartEmb: embDeb?.ecartEmb ?? null, ecartDeb: embDeb?.ecartDeb ?? null,
     pauseJourMin: embDeb?.pauseJourMin ?? null,
@@ -8653,11 +8687,16 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
   let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPanierNuit = 0, gtPrimes = 0, gtDecouchage = 0;
   let gtHSValidees = 0, gtHSNonValidees = 0, gtFerieTravailleJours = 0, gtHeuresMajorees = 0, gtFerieChomeMin = 0;
   let gtPanierJourMensualise = 0, gtPanierNuitMensualise = 0;
+  let gtAbsenceCompteMin = 0, gtAbsenceNonCompteMin = 0;
 
   const donnees = emps.map(emp => {
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0;
     let weekBrute = 0, weekPause = 0, weekPanierJour = 0, weekPanierNuit = 0, weekPrimes = 0, weekDecouchage = 0;
     let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPanierNuit = 0, empPrimes = 0, empDecouchage = 0;
+    // Point 2 : total d'heures d'absence créditées (congé/férié), pour aider à comprendre le
+    // "déficit" affiché en Écart planning/contrat — distingué selon que le type d'absence compte
+    // ou non vers le seuil des heures sup (voir congeCompteVersHS).
+    let empAbsenceCompteMin = 0, empAbsenceNonCompteMin = 0;
     // Règle 4 — panier mensualisé : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé
     // par 12, jamais "5 × nombre de semaines calendaires de CE mois précis" (qui varie entre 4 et
     // 5 selon les mois et fausserait le total — voir PANIER_MENSUALISE_PAR_MOIS). Cette fonction
@@ -8691,9 +8730,14 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
         const ligneRetour = construireLigneCloture(emp.id, dkRetour, 'Réel', valeursRetour, pointagesParAnnee, splitSeuil, false);
         weekPlan += ligneRetour.planMin; weekPt += ligneRetour.pointeMin; weekNuit += ligneRetour.nuitMin;
         if (ligneRetour.pointeMin === 0 && (ligneRetour.nomFerie || ligneRetour.congeLabel)) {
-          weekAUnJourAbsence = true;
-          const creditMin = ligneRetour.congeFerieMin > 0 ? ligneRetour.congeFerieMin : getObjectifJourMin(emp, jsDayToIndex(dRetour.getDay()));
-          weekPtContrat += creditMin;
+          // Un férié compte toujours ; un congé ne compte que si son type le permet (voir
+          // congeCompteVersHS) — sinon (ex: arrêt maladie) le jour ne contribue à rien du tout,
+          // ni au crédit ni au réel, conformément à la distinction demandée.
+          if (ligneRetour.nomFerie || congeCompteVersHS(ligneRetour.congeTaskId)) {
+            weekAUnJourAbsence = true;
+            const creditMin = ligneRetour.congeFerieMin > 0 ? ligneRetour.congeFerieMin : getObjectifJourMin(emp, jsDayToIndex(dRetour.getDay()));
+            weekPtContrat += creditMin;
+          }
         } else {
           weekPtContrat += ligneRetour.pointeMin;
           weekPtReel += ligneRetour.pointeMin;
@@ -8757,9 +8801,18 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       empFerieChomeMin += ferieChomeJour;
 
       if (ligne.pointeMin === 0 && (ligne.nomFerie || ligne.congeLabel)) {
-        weekAUnJourAbsence = true;
         const creditMin = ligne.congeFerieMin > 0 ? ligne.congeFerieMin : getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
-        weekPtContrat += creditMin;
+        // Un férié compte toujours ; un congé ne compte que si son type le permet (voir
+        // congeCompteVersHS) — sinon (ex: arrêt maladie) le jour ne contribue à rien du tout, ni
+        // au crédit ni au réel, conformément à la distinction demandée. Suivi séparément pour le
+        // récapitulatif (point 2), qu'il compte ou non.
+        if (ligne.nomFerie || congeCompteVersHS(ligne.congeTaskId)) {
+          weekAUnJourAbsence = true;
+          weekPtContrat += creditMin;
+          empAbsenceCompteMin += creditMin;
+        } else {
+          empAbsenceNonCompteMin += creditMin;
+        }
       } else {
         weekPtContrat += ligne.pointeMin;
         weekPtReel += ligne.pointeMin;
@@ -8818,16 +8871,18 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
     gtHSValidees += hsValidees; gtHSNonValidees += hsNonValidees;
     gtFerieTravailleJours += empFerieTravailleJours; gtHeuresMajorees += empHeuresMajorees; gtFerieChomeMin += empFerieChomeMin;
     gtPanierJourMensualise += empPanierJourMensualise; gtPanierNuitMensualise += empPanierNuitMensualise;
+    gtAbsenceCompteMin += empAbsenceCompteMin; gtAbsenceNonCompteMin += empAbsenceNonCompteMin;
 
     return {
       emp, lignes, contratMin: getContratMinPourDate(emp, dateKey(dernierJour)), empPlannifie, empPointe, empNuit, empPanier, empPanierNuit, empPrimes, empDecouchage,
       empPanierJourMensualise, empPanierNuitMensualise,
       empEcartContrat, empSemainesComptees, ecartTotal, reglementRecap, congesParType,
       empFerieTravailleJours, empHeuresMajorees, empFerieChomeMin,
+      empAbsenceCompteMin, empAbsenceNonCompteMin,
     };
   });
 
-  const contexteGlobal = { gtPlannifie, gtPointe, gtNuit, gtPanier, gtPanierNuit, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin, gtPanierJourMensualise, gtPanierNuitMensualise };
+  const contexteGlobal = { gtPlannifie, gtPointe, gtNuit, gtPanier, gtPanierNuit, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin, gtPanierJourMensualise, gtPanierNuitMensualise, gtAbsenceCompteMin, gtAbsenceNonCompteMin };
   return { donnees, contexteGlobal, periode: { debut: premierJour, fin: dernierJour } };
 }
 
@@ -9432,7 +9487,9 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre, jusquauStr) 
       if (pointeMin === 0) {
         const estFerie = !!getJoursFeries(d.getFullYear())[dk];
         const estConge = estJourCongePose(emp.id, dk);
-        if (estFerie || estConge) {
+        // Un férié compte toujours ; un congé ne compte que si son type le permet (voir
+        // congeCompteVersHS) — sinon (ex: arrêt maladie) le jour ne neutralise rien du tout.
+        if (estFerie || (estConge && congeCompteVersHS(getCongeTaskIdDuJour(emp.id, dk)))) {
           weekAUnJourAbsence = true;
           const ferieMinJour = calculerFerieMinJour(emp.id, dk);
           const creditMin = ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
@@ -9726,6 +9783,8 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
     ['Heures de nuit', minToHM(g.gtNuit)],
     ['🔒 Heures sup validées (réglées)', g.gtHSValidees ? '+' + minToHM(g.gtHSValidees) : '—'],
     ['⚠️ Heures sup non validées', g.gtHSNonValidees ? '+' + minToHM(g.gtHSNonValidees) : '—'],
+    ...(g.gtAbsenceCompteMin ? [['🏖️ Absences comptant pour les HS', minToHM(g.gtAbsenceCompteMin)]] : []),
+    ...(g.gtAbsenceNonCompteMin ? [['🤒 Absences ne comptant PAS pour les HS', minToHM(g.gtAbsenceNonCompteMin)]] : []),
     ['🔶 Fériés travaillés', g.gtFerieTravailleJours ? `${g.gtFerieTravailleJours} j.${g.gtHeuresMajorees ? ' (majoration +' + minToHM(g.gtHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
     ['Primes', g.gtPrimes ? g.gtPrimes.toFixed(2) + ' €' : '—'],
     ['Découchages', g.gtDecouchage || '—'],
@@ -9811,7 +9870,10 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         'Durée brute', 'Pause', 'Pointé net', 'Écart planning', 'Écart contrat / HS',
         'Nuit', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Découchage', 'Congé'];
       const nbCols = entetes.length;
-      ws.columns = entetes.map((h, i) => ({ width: i === 0 ? 8 : (i <= 2 ? 12 : (h === 'Congé' ? 20 : 11)) }));
+      // Colonnes B et C élargies : elles servent aussi de support au récapitulatif en bas de page
+      // (labels sur A:B fusionnées, valeurs sur C) — doivent rester assez larges pour ne jamais
+      // tronquer visuellement un libellé un peu long (ex: "📋 Mensualisé (× 52 ÷ 12)").
+      ws.columns = entetes.map((h, i) => ({ width: i === 0 ? 8 : (i === 1 ? 22 : (i === 2 ? 16 : (h === 'Congé' ? 20 : 11))) }));
       const dernCol = String.fromCharCode(64 + nbCols > 90 ? 90 : 64 + nbCols); // sécurité, table reste < 26 col normalement
 
       ws.mergeCells(`A1:${dernCol}1`);
@@ -9955,6 +10017,8 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         ['Total pointé (net)', d.empPointe ? minToHM(d.empPointe) : '—'],
         ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '-') + minToHM(Math.abs(d.ecartTotal)) : '—'],
         ['Écart contrat', d.empSemainesComptees > 0 ? (d.empEcartContrat >= 0 ? '+' : '-') + minToHM(Math.abs(d.empEcartContrat)) : '—'],
+        ...(d.empAbsenceCompteMin ? [['🏖️ Absences comptant pour les HS', minToHM(d.empAbsenceCompteMin) + ' (CP, etc. — incluses dans l\'écart contrat ci-dessus)']] : []),
+        ...(d.empAbsenceNonCompteMin ? [['🤒 Absences ne comptant PAS pour les HS', minToHM(d.empAbsenceNonCompteMin) + ' (maladie, RTT, etc. — jamais incluses ci-dessus)']] : []),
         [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non validées', hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—')],
         ...(montantRegleCetteCloture ? [['🔒 Réglé à cette clôture', `${minToHM(montantRegleCetteCloture)}${anticipeRegleCetteCloture ? ` (dont ${minToHM(reelRegleCetteCloture)} réel + ${minToHM(anticipeRegleCetteCloture)} anticipé)` : ''}`]] : []),
         ['🔶 Fériés travaillés', d.empFerieTravailleJours ? `${d.empFerieTravailleJours} j.${d.empHeuresMajorees ? ' (majoration +' + minToHM(d.empHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
@@ -10032,6 +10096,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
   // Calcule les totaux globaux pour le résumé
   let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPanierNuit = 0, gtPrimes = 0, gtDecouchage = 0, gtHSValidees = 0, gtHSNonValidees = 0, gtFerieTravailleJours = 0, gtHeuresMajorees = 0, gtFerieChomeMin = 0;
+  let gtAbsenceCompteMin = 0, gtAbsenceNonCompteMin = 0;
   let gtPanierJourMensualise = 0, gtPanierNuitMensualise = 0;
 
   // Capture des données par employé pour l'export Excel/CSV (mêmes chiffres que l'écran, aucun
@@ -10051,6 +10116,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     // calcul d'écart proprement dit, qui lui reste toujours exact semaine par semaine).
     const contratMinActuel = getContratMinPourDate(emp, dateKey(new Date()));
     let empPlannifie = 0, empPointe = 0, empNuit = 0, empPanier = 0, empPanierNuit = 0, empPrimes = 0, empDecouchage = 0, empEcartContrat = 0, empSemainesComptees = 0, empFerieTravailleJours = 0, empHeuresMajorees = 0, empFerieChomeMin = 0;
+    // Point 2 : total d'heures d'absence créditées (congé/férié), pour aider à comprendre le
+    // "déficit" affiché en Écart planning/contrat — distingué selon que le type d'absence compte
+    // ou non vers le seuil des heures sup (voir congeCompteVersHS).
+    let empAbsenceCompteMin = 0, empAbsenceNonCompteMin = 0;
     let empPanierJourMensualise = emp.panierMensualiseJour ? nbMoisTouchesPeriode * PANIER_MENSUALISE_PAR_MOIS : 0;
     let empPanierNuitMensualise = emp.panierMensualiseNuit ? nbMoisTouchesPeriode * PANIER_MENSUALISE_PAR_MOIS : 0;
     let weekFerieChomeMin = 0;
@@ -10181,9 +10250,19 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       // si TOUTE la semaine est absente, auquel cas c'est le contrat exact qui prime (voir plus
       // haut) et cette valeur par-jour ne sert alors qu'à titre interne, jamais affichée seule.
       if (pointeMin === 0 && (!!getJoursFeries(d.getFullYear())[dk] || congeInsts.length > 0)) {
-        weekAUnJourAbsence = true;
+        const estFerieJour = !!getJoursFeries(d.getFullYear())[dk];
         const ferieMinJour = calculerFerieMinJour(emp.id, dk);
-        weekPtContrat += ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(dow));
+        const creditMinJour = ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(dow));
+        // Un férié compte toujours ; un congé ne compte que si son type le permet (voir
+        // congeCompteVersHS) — sinon (ex: arrêt maladie) le jour ne contribue à rien du tout, ni
+        // au crédit ni au réel. Suivi séparément pour le récapitulatif, qu'il compte ou non.
+        if (estFerieJour || congeCompteVersHS(congeInsts[0]?.taskId)) {
+          weekAUnJourAbsence = true;
+          weekPtContrat += creditMinJour;
+          empAbsenceCompteMin += creditMinJour;
+        } else {
+          empAbsenceNonCompteMin += creditMinJour;
+        }
       } else {
         weekPtContrat += pointeMin;
         weekPtReel += pointeMin;
@@ -10226,6 +10305,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     gtFerieChomeMin += empFerieChomeMin;
     gtPanierJourMensualise += empPanierJourMensualise; gtPanierNuitMensualise += empPanierNuitMensualise;
     gtFerieTravailleJours += empFerieTravailleJours; gtHeuresMajorees += empHeuresMajorees;
+    gtAbsenceCompteMin += empAbsenceCompteMin; gtAbsenceNonCompteMin += empAbsenceNonCompteMin;
     {
       const moisRecapFinGt = fin.getFullYear() + '-' + String(fin.getMonth() + 1).padStart(2, '0');
       const reglementGt = getReglementMois(emp.id, moisRecapFinGt);
@@ -10400,6 +10480,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       empPanierJourMensualise, empPanierNuitMensualise,
       empEcartContrat, empSemainesComptees, ecartTotal,
       reglementRecap, congesParType, empFerieTravailleJours, empHeuresMajorees, empFerieChomeMin,
+      empAbsenceCompteMin, empAbsenceNonCompteMin,
     });
 
     return `<div style="margin-bottom:28px;">
@@ -10436,7 +10517,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
   // Rend les données capturées disponibles pour l'export Excel/CSV (voir exportRecapPaie()) —
   // toujours en phase avec ce qui vient d'être affiché, y compris les congés par type et le
   // détail global (heures sup validées/non validées calculées juste après).
-  _dernierRecapExport = { donneesExport, debut, fin, colonnesActives, gtPlannifie, gtPointe, gtNuit, gtPanier, gtPanierNuit, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin, gtPanierJourMensualise, gtPanierNuitMensualise };
+  _dernierRecapExport = { donneesExport, debut, fin, colonnesActives, gtPlannifie, gtPointe, gtNuit, gtPanier, gtPanierNuit, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin, gtPanierJourMensualise, gtPanierNuitMensualise, gtAbsenceCompteMin, gtAbsenceNonCompteMin };
 
   // Résumé global
   document.getElementById('rp-summary').innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px;">
