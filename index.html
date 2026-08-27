@@ -2158,7 +2158,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.87.5';
+const APP_VERSION = '1.88.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2189,6 +2189,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.88.0', items: [
+    'Récapitulatif Excel par employé enrichi de 4 nouvelles lignes : "📋 Contrat" (ex: 35h/semaine), "📋 Mensualisé" (35h × 52 ÷ 12 = 151,67h/mois), "🧭 Méthode de clôture" (Anticipation/Décalage, uniquement pour les exports de clôture) et "🔒 Réglé à cette clôture" (montant, avec le détail réel/anticipé quand applicable) — appliqué au Récap paie classique, aux simulations et aux rapports finaux des deux méthodes de clôture',
+  ] },
   { v: '1.87.5', items: [
     'Ajout de l\'avertissement (promis dès la conception du chantier méthodes de clôture, oublié en route) affiché quand la méthode choisie diffère de celle de la dernière clôture — avec le détail des conséquences réelles (semaines anticipées privées de rapport d\'écart si on bascule vers Décalage). Calculé dès l\'ouverture de la fenêtre, pas seulement au clic',
   ] },
@@ -8911,7 +8914,7 @@ async function rendreApercuClotureDecalage() {
 
 // Génère et télécharge Excel + CSV — mêmes générateurs que le Récap paie habituel, juste nourris
 // avec les données réel+anticipé de la Clôture Paie (voir construireDonneesCloturePaie).
-async function genererFichiersCloturePaie(mois, dateClotureKey, parEmployeAnticipe, regul, estSimulation) {
+async function genererFichiersCloturePaie(mois, dateClotureKey, parEmployeAnticipe, regul, estSimulation, reglementsAjoutesACetteCloture, reglementsAnticipeHS) {
   const emps = getEmployesTries();
   const { donnees, contexteGlobal, periode } = await construireDonneesCloturePaie(mois, dateClotureKey, emps, parEmployeAnticipe);
   const titre = (estSimulation ? '⚠️ SIMULATION — ' : '') + `Clôture Paie — ${mois}` + (estSimulation ? ' — rien n\'est enregistré' : '');
@@ -8920,7 +8923,7 @@ async function genererFichiersCloturePaie(mois, dateClotureKey, parEmployeAntici
   // La régularisation du mois précédent (si applicable) est intégrée directement dans l'onglet de
   // chaque employé concerné (Excel) et juste après ses lignes (CSV) — plus de fichier séparé à
   // consulter à part, moins de risque de l'oublier.
-  const buffer = await construireClasseurExcel(donnees, 'both', { contexteGlobal, periode, titre, regul });
+  const buffer = await construireClasseurExcel(donnees, 'both', { contexteGlobal, periode, titre, regul, methode: 'anticipation', reglementsAjoutesACetteCloture, reglementsAnticipeHS });
   downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${nomFichier}.xlsx`);
   downloadBlob(new Blob(['\uFEFF' + construireCSV(donnees, regul)], { type: 'text/csv;charset=utf-8' }), `${nomFichier}.csv`);
 }
@@ -8930,7 +8933,22 @@ async function telechargerSimulationCloturePaie() {
   if (!apercu || !apercu.joursAAnticiper) { notify('Calcule d\'abord l\'aperçu', 'warning'); return; }
   notify('Génération du fichier…');
   try {
-    await genererFichiersCloturePaie(apercu.mois, apercu.joursAAnticiper[0], apercu.parEmploye, window._cpRegul, true);
+    // Reproduit exactement le même calcul de répartition réel/anticipé que validerCloturePaie(),
+    // à partir des champs actuellement saisis à l'écran — la clôture n'étant pas encore
+    // enregistrée à ce stade (simulation), rien n'existe encore sur un objet cloture à lire.
+    const reglementsAjoutees = {}, reglementsAnticipe = {};
+    db.employes.forEach(emp => {
+      const inputNet = document.getElementById(`cp-reglement-net-${emp.id}`);
+      const hNet = inputNet ? parseInt(inputNet.value, 10) || 0 : 0;
+      if (hNet <= 0) return;
+      const montantMin = hNet * 60;
+      const soldes = window._cpSoldesReglementAnticipation?.[emp.id] || { soldeReel: 0, soldeAnticipe: 0 };
+      const montantSourceReel = Math.max(0, Math.min(montantMin, soldes.soldeReel));
+      const montantSourceAnticipe = montantMin - montantSourceReel;
+      reglementsAjoutees[emp.id] = montantMin;
+      if (montantSourceAnticipe > 0) reglementsAnticipe[emp.id] = montantSourceAnticipe;
+    });
+    await genererFichiersCloturePaie(apercu.mois, apercu.joursAAnticiper[0], apercu.parEmploye, window._cpRegul, true, reglementsAjoutees, reglementsAnticipe);
   } catch (e) {
     console.error('Simulation clôture paie:', e);
     notify('Échec de la génération — réessaie', 'danger');
@@ -8950,7 +8968,15 @@ async function telechargerSimulationClotureDecalage() {
     const { donnees: donneesExport, contexteGlobal } = await construireDonneesClotureDecalage(debut, fin, emps);
     const titre = `⚠️ SIMULATION — Clôture Paie (Décalage) — du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} — rien n'est enregistré`;
     const nomFichier = `simulation-cloture-decalage-${debut}-au-${fin}`;
-    const buffer = await construireClasseurExcel(donneesExport, 'both', { contexteGlobal, periode: { debut: isoToDate(debut), fin: isoToDate(fin) }, titre });
+    // La méthode Décalage n'anticipe jamais rien — un règlement ici ne peut jamais venir d'une
+    // part anticipée, seulement du réel (voir rendreApercuClotureDecalage).
+    const reglementsAjoutees = {};
+    db.employes.forEach(emp => {
+      const input = document.getElementById(`cp-decalage-reglement-${emp.id}`);
+      const h = input ? parseInt(input.value, 10) || 0 : 0;
+      if (h > 0) reglementsAjoutees[emp.id] = h * 60;
+    });
+    const buffer = await construireClasseurExcel(donneesExport, 'both', { contexteGlobal, periode: { debut: isoToDate(debut), fin: isoToDate(fin) }, titre, methode: 'decalage', reglementsAjoutesACetteCloture: reglementsAjoutees });
     downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${nomFichier}.xlsx`);
     downloadBlob(new Blob(['\uFEFF' + construireCSV(donneesExport)], { type: 'text/csv;charset=utf-8' }), `${nomFichier}.csv`);
     notify('Fichiers de simulation générés — rien n\'a été enregistré');
@@ -9069,7 +9095,7 @@ async function validerCloturePaie() {
   // distinction Réel/Anticipé et la régularisation intégrée — comme demandé, à chaque vraie
   // clôture, sans action supplémentaire de l'admin.
   try {
-    await genererFichiersCloturePaie(mois, apercu.joursAAnticiper[0], apercu.parEmploye, regul, false);
+    await genererFichiersCloturePaie(mois, apercu.joursAAnticiper[0], apercu.parEmploye, regul, false, cloture.reglementsAjoutesACetteCloture, cloture.reglementsAnticipeHS);
     notify('Fichiers de clôture générés');
   } catch (e) {
     console.error('Export clôture paie:', e);
@@ -9158,7 +9184,7 @@ async function validerClotureDecalage() {
     const { donnees: donneesExport, contexteGlobal } = await construireDonneesClotureDecalage(debut, fin, emps);
     const titre = `Clôture Paie (Décalage) — du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))}`;
     const nomFichier = `cloture-decalage-${debut}-au-${fin}`;
-    const buffer = await construireClasseurExcel(donneesExport, 'both', { contexteGlobal, periode: { debut: isoToDate(debut), fin: isoToDate(fin) }, titre });
+    const buffer = await construireClasseurExcel(donneesExport, 'both', { contexteGlobal, periode: { debut: isoToDate(debut), fin: isoToDate(fin) }, titre, methode: 'decalage', reglementsAjoutesACetteCloture: cloture.reglementsAjoutesACetteCloture });
     downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${nomFichier}.xlsx`);
     downloadBlob(new Blob(['\uFEFF' + construireCSV(donneesExport)], { type: 'text/csv;charset=utf-8' }), `${nomFichier}.csv`);
     notify('Fichiers de clôture générés');
@@ -9913,12 +9939,24 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
       ws.getCell(`A${rr}`).font = { bold: true, size: 12, color: { argb: XLS_COULEURS.enteteTxt } };
       ws.getCell(`A${rr}`).fill = xlsFill(XLS_COULEURS.entete);
       rr++;
+      // Détail du règlement fait À CETTE clôture précisément (opts.reglementsAnticipeHS, distinct
+      // du total cumulé d.reglementRecap qui peut inclure un règlement fait à un autre moment) —
+      // uniquement disponible pour un export Clôture Paie, jamais pour un Récap paie classique.
+      const montantRegleCetteCloture = opts.reglementsAjoutesACetteCloture?.[d.emp.id];
+      const anticipeRegleCetteCloture = opts.reglementsAnticipeHS?.[d.emp.id] || 0;
+      const reelRegleCetteCloture = montantRegleCetteCloture ? montantRegleCetteCloture - anticipeRegleCetteCloture : 0;
       const recapLignes = [
+        // Contrat + mensualisation légale (5×52÷12) — un simple rappel informatif, jamais utilisé
+        // pour un calcul (le vrai calcul reste toujours semaine par semaine, voir Écart contrat).
+        ['📋 Contrat', `${(d.contratMin / 60).toFixed(2).replace(/\.00$/, '')}h/semaine`],
+        ['📋 Mensualisé (× 52 ÷ 12)', `${(d.contratMin / 60 * 52 / 12).toFixed(2)}h/mois`],
+        ...(opts.methode ? [['🧭 Méthode de clôture', opts.methode === 'decalage' ? '⏭️ Décalage' : '📊 Anticipation']] : []),
         ['Total planifié', minToHM(d.empPlannifie) + (d.empFerieChomeMin ? ` (dont ${minToHM(d.empFerieChomeMin)} férié)` : '')],
         ['Total pointé (net)', d.empPointe ? minToHM(d.empPointe) : '—'],
         ['Écart planning', d.ecartTotal !== null ? (d.ecartTotal >= 0 ? '+' : '-') + minToHM(Math.abs(d.ecartTotal)) : '—'],
         ['Écart contrat', d.empSemainesComptees > 0 ? (d.empEcartContrat >= 0 ? '+' : '-') + minToHM(Math.abs(d.empEcartContrat)) : '—'],
         [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non validées', hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—')],
+        ...(montantRegleCetteCloture ? [['🔒 Réglé à cette clôture', `${minToHM(montantRegleCetteCloture)}${anticipeRegleCetteCloture ? ` (dont ${minToHM(reelRegleCetteCloture)} réel + ${minToHM(anticipeRegleCetteCloture)} anticipé)` : ''}`]] : []),
         ['🔶 Fériés travaillés', d.empFerieTravailleJours ? `${d.empFerieTravailleJours} j.${d.empHeuresMajorees ? ' (majoration +' + minToHM(d.empHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
         ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
         ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
