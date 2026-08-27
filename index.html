@@ -2157,7 +2157,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.87.3';
+const APP_VERSION = '1.87.4';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2188,6 +2188,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.87.4', items: [
+    'Le Compteur & modulation devient lecture seule, comme prévu depuis le début du chantier des méthodes de clôture : les boutons "Régler" par employé et "📅 Clôture mensuelle" sont retirés (le règlement se fait désormais uniquement depuis la fenêtre Clôture Paie). Un repère "🔒 Xh" reste affiché, non cliquable, quand un règlement a déjà été fait ce mois-ci',
+  ] },
   { v: '1.87.3', items: [
     'Nouveau : bouton 📜 sur chaque carte du Compteur & modulation, ouvrant l\'historique complet et chronologique des mouvements de cet employé (solde initial, heures anticipées à chaque clôture, écarts de régularisation, règlements) avec le solde après chaque ligne — construit uniquement à partir des données déjà enregistrées, sans nouveau calcul coûteux',
     'Les règlements sont lus une seule fois depuis leur unique source de vérité (un seul enregistrement par employé/mois), pour ne jamais risquer de compter deux fois un règlement fait via le Compteur puis intégré à une clôture ultérieure',
@@ -9252,10 +9255,6 @@ function initCompteurModulation() {
         <label style="visibility:hidden;">_</label>
         <button class="btn btn-primary btn-sm" onclick="calculerCompteurModulation()">⚖️ Recalculer</button>
       </div>
-      <div class="form-group" style="margin:0;">
-        <label style="visibility:hidden;">_</label>
-        <button class="btn btn-secondary btn-sm" onclick="ouvrirClotureMensuelle(_dernieresCartesCompteur)">📅 Clôture mensuelle</button>
-      </div>
     `;
     wrap.insertBefore(bar, wrap.firstChild);
   }
@@ -9468,10 +9467,12 @@ function calculerCompteurModulation() {
       const infoReglement = c.totalRegle > 0 ? ` · réglé à ce jour ${minToHM(c.totalRegle)}` : '';
       const infoContrat = c.emp.dateDebutContrat ? ` · contrat depuis le ${new Date(c.emp.dateDebutContrat).toLocaleDateString('fr-FR')}` : '';
       const infoNeutralise = c.jourNeutralise > 0 ? ` · ${c.jourNeutralise} j. férié/congé neutralisé${c.jourNeutralise > 1 ? 's' : ''}` : '';
-      const actionBtn = c.total > 0
-        ? (c.reglementCeMois?.verrouille
-            ? `<button class="btn btn-secondary btn-sm" style="padding:3px 10px;font-size:11px;" onclick="ouvrirReglementModal('${c.emp.id}', ${c.total})" title="Réglé le ${new Date(c.reglementCeMois.dateReglement).toLocaleDateString('fr-FR')}">🔒 ${minToHM(c.reglementCeMois.montantMin)}</button>`
-            : `<button class="btn btn-primary btn-sm" style="padding:3px 10px;font-size:11px;" onclick="ouvrirReglementModal('${c.emp.id}', ${c.total})">Régler</button>`)
+      // Le Compteur & modulation est désormais en LECTURE SEULE — plus de bouton "Régler" ici,
+      // le règlement se fait uniquement depuis la fenêtre Clôture Paie. On garde juste un repère
+      // informatif si un règlement a déjà été fait ce mois-ci (jamais cliquable), pour ne pas
+      // perdre cette information visible d'un coup d'œil.
+      const infoBadge = c.reglementCeMois?.verrouille
+        ? `<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;" title="Réglé le ${new Date(c.reglementCeMois.dateReglement).toLocaleDateString('fr-FR')}">🔒 ${minToHM(c.reglementCeMois.montantMin)}</span>`
         : '';
       return `<div style="display:flex;align-items:center;gap:14px;padding:10px 14px;background:var(--surface2);border-radius:8px;">
         <div style="min-width:150px;max-width:150px;font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${c.emp.prenom} ${c.emp.nom}">${c.emp.nom} ${c.emp.prenom}</div>
@@ -9481,7 +9482,7 @@ function calculerCompteurModulation() {
         <div style="min-width:78px;text-align:right;font-size:17px;font-weight:800;color:${couleur};font-family:var(--mono);">${positif ? '+' : '-'}${minToHM(Math.abs(c.total))}</div>
         <div style="min-width:150px;font-size:11px;color:var(--text-dim);white-space:nowrap;" title="${c.emp.soldeInitial ? `dont solde initial ${c.emp.soldeInitial >= 0 ? '+' : ''}${c.emp.soldeInitial}h` : ''}${infoReglement}${infoContrat}${infoNeutralise}">${minToHM(c.contratMin)}/sem · ${c.semainesComptees} sem.${c.emp.soldeInitial ? ' · solde init.' : ''}${infoReglement}${infoContrat}${infoNeutralise}</div>
         <div style="min-width:90px;text-align:right;display:flex;gap:6px;justify-content:flex-end;">
-          ${actionBtn}
+          ${infoBadge}
           <button class="btn btn-secondary btn-sm" style="padding:3px 8px;font-size:11px;" onclick="ouvrirHistoriqueCompteur('${c.emp.id}')" title="Voir l'historique complet des mouvements">📜</button>
         </div>
       </div>`;
