@@ -2170,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.98.0';
+const APP_VERSION = '1.99.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2201,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.99.0', items: [
+    'Second garde-fou en Validation (suite à la découverte du 28/08 sur la Tournée 603 de Laura NEGRIER) : cliquer "Valider sur planning" sur une anomalie hors tolérance demande désormais une confirmation explicite rappelant l\'heure réellement pointée qui sera écartée au profit de l\'heure planifiée, pour éviter qu\'un clic malencontreux (bouton juste à côté de "Valider l\'heure pointée") n\'écarte silencieusement du temps réellement travaillé',
+  ] },
   { v: '1.98.0', items: [
     'Correction importante côté Pointeuse (découverte le 28/08 avec Stéphane BEAUFILS, Distribution 22h→06h30 sans tâche de continuation le lendemain) : la débauche d\'un service à cheval sur minuit pointée le lendemain matin s\'écrivait à tort sous le jour de l\'EMBAUCHE (la veille) au lieu du jour réel du pointage — invisible pour l\'admin, qui la cherche au bon jour (Pointages ET Validation affichaient "non pointée" alors que l\'employé avait bien pointé). Fichier Pointeuse.html à redéployer avec ce correctif',
   ] },
@@ -12439,6 +12442,17 @@ async function validerAction(idx, mode) {
   const a = window._anomalies[idx];
   if (!a) return;
   const heurePrevue = a.typePointage === 'embauche' ? minToTime(a.inst.debut) : minToTime(a.inst.fin);
+
+  // Garde-fou : "Valider sur planning" sur une anomalie hors tolérance écarte délibérément l'heure
+  // réellement pointée au profit de l'heure planifiée — okay si c'est un choix voulu, dangereux si
+  // c'est un clic malencontreux (le bouton juste à côté de "Valider l'heure pointée"). Découvert le
+  // 28/08 sur la Tournée 603 de Laura NEGRIER : 17 min réellement pointées écartées sans que
+  // personne ne s'en aperçoive. On ne bloque rien, on demande juste une confirmation explicite qui
+  // rappelle noir sur blanc ce qui va être écarté.
+  if (mode === 'planning' && a.kind === 'hors_tolerance' && a.evt?.heure && a.evt.heure !== heurePrevue) {
+    const confirmMsg = `⚠️ L'heure réellement pointée (${a.evt.heure}) sera écartée au profit de l'heure planifiée (${heurePrevue}) — l'écart ne sera pas payé. Confirmer ?`;
+    if (!confirm(confirmMsg)) return;
+  }
 
   let heureRetenue, modeValidation, commentaireAdmin = null;
   if (mode === 'reel') { heureRetenue = a.evt.heure; modeValidation = 'admin_reel'; }
