@@ -2170,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.94.0';
+const APP_VERSION = '1.96.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2201,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.96.0', items: [
+    'Nouveau garde-fou (découverte du 24/08 avec Laura NEGRIER : Tournée 01 validée jusqu\'à 18:00 et Tournée 603 validée de 12:00 à 18:00 le même jour — 6h comptées deux fois, gonflant la Durée brute à tort) : la Validation d\'anomalie ET la modification manuelle d\'un pointage (écran Pointages) vérifient désormais si la plage retenue résultante chevauche celle d\'une autre tournée du même jour pour le même employé, et demandent une confirmation explicite avant d\'enregistrer si c\'est le cas',
+  ] },
+  { v: '1.95.0', items: [
+    'Correction du Récap paie (découverte le 17/08 sur Laura NEGRIER) : la colonne "Pause" et la "Durée brute" ignoraient l\'écart réel entre deux tournées distinctes dans la même journée (ex: 45 min entre Tournée 01 et Tournée 603) — une seconde implémentation, dupliquée et incomplète, de ce calcul de pause était utilisée à la place de celle, déjà correcte, partagée avec la Clôture Paie. Durée brute et Pause reflètent maintenant systématiquement le même calcul partout dans l\'appli',
+  ] },
   { v: '1.94.0', items: [
     'Correction importante (découverte avec la Tournée 603 de Laura) : dans le calcul de la durée réellement pointée (Récap paie et Clôture Paie), un pointage hors tolérance encore EN ATTENTE de validation admin (débauche pointée à 18:02, écart de 17 min au-delà de la tolérance) était confondu avec une ABSENCE totale de pointage, et retombait silencieusement sur l\'heure planifiée (17:45) — perdant l\'écart pointé sans aucune alerte tant que l\'admin n\'avait pas validé. Le calcul reconnaît désormais le pointage même sans heure retenue, et utilise l\'heure réellement pointée en provisoire jusqu\'à validation',
   ] },
@@ -10447,9 +10453,11 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       // attribuées au jour de départ, disparaissant de la semaine calendaire suivante. Valeur de
       // repli uniquement (voir plus bas) : dès qu'un pointage réel existe, c'est LUI qui fait foi.
       const nuitPlanMin = insts.reduce((s, i) => s + preMinuitNuitMinutes(i), 0) + instsHierCross.reduce((s, i) => s + postMinuitNuitMinutes(i), 0);
-      // Pause prévue (donc décomptée pour calculer la durée retenue) — affichée pour aider la
-      // compréhension des écarts entre planifié/pointé et durée retenue.
-      const pauseJourMin = insts.reduce((s, i) => s + prePauseMinutes(i), 0) + instsHierCross.reduce((s, i) => s + postPauseMinutes(i), 0);
+      // Pause du jour : réutilise TOUJOURS celle calculée par construireEmbDebInfo (voir plus bas),
+      // jamais une version recalculée séparément ici — une seconde implémentation avait dérivé
+      // (bug découvert le 28/08 sur Laura NEGRIER, 17/08 : elle omettait la boucle d'ajout du gap
+      // entre deux tournées distinctes, ex. 45 min entre Tournée 01 et Tournée 603, faisant
+      // silencieusement disparaître cette pause de la colonne Pause ET de la Durée brute).
       const panierNuitLegal = calculerPaniersJourNuit(emp.id, dk, pointagesParAnnee, splitSeuil, false);
       const panierJour = panierNuitLegal.panierJour;
       const panierNuit = panierNuitLegal.panierNuit;
@@ -10485,7 +10493,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       // Fonction partagée avec la Clôture Paie (voir construireEmbDebInfo) — ne recalcule jamais
       // cette logique de chaînage en double.
       const embDebInfo = construireEmbDebInfo(emp.id, dk, pointagesParAnnee, splitSeuil);
-      const { embInfo, debInfo, ecartEmb, ecartDeb } = embDebInfo;
+      const { embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin } = embDebInfo;
 
       // Flush total semaine si on change de semaine
       if (weekKey !== null && dayWeekKey !== weekKey) {
@@ -11969,6 +11977,56 @@ function trouverEvenementFantome(empId, dk, type, evtsJour) {
     .sort((a, b) => (b.ts || 0) - (a.ts || 0))[0] || null;
 }
 
+// Garde-fou anti double-comptage entre deux tournées du même jour (découverte du 24/08 avec Laura
+// NEGRIER : la Tournée 01 avait été validée jusqu'à 18:00 alors que la Tournée 603, elle, allait
+// de 12:00 à 18:00 — les deux plages RETENUES se chevauchaient sur 6h, doublant silencieusement ce
+// temps de travail dans le Récap paie). N'empêche rien tout seul — se contente de calculer les
+// plages retenues de chaque service (tournée) distinct du jour, avec la valeur EN COURS DE
+// VALIDATION substituée à celle déjà en base (l'admin n'a pas encore cliqué "confirmer" à ce
+// stade), et retourne les paires qui se chevauchent pour que l'appelant avertisse avant d'écrire.
+// evtsJour DOIT contenir tous les événements du jour (y compris ceux pas encore résolus) — un
+// événement dont la clé correspond à overrideEvtKey voit sa valeur retenue remplacée par
+// overrideHeureRetenue ; si overrideEvtKey est null (cas "oubli", l'événement n'existe pas encore
+// en base), un événement virtuel est ajouté à partir de overrideType/overrideInstId.
+function detecterChevauchementsRetenue(empId, dk, evtsJour, splitSeuil, overrideEvtKey, overrideHeureRetenue, overrideType, overrideInstId) {
+  const insts = (db.planning[empId]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge).sort((a, b) => a.debut - b.debut);
+  if (insts.length < 2) return [];
+  const services = [[insts[0]]];
+  for (let i = 1; i < insts.length; i++) {
+    const gap = insts[i].debut - services[services.length - 1].at(-1).fin;
+    if (gap > splitSeuil) services.push([insts[i]]);
+    else services[services.length - 1].push(insts[i]);
+  }
+  if (services.length < 2) return [];
+
+  let evts = evtsJour || [];
+  if (overrideEvtKey === null && overrideType && overrideInstId) {
+    evts = [...evts, { type: overrideType, instId: overrideInstId, heureRetenue: overrideHeureRetenue, key: '__pending__' }];
+  }
+  const heureEffective = e => e.key === overrideEvtKey ? (overrideHeureRetenue || e.heureRetenue || e.heure) : (e.heureRetenue || e.heure);
+
+  const intervalles = services.map(srv => {
+    const prem = srv[0], dern = srv[srv.length - 1];
+    const embEvt = evts.find(e => e.instId === prem.id && e.type === 'embauche');
+    const debEvt = [...evts].reverse().find(e => e.instId === dern.id && e.type === 'debauche');
+    if (!embEvt || !debEvt) return null;
+    const heureEmb = heureEffective(embEvt), heureDeb = heureEffective(debEvt);
+    if (!heureEmb || !heureDeb) return null;
+    let d = timeToMin(heureEmb), f = timeToMin(heureDeb);
+    if (f <= d) f += 1440;
+    return { d, f, taskNom: db.tasks.find(t => t.id === prem.taskId)?.nom || 'Tâche', label: `${heureEmb}–${heureDeb}` };
+  }).filter(Boolean);
+
+  const chevauchements = [];
+  for (let i = 0; i < intervalles.length; i++) {
+    for (let j = i + 1; j < intervalles.length; j++) {
+      const a = intervalles[i], b = intervalles[j];
+      if (a.d < b.f && b.d < a.f) chevauchements.push([a, b]);
+    }
+  }
+  return chevauchements;
+}
+
 function scanAnomalies(nbJours, callback) {
   if (!fbDb) { callback([]); return; }
   let jours = Array.from({ length: nbJours }, (_, i) => dateKey(addDays(new Date(), -i)));
@@ -12174,14 +12232,30 @@ function openEditPointage(rowIdx, type) {
   openModal('modal-edit-pointage');
 }
 
-function saveEditPointage() {
+async function saveEditPointage() {
   if (!epContext || !fbDb) return;
   const heure = document.getElementById('ep-heure').value;
   if (!heure) { notify('Renseigne une heure valide', 'warning'); return; }
   const commentaire = document.getElementById('ep-commentaire').value.trim() || null;
   const year = isoToDate(epContext.dk).getFullYear();
   const empNom = getEmpById(epContext.empId);
-  fbDb.ref(`pointages/${year}/${epContext.dk}/${epContext.empId}/evenements/${epContext.evtKey}`).update({
+  const path = `pointages/${year}/${epContext.dk}/${epContext.empId}/evenements`;
+
+  try {
+    const snap = await fbDb.ref(path).once('value');
+    const evtsJour = Object.entries(snap.val() || {}).map(([key, v]) => ({ ...v, key }));
+    const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
+    const chevauchements = detecterChevauchementsRetenue(epContext.empId, epContext.dk, evtsJour, splitSeuil, epContext.evtKey, heure);
+    if (chevauchements.length) {
+      const [x, y] = chevauchements[0];
+      const confirmMsg = `⚠️ Cette modification ferait chevaucher deux tournées de la même journée :\n\n"${x.taskNom}" (${x.label}) et "${y.taskNom}" (${y.label})\n\nLes heures en commun seraient comptées deux fois dans le Récap paie. Enregistrer quand même ?`;
+      if (!confirm(confirmMsg)) return;
+    }
+  } catch (err) {
+    console.error('Vérification chevauchement :', err);
+  }
+
+  fbDb.ref(`${path}/${epContext.evtKey}`).update({
     heureRetenue: heure, commentaireAdmin: commentaire, modeValidation: 'admin_modifie', statut: 'valide',
   }).then(() => {
     logAudit('Pointage modifié', `${empNom ? empNom.prenom + ' ' + empNom.nom : epContext.empId} — ${epContext.dk} — heure retenue : ${heure}${commentaire ? ' — ' + commentaire : ''}`);
@@ -12345,8 +12419,12 @@ function utiliserFantome(idx, heure) {
 }
 
 // Écrit la décision de l'admin dans Firebase : met à jour l'événement existant (cas hors tolérance)
-// ou en crée un nouveau (cas oubli, puisqu'il n'y avait aucun pointage à corriger).
-function validerAction(idx, mode) {
+// ou en crée un nouveau (cas oubli, puisqu'il n'y avait aucun pointage à corriger). Avant d'écrire,
+// vérifie que la plage RETENUE résultante ne chevauche pas celle d'une autre tournée du même jour
+// pour le même employé (garde-fou ajouté après la découverte du 24/08 avec Laura NEGRIER — voir
+// detecterChevauchementsRetenue) : si un chevauchement est détecté, l'admin doit le confirmer
+// explicitement avant que la validation ne parte en base, jamais en silence.
+async function validerAction(idx, mode) {
   const a = window._anomalies[idx];
   if (!a) return;
   const heurePrevue = a.typePointage === 'embauche' ? minToTime(a.inst.debut) : minToTime(a.inst.fin);
@@ -12359,6 +12437,25 @@ function validerAction(idx, mode) {
 
   const year = isoToDate(a.dk).getFullYear();
   const path = `pointages/${year}/${a.dk}/${a.emp.id}/evenements`;
+
+  try {
+    const snap = await fbDb.ref(path).once('value');
+    const evtsJour = Object.entries(snap.val() || {}).map(([key, v]) => ({ ...v, key }));
+    const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
+    const chevauchements = detecterChevauchementsRetenue(
+      a.emp.id, a.dk, evtsJour, splitSeuil,
+      a.evt ? a.evt.key : null, heureRetenue, a.typePointage, a.inst.id
+    );
+    if (chevauchements.length) {
+      const [x, y] = chevauchements[0];
+      const confirmMsg = `⚠️ Cette validation ferait chevaucher deux tournées de la même journée :\n\n"${x.taskNom}" (${x.label}) et "${y.taskNom}" (${y.label})\n\nLes heures en commun seraient comptées deux fois dans le Récap paie. Valider quand même ?`;
+      if (!confirm(confirmMsg)) return;
+    }
+  } catch (err) {
+    // Une erreur de lecture ne doit jamais bloquer la validation elle-même — le garde-fou est un
+    // filet de sécurité, pas une condition préalable obligatoire.
+    console.error('Vérification chevauchement :', err);
+  }
 
   const writePromise = a.evt
     ? fbDb.ref(`${path}/${a.evt.key}`).update({ statut: 'valide', modeValidation, heureRetenue, commentaireAdmin })
