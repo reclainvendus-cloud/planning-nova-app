@@ -2170,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.93.0';
+const APP_VERSION = '1.94.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2201,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.94.0', items: [
+    'Correction importante (découverte avec la Tournée 603 de Laura) : dans le calcul de la durée réellement pointée (Récap paie et Clôture Paie), un pointage hors tolérance encore EN ATTENTE de validation admin (débauche pointée à 18:02, écart de 17 min au-delà de la tolérance) était confondu avec une ABSENCE totale de pointage, et retombait silencieusement sur l\'heure planifiée (17:45) — perdant l\'écart pointé sans aucune alerte tant que l\'admin n\'avait pas validé. Le calcul reconnaît désormais le pointage même sans heure retenue, et utilise l\'heure réellement pointée en provisoire jusqu\'à validation',
+  ] },
   { v: '1.93.0', items: [
     'Correction importante (découverte avec Laura NEGRIER, 2 tournées distinctes dans la journée) : un pointage intérieur manquant (débauche de la 1ère tournée, ou embauche de la 2ème) faisait perdre TOUTE la tournée concernée, plutôt que de se rabattre sur son horaire prévu — jusqu\'à faire disparaître des heures entières d\'une journée. Chaque service se rabat désormais sur le prévu uniquement pour le côté qui manque réellement, jamais les deux',
     'La pause affichée entre deux tournées reflète maintenant l\'écart RÉEL entre elles (calculé, jamais figé) — qu\'il soit de 45 minutes, de 3 heures ou de toute autre durée, et qu\'il y ait ou non un pointage intérieur pour la mesurer précisément',
@@ -7186,10 +7189,15 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
     const evtsHier = Object.values(pointagesParAnnee[dkHier.slice(0, 4)]?.[dkHier]?.[empId]?.evenements || {});
     const premiereService = instsHierCross[0];
     const derniereService = instsFusionnees.length ? instsFusionnees[instsFusionnees.length - 1] : instsHierCross[instsHierCross.length - 1];
-    const embEvt = evtsHier.find(e => e.type === 'embauche' && e.instId === premiereService.id && e.heureRetenue);
-    const debEvt = [...evts].reverse().find(e => e.type === 'debauche' && e.instId === derniereService.id && e.heureRetenue);
+    // On matche l'événement par instId/type SEUL, sans exiger heureRetenue — un pointage hors
+    // tolérance en attente de validation admin (statut 'attente', heureRetenue encore null) est un
+    // événement bien réel, pas une absence de pointage. Le confondre avec une absence totale ferait
+    // retomber silencieusement sur l'heure planifiée, perdant l'écart pointé tant que l'admin n'a
+    // pas validé (voir découverte Tournée 603 de Laura : 18:02 pointé, 17:45 planifié retenu à tort).
+    const embEvt = evtsHier.find(e => e.type === 'embauche' && e.instId === premiereService.id);
+    const debEvt = [...evts].reverse().find(e => e.type === 'debauche' && e.instId === derniereService.id);
     if (embEvt && debEvt) {
-      let dMin = timeToMin(embEvt.heureRetenue), fMin = timeToMin(debEvt.heureRetenue);
+      let dMin = timeToMin(embEvt.heureRetenue || embEvt.heure), fMin = timeToMin(debEvt.heureRetenue || debEvt.heure);
       if (fMin <= dMin) fMin += 1440;
       const pauseApres = instsHierCross.reduce((s, i) => s + postPauseMinutes(i), 0)
         + instsFusionnees.reduce((s, i) => s + (i.pauseDuree || 0), 0);
@@ -7237,11 +7245,13 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
           curInst = derniereSuiv;
           curDk = dkSuiv;
         }
-        const embEvt2 = evts.find(e => e.instId === prem.id && e.type === 'embauche' && e.heureRetenue);
+        // Voir note plus haut (bloc chaînage veille) : matching par instId/type seul, sans exiger
+        // heureRetenue, pour ne pas confondre "en attente de validation" avec "jamais pointé".
+        const embEvt2 = evts.find(e => e.instId === prem.id && e.type === 'embauche');
         const evtsFinales = curDk === dk ? evts : Object.values(pointagesParAnnee[curDk.slice(0, 4)]?.[curDk]?.[empId]?.evenements || {});
-        const debEvt2 = [...evtsFinales].reverse().find(e => e.instId === curInst.id && e.type === 'debauche' && e.heureRetenue);
+        const debEvt2 = [...evtsFinales].reverse().find(e => e.instId === curInst.id && e.type === 'debauche');
         if (embEvt2 && debEvt2) {
-          let dMin2 = timeToMin(embEvt2.heureRetenue), fMin2 = timeToMin(debEvt2.heureRetenue);
+          let dMin2 = timeToMin(embEvt2.heureRetenue || embEvt2.heure), fMin2 = timeToMin(debEvt2.heureRetenue || debEvt2.heure);
           if (fMin2 <= dMin2) fMin2 += 1440;
           if (curDk === dk) {
             const pauseTotaleChaine = chaine.reduce((s, i) => s + (i.pauseDuree || 0), 0);
@@ -7261,18 +7271,26 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
         return;
       }
 
-      const embEvt = evts.find(e => e.instId === prem.id && e.type === 'embauche' && e.heureRetenue);
-      const debEvt = [...evts].reverse().find(e => e.instId === dern.id && e.type === 'debauche' && e.heureRetenue);
-      // Repli sur l'heure PRÉVUE uniquement pour le côté manquant — jamais les deux à la fois
-      // silencieusement, et jamais tout le service perdu faute d'un seul pointage (voir la
-      // découverte du 27/08 avec Laura NEGRIER : deux tournées bien distinctes dans la journée,
-      // dont les pointages intérieurs manquent régulièrement puisqu'elle ne repasse pas au dépôt
-      // entre les deux — perdre toute la tournée faute d'un seul pointage était une vraie perte
-      // d'heures). Comportement cohérent avec le reste de l'appli : un jour sans AUCUN pointage
-      // retombe déjà sur le planning (voir calculerReelPourRegularisation) — ici, c'est le même
-      // principe appliqué à l'échelle d'un service au lieu du jour entier.
-      let dMin = embEvt ? timeToMin(embEvt.heureRetenue) : prem.debut;
-      let fMin = debEvt ? timeToMin(debEvt.heureRetenue) : dern.fin;
+      // Matching par instId/type SEUL, sans exiger heureRetenue — sinon un pointage hors tolérance
+      // en attente de validation admin (statut 'attente', heureRetenue encore null) est confondu
+      // avec une absence totale de pointage, et retombe silencieusement sur l'heure PLANIFIÉE au
+      // lieu de l'heure réellement pointée (voir Tournée 603 de Laura, découverte du 28/08 : 18:02
+      // pointé à la débauche, 17:45 planifié retenu à tort — 17 min perdues sans aucune alerte,
+      // alors que le pointage existait bel et bien, juste pas encore validé côté admin).
+      const embEvt = evts.find(e => e.instId === prem.id && e.type === 'embauche');
+      const debEvt = [...evts].reverse().find(e => e.instId === dern.id && e.type === 'debauche');
+      // Repli sur l'heure PRÉVUE uniquement pour le côté vraiment manquant (aucun événement du
+      // tout) — jamais les deux à la fois silencieusement, et jamais tout le service perdu faute
+      // d'un seul pointage (voir la découverte du 27/08 avec Laura NEGRIER : deux tournées bien
+      // distinctes dans la journée, dont les pointages intérieurs manquent régulièrement puisqu'elle
+      // ne repasse pas au dépôt entre les deux — perdre toute la tournée faute d'un seul pointage
+      // était une vraie perte d'heures). Comportement cohérent avec le reste de l'appli : un jour
+      // sans AUCUN pointage retombe déjà sur le planning (voir calculerReelPourRegularisation) —
+      // ici, c'est le même principe appliqué à l'échelle d'un service au lieu du jour entier. Quand
+      // un événement EXISTE mais n'a pas encore d'heureRetenue (en attente de validation), on utilise
+      // l'heure réellement pointée en provisoire — jamais le planning, qui masquerait l'écart.
+      let dMin = embEvt ? timeToMin(embEvt.heureRetenue || embEvt.heure) : prem.debut;
+      let fMin = debEvt ? timeToMin(debEvt.heureRetenue || debEvt.heure) : dern.fin;
       if (fMin <= dMin) fMin += 1440;
       const pauseTotal = srv.reduce((s, i) => s + (i.pauseDuree || 0), 0);
       pointeMin += Math.max(0, fMin - dMin - pauseTotal);
@@ -7290,11 +7308,12 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
     const sessions = {};
     evtsHP.forEach(e => { if (!sessions[e.instId]) sessions[e.instId] = []; sessions[e.instId].push(e); });
     Object.values(sessions).forEach(grp => {
-      const embHP = grp.find(e => e.type === 'embauche' && e.heureRetenue);
-      const debHP = grp.find(e => e.type === 'debauche' && e.heureRetenue);
+      // Voir notes plus haut : matching par instId/type seul, sans exiger heureRetenue.
+      const embHP = grp.find(e => e.type === 'embauche');
+      const debHP = grp.find(e => e.type === 'debauche');
       if (embHP && debHP) {
-        const dMin = timeToMin(embHP.heureRetenue);
-        let fMin = timeToMin(debHP.heureRetenue);
+        const dMin = timeToMin(embHP.heureRetenue || embHP.heure);
+        let fMin = timeToMin(debHP.heureRetenue || debHP.heure);
         if (fMin <= dMin) fMin += 1440;
         pointeHorsPlanning += fMin - dMin;
         nuitReelMin += computeNuitMinutes(dMin, fMin, false);
