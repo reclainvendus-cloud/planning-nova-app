@@ -2170,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.96.0';
+const APP_VERSION = '1.97.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2201,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '1.97.0', items: [
+    'Correction importante : les compétences cochées dans le menu Compétences disparaissaient dès que la fiche de l\'employé concerné était enregistrée (Employés), même pour un motif sans rapport (téléphone, contrat, PIN...) — le formulaire ne gère pas les compétences, mais reconstruisait entièrement l\'objet employé sans les reporter, effaçant silencieusement ce qui avait été coché. Les compétences existantes sont désormais toujours conservées lors de l\'enregistrement d\'une fiche employé',
+  ] },
   { v: '1.96.0', items: [
     'Nouveau garde-fou (découverte du 24/08 avec Laura NEGRIER : Tournée 01 validée jusqu\'à 18:00 et Tournée 603 validée de 12:00 à 18:00 le même jour — 6h comptées deux fois, gonflant la Durée brute à tort) : la Validation d\'anomalie ET la modification manuelle d\'un pointage (écran Pointages) vérifient désormais si la plage retenue résultante chevauche celle d\'une autre tournée du même jour pour le même employé, et demandent une confirmation explicite avant d\'enregistrer si c\'est le cas',
   ] },
@@ -5594,6 +5597,11 @@ function saveEmploye() {
     historique.sort((a, b) => a.depuis.localeCompare(b.depuis));
   }
 
+  const idx = db.employes.findIndex(x => x.id === id);
+  // Conserve les compétences existantes — ce formulaire ne les édite pas (voir menu Compétences
+  // dédié), donc l'objet employé reconstruit ici ne doit jamais les faire disparaître silencieusement
+  // (bug découvert le 28/08 : enregistrer la fiche d'un employé, pour n'importe quelle raison, effaçait
+  // ses compétences déjà cochées puisque le champ n'existait tout simplement pas dans cet objet).
   const employe = {
     id, prenom, nom,
     pin: document.getElementById('em-pin').value.trim(),
@@ -5614,8 +5622,8 @@ function saveEmploye() {
     prodFroid: parseFloat(document.getElementById('em-prod-froid').value) || 0,
     soldeInitial: parseFloat(document.getElementById('em-solde-initial').value) || 0,
     dateDebutContrat,
+    competences: (idx >= 0 ? db.employes[idx].competences : null) || [],
   };
-  const idx = db.employes.findIndex(x => x.id === id);
   if (idx >= 0) db.employes[idx] = employe; else db.employes.push(employe);
   saveDB();
   closeModal('modal-employe');
