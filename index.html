@@ -3834,7 +3834,7 @@ function detecterAlertesPauseJour(empId, dk) {
 function badgeAlertePauseJour(empId, dk) {
   const { oubliee, superflue } = detecterAlertesPauseJour(empId, dk);
   if (!oubliee && !superflue) return '';
-  let html = '<div style="position:absolute;top:2px;right:2px;display:flex;gap:2px;z-index:2;">';
+  let html = '<div style="position:absolute;top:2px;left:50%;transform:translateX(-50%);display:flex;gap:2px;z-index:2;">';
   if (oubliee) html += `<span title="Service de 6h ou plus sans aucune pause configurée — pause légale probablement oubliée" style="font-size:12px;filter:drop-shadow(0 0 2px rgba(0,0,0,.6));">⚠️</span>`;
   if (superflue) html += `<span title="Pause configurée sur un service de moins de 6h — probablement une erreur de saisie" style="font-size:11px;color:var(--accent);filter:drop-shadow(0 0 2px rgba(0,0,0,.6));">🔹</span>`;
   html += '</div>';
