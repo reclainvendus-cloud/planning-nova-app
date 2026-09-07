@@ -2170,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.0.1';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2201,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.0.1', items: [
+    'Correction de l\'alerte pause (v2.0.0, découverte le 10/09 avec Mathéo DUFOURNEAU) : un service commencé la VEILLE et traversant minuit (ex: Relais Brive 21h→02h) n\'était pas raccordé aux tâches du lendemain qui le prolongeaient sans coupure (Distribution/Tournée 22/SLTD1 jusqu\'à 07h15) — sa durée réelle était sous-évaluée, déclenchant à tort un "pause superflue" sur un service en réalité bien supérieur à 6h. La durée réelle traverse maintenant correctement minuit pour ce calcul',
+  ] },
   { v: '2.0.0', items: [
     'Nouveau dans le Planning (vue graphique/semaine) : un ⚠️ apparaît sur la cellule d\'un jour dès qu\'un service de 6h ou plus (tâches consécutives sans coupure notable) n\'a aucune pause configurée — pause légale probablement oubliée en construisant le planning. À l\'inverse, un 🔹 signale une pause configurée sur un service de moins de 6h, probablement une erreur de saisie qui fausse les horaires affichés. Détection par service, jamais par jour entier — deux tournées bien séparées ne se cumulent pas à tort',
     'Correction : le badge ⚖️ affiché à côté de chaque employé dans le Planning (vue graphique/semaine) restait figé sur une valeur calculée avant un changement de la date de mise en service de la pointeuse, au lieu de refléter le nouvel état — découvert en avançant cette date au 1er septembre pour repartir sur une base saine',
@@ -3809,17 +3812,34 @@ function detecterAlertesPauseJour(empId, dk) {
   const insts = (db.planning[empId]?.[dk] || [])
     .filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge)
     .sort((a, b) => a.debut - b.debut);
-  if (!insts.length) return { oubliee: false, superflue: false };
-  const services = [[insts[0]]];
+
+  // Fusionne, si elle existe et s'enchaîne sans coupure, la queue d'un service commencé la VEILLE
+  // et traversant minuit avec le premier service d'aujourd'hui — sinon un service réellement continu
+  // (ex: Relais Brive 21h(hier)→02h suivie sans coupure de Distribution/Tournée 22/SLTD1 jusqu'à
+  // 07h15) est compté à tort comme repartant de zéro à minuit, sous-évaluant sa durée réelle et
+  // déclenchant une fausse alerte "pause superflue" (bug découvert le 10/09 avec Mathéo DUFOURNEAU).
+  const dkHier = dateKey(addDays(isoToDate(dk), -1));
+  const instsHierCross = buildChaineHierCross(empId, dkHier, splitSeuil);
+  const services = insts.length ? [[insts[0]]] : [];
   for (let i = 1; i < insts.length; i++) {
     const gap = insts[i].debut - services[services.length - 1].at(-1).fin;
     if (gap > splitSeuil) services.push([insts[i]]);
     else services[services.length - 1].push(insts[i]);
   }
+  if (instsHierCross.length && services.length) {
+    const finHier = instsHierCross[instsHierCross.length - 1].fin;
+    if (services[0][0].debut - finHier <= splitSeuil) services[0] = [...instsHierCross, ...services[0]];
+  }
+  if (!services.length) return { oubliee: false, superflue: false };
+
   let oubliee = false, superflue = false;
   services.forEach(srv => {
     const premiere = srv[0], derniere = srv[srv.length - 1];
-    const dureeTotale = derniere.crosseMinuit ? (1440 - premiere.debut) + derniere.fin : derniere.fin - premiere.debut;
+    const premiereEstHier = instsHierCross.includes(premiere);
+    // Nombre de minuits traversés entre le début réel du service et sa fin réelle — 0 en temps
+    // normal, 1 si le service commence hier ou finit demain, 2 dans le cas (rare) des deux à la fois.
+    const traversees = (premiereEstHier ? 1 : 0) + (derniere.crosseMinuit ? 1 : 0);
+    const dureeTotale = derniere.fin - premiere.debut + traversees * 1440;
     const pauseTotale = srv.reduce((s, i) => s + (i.pauseDuree || 0), 0);
     if (dureeTotale >= SEUIL_PAUSE_OBLIGATOIRE_MIN && pauseTotale === 0) oubliee = true;
     else if (dureeTotale < SEUIL_PAUSE_OBLIGATOIRE_MIN && pauseTotale > 0) superflue = true;
