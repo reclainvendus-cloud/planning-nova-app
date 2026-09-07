@@ -2170,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.0.1';
+const APP_VERSION = '2.0.2';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2201,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.0.2', items: [
+    'Ajustement de l\'alerte "pause oubliée" : un service durant pile 6h ne déclenche plus l\'avertissement (l\'employé termine et s\'en va à ce moment-là, pas besoin de pause pour interrompre un travail qui ne continue pas au-delà) — seul un service dépassant strictement 6h sans aucune pause est signalé',
+  ] },
   { v: '2.0.1', items: [
     'Correction de l\'alerte pause (v2.0.0, découverte le 10/09 avec Mathéo DUFOURNEAU) : un service commencé la VEILLE et traversant minuit (ex: Relais Brive 21h→02h) n\'était pas raccordé aux tâches du lendemain qui le prolongeaient sans coupure (Distribution/Tournée 22/SLTD1 jusqu\'à 07h15) — sa durée réelle était sous-évaluée, déclenchant à tort un "pause superflue" sur un service en réalité bien supérieur à 6h. La durée réelle traverse maintenant correctement minuit pour ce calcul',
   ] },
@@ -3841,7 +3844,9 @@ function detecterAlertesPauseJour(empId, dk) {
     const traversees = (premiereEstHier ? 1 : 0) + (derniere.crosseMinuit ? 1 : 0);
     const dureeTotale = derniere.fin - premiere.debut + traversees * 1440;
     const pauseTotale = srv.reduce((s, i) => s + (i.pauseDuree || 0), 0);
-    if (dureeTotale >= SEUIL_PAUSE_OBLIGATOIRE_MIN && pauseTotale === 0) oubliee = true;
+    // Strictement supérieur à 6h : à pile 6h, l'employé termine et s'en va — pas besoin de pause
+    // puisqu'il n'y a plus de travail à interrompre après ce seuil.
+    if (dureeTotale > SEUIL_PAUSE_OBLIGATOIRE_MIN && pauseTotale === 0) oubliee = true;
     else if (dureeTotale < SEUIL_PAUSE_OBLIGATOIRE_MIN && pauseTotale > 0) superflue = true;
   });
   return { oubliee, superflue };
