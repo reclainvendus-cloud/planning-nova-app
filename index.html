@@ -2170,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '1.99.0';
+const APP_VERSION = '2.0.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2201,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.0.0', items: [
+    'Nouveau dans le Planning (vue graphique/semaine) : un ⚠️ apparaît sur la cellule d\'un jour dès qu\'un service de 6h ou plus (tâches consécutives sans coupure notable) n\'a aucune pause configurée — pause légale probablement oubliée en construisant le planning. À l\'inverse, un 🔹 signale une pause configurée sur un service de moins de 6h, probablement une erreur de saisie qui fausse les horaires affichés. Détection par service, jamais par jour entier — deux tournées bien séparées ne se cumulent pas à tort',
+    'Correction : le badge ⚖️ affiché à côté de chaque employé dans le Planning (vue graphique/semaine) restait figé sur une valeur calculée avant un changement de la date de mise en service de la pointeuse, au lieu de refléter le nouvel état — découvert en avançant cette date au 1er septembre pour repartir sur une base saine',
+  ] },
   { v: '1.99.0', items: [
     'Second garde-fou en Validation (suite à la découverte du 28/08 sur la Tournée 603 de Laura NEGRIER) : cliquer "Valider sur planning" sur une anomalie hors tolérance demande désormais une confirmation explicite rappelant l\'heure réellement pointée qui sera écartée au profit de l\'heure planifiée, pour éviter qu\'un clic malencontreux (bouton juste à côté de "Valider l\'heure pointée") n\'écarte silencieusement du temps réellement travaillé',
   ] },
@@ -3789,6 +3793,54 @@ function badgeClass(total, objectifMin) {
   return total < objectifMin ? 'under' : 'over';
 }
 
+// Seuil légal (Code du travail, art. L3121-16) : 6h de travail continu imposent une pause.
+const SEUIL_PAUSE_OBLIGATOIRE_MIN = 360;
+
+// Détecte, pour un employé et un jour donnés, deux situations à signaler dans le Planning
+// (vue graphique/semaine) : un service (tâches consécutives sans coupure notable) d'au moins 6h
+// sans AUCUNE pause configurée dessus (pause légale probablement oubliée en construisant le
+// planning), et à l'inverse un service de moins de 6h sur lequel une pause a quand même été
+// configurée (pas illégal, mais probablement une erreur de saisie qui fausse les horaires
+// affichés). Ne regarde que les tâches qui DÉMARRENT ce jour-là (dk) — une tâche à cheval sur
+// minuit compte sa durée totale (avant + après minuit) pour le seuil des 6h, mais reste rattachée
+// au jour où elle démarre pour cet avertissement, comme partout ailleurs dans l'appli.
+function detecterAlertesPauseJour(empId, dk) {
+  const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
+  const insts = (db.planning[empId]?.[dk] || [])
+    .filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge)
+    .sort((a, b) => a.debut - b.debut);
+  if (!insts.length) return { oubliee: false, superflue: false };
+  const services = [[insts[0]]];
+  for (let i = 1; i < insts.length; i++) {
+    const gap = insts[i].debut - services[services.length - 1].at(-1).fin;
+    if (gap > splitSeuil) services.push([insts[i]]);
+    else services[services.length - 1].push(insts[i]);
+  }
+  let oubliee = false, superflue = false;
+  services.forEach(srv => {
+    const premiere = srv[0], derniere = srv[srv.length - 1];
+    const dureeTotale = derniere.crosseMinuit ? (1440 - premiere.debut) + derniere.fin : derniere.fin - premiere.debut;
+    const pauseTotale = srv.reduce((s, i) => s + (i.pauseDuree || 0), 0);
+    if (dureeTotale >= SEUIL_PAUSE_OBLIGATOIRE_MIN && pauseTotale === 0) oubliee = true;
+    else if (dureeTotale < SEUIL_PAUSE_OBLIGATOIRE_MIN && pauseTotale > 0) superflue = true;
+  });
+  return { oubliee, superflue };
+}
+
+// Petit badge superposé sur la cellule du jour (Planning, vue graphique/semaine) — ⚠️ orange si une
+// pause légale de 6h semble oubliée, 🔹 bleu si une pause a été configurée sur un service de moins
+// de 6h (probablement une erreur de saisie). Les deux peuvent apparaître le même jour si l'employé
+// a plusieurs services distincts ce jour-là.
+function badgeAlertePauseJour(empId, dk) {
+  const { oubliee, superflue } = detecterAlertesPauseJour(empId, dk);
+  if (!oubliee && !superflue) return '';
+  let html = '<div style="position:absolute;top:2px;right:2px;display:flex;gap:2px;z-index:2;">';
+  if (oubliee) html += `<span title="Service de 6h ou plus sans aucune pause configurée — pause légale probablement oubliée" style="font-size:12px;filter:drop-shadow(0 0 2px rgba(0,0,0,.6));">⚠️</span>`;
+  if (superflue) html += `<span title="Pause configurée sur un service de moins de 6h — probablement une erreur de saisie" style="font-size:11px;color:var(--accent);filter:drop-shadow(0 0 2px rgba(0,0,0,.6));">🔹</span>`;
+  html += '</div>';
+  return html;
+}
+
 // ===================================================
 // PLANNING — vue Édition (grille semaine)
 // ===================================================
@@ -4363,7 +4415,8 @@ function renderGraphiqueSemaine() {
       days.forEach((d, j) => {
         const dk = dateKey(d);
         const barsHtml = renderProportionalCell(emp.id, dk, usedTaskIds, 280);
-        cells += `<div class="grw-cell grw-prop" style="grid-row:${row};grid-column:${j+2};cursor:pointer;" onclick="openDayDetail('${emp.id}','${dk}')" title="Cliquer pour modifier cette journée">${barsHtml}</div>`;
+        const alertePauseHtml = badgeAlertePauseJour(emp.id, dk);
+        cells += `<div class="grw-cell grw-prop" style="grid-row:${row};grid-column:${j+2};cursor:pointer;position:relative;" onclick="openDayDetail('${emp.id}','${dk}')" title="Cliquer pour modifier cette journée">${barsHtml}${alertePauseHtml}</div>`;
       });
       const contratMin = (emp.contratH || 35) * 60;
       const weekTotal = days.reduce((sum, d) => sum + dayTotalMinutes(emp.id, dateKey(d)), 0);
@@ -11628,6 +11681,15 @@ function savePointageDateDebut() {
   logAudit('Date de mise en service pointeuse modifiée', val ? `Actif à partir du ${val}` : 'Limite désactivée');
   notify(val ? `Pointeuse considérée active à partir du ${isoToDate(val).toLocaleDateString('fr-FR')}` : 'Limite désactivée — tout le planning attend un pointage');
   refreshValidationBadge();
+  // Le badge ⚖️ affiché dans la vue Planning (graphique/semaine) met en cache le résultat pour
+  // toute la session (voir chargerCompteurPourPlanning) — sans cette ligne, il continuait d'afficher
+  // une valeur calculée AVANT ce changement de date, au lieu de refléter le nouvel état (découvert
+  // le 07/09, après avoir avancé la mise en service au 1er septembre pour repartir sur une base
+  // saine : le badge affichait encore des valeurs alors qu'aucune semaine complète n'était encore
+  // passée depuis la nouvelle date).
+  _compteurPourPlanning = null;
+  renderCurrentView();
+  chargerCompteurPourPlanning();
 }
 
 function changePtDate(delta) {
