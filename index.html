@@ -2170,7 +2170,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.0.4';
+const APP_VERSION = '2.0.5';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2201,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.0.5', items: [
+    'Correction du repère visuel côté Pointeuse (découverte le 10/09 sur un service 22h→06h(lendemain)) : la distance au bouton suggéré comparait seulement l\'heure d\'horloge de façon cyclique, sans tenir compte du jour réel — un "06:00" du LENDEMAIN pouvait ainsi paraître plus proche qu\'une échéance du soir même, en pleine journée. La distance utilise désormais le jour réel de chaque bouton (déjà connu du code) pour comparer en temps réel absolu, plus de confusion possible',
+    'Repère visuel rendu plus visible (halo plus large et plus opaque, léger effet d\'échelle) suite à un retour utilisateur le trouvant trop discret',
+  ] },
   { v: '2.0.4', items: [
     'Nouveau côté Pointeuse (demandé après des confusions répétées de bouton chez les employés dont les tâches sont à cheval sur minuit, où plus de deux boutons peuvent s\'afficher en même temps) : le bouton correspondant à l\'horaire prévu le plus proche de l\'heure actuelle est désormais mis en valeur par un contour clignotant, pour guider le choix. Distance calculée en tenant compte du passage de minuit (un bouton à 00:00 reste "proche" à 23:57). Fichier Pointeuse.html à redéployer',
   ] },
