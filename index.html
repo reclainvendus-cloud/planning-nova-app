@@ -494,6 +494,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
     <div class="nav-item" onclick="showView('conges')"><span class="ico">🏖️</span> Congés</div>
     <div class="nav-item" onclick="showView('recap')"><span class="ico">💶</span> Récap paie</div>
     <div class="nav-item" onclick="showView('compteur')"><span class="ico">⚖️</span> Compteur & modulation</div>
+    <div class="nav-item" onclick="showView('clotures')"><span class="ico">🔒</span> Clôtures</div>
     <div class="nav-item" onclick="showView('rapports')"><span class="ico">📊</span> Rapports</div>
     <div class="nav-item" onclick="showView('historique')"><span class="ico">📜</span> Historique</div>
     <div class="nav-item" onclick="showView('distribution')"><span class="ico">📦</span> Distribution</div>
@@ -814,6 +815,20 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       </div>
 
       <!-- ===== VUE HISTORIQUE ===== -->
+      <div class="view" id="view-clotures">
+        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+          <div class="task-card" style="cursor:default;flex:1;min-width:320px;max-width:420px;">
+            <div class="section-label" style="margin-top:0;">Historique des clôtures</div>
+            <div class="hint" style="margin-bottom:10px;">Clique sur une clôture pour voir son bilan. Seule la plus récente peut être supprimée.</div>
+            <div id="clot-liste"></div>
+          </div>
+          <div class="task-card" style="cursor:default;flex:2;min-width:360px;">
+            <div class="section-label" style="margin-top:0;">Bilan</div>
+            <div id="clot-bilan"><div class="hint">Sélectionne une clôture dans la liste pour voir son bilan.</div></div>
+          </div>
+        </div>
+      </div>
+
       <div class="view" id="view-historique">
         <div class="filter-bar" style="align-items:flex-end;flex-wrap:wrap;gap:8px;">
           <div class="form-group" style="margin:0;">
@@ -946,7 +961,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <div class="section-label" style="margin-top:20px;">📅 Clôture paie</div>
           <div class="hint" style="margin-bottom:10px;">Pour un relevé envoyé à la compta avant la fin du mois (ex: le 26) : anticipe les derniers jours manquants sur la base du planning, garde une trace précise de ce qui a été anticipé, et régularise automatiquement le mois suivant en comparant à ce qui a réellement été pointé.</div>
           <label class="checkbox-row"><input type="checkbox" id="pa-cloture-active" onchange="onToggleClotureActive()"><span>Activer le mode Clôture Paie (estimation + régularisation)</span></label>
-          <div id="pa-cloture-liste" style="margin-top:14px;"></div>
+          <div class="hint" style="margin-top:8px;">L'historique des clôtures (bilan, suppression de la dernière) se trouve désormais dans le menu <b>🔒 Clôtures</b>, dans la barre de navigation.</div>
 
           <div class="section-label" style="margin-top:20px;">📌 Note d'information</div>
           <div class="hint" style="margin-bottom:10px;">S'affiche une fois à chaque admin (à la connexion) tant qu'il ne l'a pas fermée — pratique pour signaler une nouveauté ou un rappel ponctuel. Laisse vide pour ne rien afficher.</div>
@@ -2170,7 +2185,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.0.5';
+const APP_VERSION = '2.1.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2201,6 +2216,11 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.1.0', items: [
+    'Correction importante de synchronisation (découverte le 12/09) : les collections "clotures" et "reglements" n\'étaient jamais écoutées en temps réel entre postes admin — supprimer une clôture sur un poste n\'atteignait jamais les autres postes déjà ouverts sans recharger complètement la page. Un garde-fou existant, censé protéger contre une collection distante vidée par erreur, bloquait aussi ce cas précis (supprimer la toute dernière clôture existante) : il ne s\'applique plus à ces deux collections, où vider jusqu\'à zéro élément est une action délibérée et confirmée',
+    'Correction : le Compteur & modulation était absent de la table de rafraîchissement temps réel — il ne se redessinait jamais tout seul suite à un changement distant (pas seulement une suppression de clôture), obligeant à recharger la page entière pour voir l\'écran à jour',
+    'Nouveau menu dédié "🔒 Clôtures" : sort l\'historique des clôtures des Paramètres. Liste triée de la plus récente à la plus ancienne, avec un panneau "Bilan" pour la clôture sélectionnée (méthode, période, règlements par employé et total, semaines anticipées, régularisation appliquée le cas échéant). La suppression de la dernière clôture reste au même endroit qu\'avant, juste déplacée',
+  ] },
   { v: '2.0.5', items: [
     'Correction du repère visuel côté Pointeuse (découverte le 10/09 sur un service 22h→06h(lendemain)) : la distance au bouton suggéré comparait seulement l\'heure d\'horloge de façon cyclique, sans tenir compte du jour réel — un "06:00" du LENDEMAIN pouvait ainsi paraître plus proche qu\'une échéance du soir même, en pleine journée. La distance utilise désormais le jour réel de chaque bouton (déjà connu du code) pour comparer en temps réel absolu, plus de confusion possible',
     'Repère visuel rendu plus visible (halo plus large et plus opaque, léger effet d\'échelle) suite à un retour utilisateur le trouvant trop discret',
@@ -2963,8 +2983,13 @@ function loadFromFirebaseThenListen() {
       if (remote.tournees) db.tournees = Object.values(remote.tournees);
       if (remote.categories) db.categories = Object.values(remote.categories);
       if (remote.admins) db.admins = Object.values(remote.admins);
-      if (remote.reglements) db.reglements = Object.values(remote.reglements);
-      if (remote.clotures) db.clotures = Object.values(remote.clotures);
+      // Assignation inconditionnelle (jamais de garde-fou "si présent seulement") : Firebase ne
+      // distingue pas "collection jamais alimentée" de "collection vidée jusqu'au dernier élément"
+      // au niveau du parent — la clé est simplement absente dans les deux cas. Dans les deux
+      // interprétations, [] est la bonne valeur locale ; garder une clôture/un règlement supprimé
+      // ailleurs juste parce que Firebase ne renvoie plus la clé serait le vrai bug.
+      db.reglements = Object.values(remote.reglements || {});
+      db.clotures = Object.values(remote.clotures || {});
       if (remote.planning) db.planning = remote.planning;
       if (migrerCrosseMinuitFrontiere(db.planning)) setTimeout(() => saveDB(), 500);
       if (remote.semaineType) db.semaineType = remote.semaineType;
@@ -3000,7 +3025,8 @@ function loadFromFirebaseThenListen() {
 // Un helper commun : n'applique jamais une mise à jour distante vide par-dessus une collection
 // locale non vide (protection contre une donnée distante corrompue ou une synchro mal partie).
 function applyRemoteCollectionSafe(name, remoteArray) {
-  if ((!remoteArray || remoteArray.length === 0) && db[name] && db[name].length > 0) {
+  const exempteDuGardeFouVide = ['clotures', 'reglements'].includes(name);
+  if (!exempteDuGardeFouVide && (!remoteArray || remoteArray.length === 0) && db[name] && db[name].length > 0) {
     console.warn('Mise à jour distante vide ignorée pour', name, '— données locales conservées.');
     return false;
   }
@@ -3011,7 +3037,7 @@ function applyRemoteCollectionSafe(name, remoteArray) {
 
 // Écoute les changements poussés par d'autres postes admin et met à jour l'affichage en direct.
 function listenRemoteChanges() {
-  ['employes', 'tasks', 'equipes', 'tournees', 'categories', 'admins'].forEach(name => {
+  ['employes', 'tasks', 'equipes', 'tournees', 'categories', 'admins', 'reglements', 'clotures'].forEach(name => {
     fbDb.ref('data/' + name).on('value', snap => {
       // Si on a nous-mêmes un changement local pas encore envoyé (dans les 800ms du debounce), on
       // n'applique pas cette mise à jour distante — elle pourrait être "en retard" par rapport à ce
@@ -3121,6 +3147,7 @@ function renderCurrentView() {
       tournees: renderTournees, conges: renderConges, recap: initRecapPaie, rapports: initRapports,
       dashboard: renderDashboard, parametres: initParametres, pointages: initPointages, validation: calculerValidation,
       historique: initHistorique, distribution: renderDistribution, competences: renderCompetences,
+      compteur: initCompteurModulation, clotures: renderClotures,
     };
     const fn = renderers[name];
     if (fn) { try { fn(); } catch (e) { console.error('renderCurrentView:', e); } }
@@ -3152,7 +3179,7 @@ function notify(msg, type = 'success') {
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
-const viewTitles = { planning: 'Planning', taches: 'Bibliothèque de tâches', employes: 'Employés', equipes: 'Équipes', tournees: 'Tournées', conges: 'Congés', recap: 'Récap paie', compteur: 'Compteur & modulation', rapports: 'Rapports', dashboard: 'Tableau de bord', parametres: 'Paramètres', pointages: 'Pointages', validation: 'Validation', historique: 'Historique', distribution: 'Distribution', competences: 'Compétences', aide: 'Mode d\'emploi' };
+const viewTitles = { planning: 'Planning', taches: 'Bibliothèque de tâches', employes: 'Employés', equipes: 'Équipes', tournees: 'Tournées', conges: 'Congés', recap: 'Récap paie', compteur: 'Compteur & modulation', clotures: 'Clôtures', rapports: 'Rapports', dashboard: 'Tableau de bord', parametres: 'Paramètres', pointages: 'Pointages', validation: 'Validation', historique: 'Historique', distribution: 'Distribution', competences: 'Compétences', aide: 'Mode d\'emploi' };
 const viewActions = {
   planning: '<button class="btn btn-secondary btn-sm" onclick="openEmailModal()">✉️ Envoyer</button>',
   taches: '<button class="btn btn-primary btn-sm" onclick="openTaskModal()">+ Nouvelle tâche</button>',
@@ -3192,6 +3219,7 @@ function showView(name) {
   if (name === 'recap') initRecapPaie();
   if (name === 'aide') renderAide();
   if (name === 'compteur') initCompteurModulation();
+  if (name === 'clotures') renderClotures();
   if (name === 'rapports') initRapports();
   if (name === 'dashboard') renderDashboard();
   if (name === 'parametres') initParametres();
@@ -8189,27 +8217,7 @@ function supprimerDerniereCloture() {
   saveDB();
   logAudit('Clôture paie supprimée', `${derniere.mois}${aAnnuler.length ? ` — ${aAnnuler.length} règlement(s) annulé(s)` : ''}`);
   notify(`Clôture de ${derniere.mois} supprimée${aAnnuler.length ? ' — règlements annulés' : ''}`);
-  renderClotureListe();
-}
-
-function renderClotureListe() {
-  const wrap = document.getElementById('pa-cloture-liste');
-  if (!wrap) return;
-  if (!db.clotures.length) {
-    wrap.innerHTML = '<div class="hint">Aucune clôture enregistrée pour le moment.</div>';
-    return;
-  }
-  const triees = [...db.clotures].sort((a, b) => b.mois.localeCompare(a.mois));
-  const derniereMois = triees[0].mois;
-  wrap.innerHTML = `<div class="hint" style="margin-bottom:6px;">Clôtures enregistrées :</div>` + triees.map(c => `
-    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;">
-      <div style="flex:1;">
-        <b>${c.methode === 'decalage' ? `⏭️ Décalage : ${formatDateFR(isoToDate(c.dateDebut))} → ${formatDateFR(isoToDate(c.dateFin))}` : c.mois}</b>
-        <span style="color:var(--text-dim);font-size:12px;"> — clôturé le ${new Date(c.dateCloture).toLocaleDateString('fr-FR')}${c.verrouille === false ? ' · 🔓 déverrouillé' : ' · 🔒'}</span>
-      </div>
-      ${c.mois === derniereMois ? `<button class="btn btn-danger btn-sm" onclick="supprimerDerniereCloture()">🗑️ Supprimer</button>` : ''}
-    </div>
-  `).join('');
+  renderClotures();
 }
 
 // ===================================================
@@ -9441,7 +9449,7 @@ async function validerCloturePaie() {
   logAudit('Clôture paie', `${mois} — ${Object.keys(apercu.parEmploye).length} employé(s)${regul ? ` — régularisation de ${regul.mois} intégrée` : ''}`);
   notify(`Clôture de ${mois} enregistrée — génération des fichiers…`);
   closeModal('modal-cloture-paie');
-  renderClotureListe();
+  renderClotures();
 
   // Export automatique et systématique (Excel + CSV), format Récap paie complet, avec la
   // distinction Réel/Anticipé et la régularisation intégrée — comme demandé, à chaque vraie
@@ -9529,7 +9537,7 @@ async function validerClotureDecalage() {
   logAudit('Clôture paie (Décalage)', `${debut} → ${fin} — ${donnees.length} employé(s)`);
   notify(`Clôture du ${formatDateFR(isoToDate(debut))} au ${formatDateFR(isoToDate(fin))} enregistrée — génération des fichiers…`);
   closeModal('modal-cloture-paie');
-  renderClotureListe();
+  renderClotures();
 
   try {
     const emps = getEmployesTries();
@@ -9993,6 +10001,92 @@ function expToggleTousEmployes(v) {
 }
 
 function formatDateFR(d) { return d.toLocaleDateString('fr-FR'); }
+function formatMoisFR(moisStr) {
+  const [an, mois] = (moisStr || '').split('-').map(Number);
+  if (!an || !mois) return moisStr || '';
+  return new Date(an, mois - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+}
+
+let _clotureSelectionneeId = null;
+
+// Menu Clôtures dédié (demandé pour sortir cette archive des Paramètres) : liste triée de la plus
+// récente à la plus ancienne à gauche, bilan détaillé de la clôture sélectionnée à droite. La
+// sélection persiste tant que la clôture existe encore ; si elle est supprimée ou qu'aucune n'était
+// sélectionnée, on retombe sur la plus récente.
+function renderClotures() {
+  const listeWrap = document.getElementById('clot-liste');
+  if (!listeWrap) return;
+  if (!db.clotures.length) {
+    listeWrap.innerHTML = '<div class="hint">Aucune clôture enregistrée pour le moment.</div>';
+    const bilanWrap = document.getElementById('clot-bilan');
+    if (bilanWrap) bilanWrap.innerHTML = '<div class="hint">Aucune clôture à afficher.</div>';
+    _clotureSelectionneeId = null;
+    return;
+  }
+  const triees = [...db.clotures].sort((a, b) => b.mois.localeCompare(a.mois));
+  const derniereId = triees[0].id;
+  if (!_clotureSelectionneeId || !triees.some(c => c.id === _clotureSelectionneeId)) _clotureSelectionneeId = derniereId;
+  listeWrap.innerHTML = triees.map(c => `
+    <div onclick="selectionnerCloture('${c.id}')" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid ${c.id === _clotureSelectionneeId ? 'var(--accent)' : 'var(--border)'};border-radius:8px;margin-bottom:6px;cursor:pointer;background:${c.id === _clotureSelectionneeId ? 'rgba(79,124,255,.08)' : 'transparent'};">
+      <div style="flex:1;">
+        <b>${c.methode === 'decalage' ? `⏭️ ${formatDateFR(isoToDate(c.dateDebut))} → ${formatDateFR(isoToDate(c.dateFin))}` : formatMoisFR(c.mois)}</b>
+        <div style="color:var(--text-dim);font-size:12px;">clôturé le ${new Date(c.dateCloture).toLocaleDateString('fr-FR')}${c.verrouille === false ? ' · 🔓 déverrouillé' : ' · 🔒'}</div>
+      </div>
+      ${c.id === derniereId ? `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();supprimerDerniereCloture()">🗑️</button>` : ''}
+    </div>
+  `).join('');
+  renderClotureBilan(_clotureSelectionneeId);
+}
+
+function selectionnerCloture(id) {
+  _clotureSelectionneeId = id;
+  renderClotures();
+}
+
+function renderClotureBilan(id) {
+  const wrap = document.getElementById('clot-bilan');
+  if (!wrap) return;
+  const c = db.clotures.find(x => x.id === id);
+  if (!c) { wrap.innerHTML = '<div class="hint">Sélectionne une clôture dans la liste pour voir son bilan.</div>'; return; }
+
+  const reglements = Object.entries(c.reglementsHS || {});
+  const totalRegleMin = reglements.reduce((s, [, m]) => s + m, 0);
+  const nbSemainesAnticipees = Object.keys(c.weeksAnticipeesHS || {}).length;
+
+  let html = `
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px;">
+      <span class="badge" style="background:rgba(79,124,255,.12);color:var(--accent);">${c.methode === 'decalage' ? '⏭️ Méthode Décalage' : '📅 Méthode Anticipation'}</span>
+      <span class="badge" style="background:rgba(255,255,255,.06);">${c.methode === 'decalage' ? `${formatDateFR(isoToDate(c.dateDebut))} → ${formatDateFR(isoToDate(c.dateFin))}` : formatMoisFR(c.mois)}</span>
+      <span class="badge" style="background:rgba(255,255,255,.06);">Clôturé le ${new Date(c.dateCloture).toLocaleDateString('fr-FR')} à ${new Date(c.dateCloture).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
+      <span class="badge" style="background:${c.verrouille === false ? 'rgba(245,166,35,.12)' : 'rgba(46,204,113,.12)'};color:${c.verrouille === false ? 'var(--warning)' : 'var(--success)'};">${c.verrouille === false ? '🔓 Déverrouillé' : '🔒 Verrouillé'}</span>
+    </div>
+    <div class="section-label" style="margin-top:0;">💰 Règlements d'heures sup à cette clôture</div>`;
+
+  if (!reglements.length) {
+    html += `<div class="hint" style="margin-bottom:16px;">Aucun règlement — tout est resté au Compteur & modulation.</div>`;
+  } else {
+    html += `<div class="hint" style="margin-bottom:6px;">${reglements.length} employé(s) réglé(s), pour un total de <b>${minToHM(totalRegleMin)}</b></div>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">${reglements.map(([empId, m]) => {
+        const emp = getEmpById(empId);
+        return `<tr><td style="padding:4px 0;border-bottom:1px solid var(--border);">${emp ? emp.prenom + ' ' + emp.nom : empId}</td><td style="padding:4px 0;border-bottom:1px solid var(--border);text-align:right;font-family:var(--mono);">${minToHM(m)}</td></tr>`;
+      }).join('')}</table>`;
+  }
+
+  html += `<div class="section-label">📈 Anticipation</div>`;
+  html += c.methode === 'decalage'
+    ? `<div class="hint" style="margin-bottom:16px;">Méthode Décalage — rien n'est anticipé, seul le réel jusqu'à la date de fin est pris en compte.</div>`
+    : `<div class="hint" style="margin-bottom:16px;">${nbSemainesAnticipees} semaine(s) anticipée(s) sur la base du planning à cette clôture.</div>`;
+
+  html += `<div class="section-label">🔁 Régularisation</div>`;
+  if (c.regularisation) {
+    const nbEmployesRegul = Object.keys(c.regularisation.parEmploye || {}).length;
+    html += `<div class="hint">Cette clôture a régularisé le mois de <b>${formatMoisFR(c.regularisation.mois)}</b> (${nbEmployesRegul} employé(s) concerné(s)), en comparant les semaines anticipées à ce qui a réellement été pointé.</div>`;
+  } else {
+    html += `<div class="hint">Aucune régularisation appliquée par cette clôture.</div>`;
+  }
+
+  wrap.innerHTML = html;
+}
 // Libellé uniforme pour la colonne "Congé" d'une ligne jour, réutilisé par le CSV, l'Excel et les
 // emails — priorité au congé posé (explicite), sinon signale un jour férié (travaillé ou non).
 function libelleCongeJour(l) {
@@ -11299,7 +11393,7 @@ function initParametres() {
   document.getElementById('pa-note-info').value = db.params.appNoteText || '';
   document.getElementById('pa-planning-semaine-fixe').checked = !!db.params.planningSemaineFixe;
   document.getElementById('pa-cloture-active').checked = !!db.params.clotureActive;
-  renderClotureListe();
+  renderClotures();
 
   const fb = db.params.firebase || {};
   document.getElementById('pa-fb-apikey').value = fb.apiKey || '';
