@@ -622,6 +622,10 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 
       <!-- ===== VUE EMPLOYÉS ===== -->
       <div class="view" id="view-employes">
+        <div class="mode-toggle" style="margin-bottom:14px;">
+          <div class="active" id="emp-tab-actifs" onclick="setEmployesTab('actifs')">✅ Actifs</div>
+          <div id="emp-tab-inactifs" onclick="setEmployesTab('inactifs')">🚪 Inactifs</div>
+        </div>
         <div class="filter-bar">
           <input type="text" id="emp-search" placeholder="🔍 Rechercher un employé..." oninput="renderEmployes()">
           <select id="emp-equipe-filter" onchange="renderEmployes()">
@@ -2191,7 +2195,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.3.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2222,6 +2226,15 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.3.0', items: [
+    'Menu Employés : deux onglets "✅ Actifs" et "🚪 Inactifs" (avec compteur sur chacun) pour séparer les employés en poste des employés partis — plus besoin de les voir mélangés dans la même liste. La recherche et le filtre par équipe s\'appliquent toujours dans l\'onglet sélectionné',
+  ] },
+  { v: '2.2.2', items: [
+    'Correction importante (découverte le 13/09) : marquer un employé comme parti puis cliquer "Enregistrer" sur sa fiche le ramenait à tort "actif" — exactement le même bug que celui des compétences (v1.97.0), la fiche employé reconstruisant l\'objet employé sans reporter le statut d\'emploi (actif / historique des périodes), qui disparaissait donc silencieusement. Ces deux champs sont désormais systématiquement conservés lors de l\'enregistrement d\'une fiche employé, comme le sont déjà les compétences',
+  ] },
+  { v: '2.2.1', items: [
+    'Correction du statut d\'emploi (v2.2.0, découverte le 13/09) : le départ/la réintégration d\'un employé était un simple statut figé (actif/parti), sans conscience de la date choisie — un départ programmé pour le lendemain le faisait disparaître ou apparaître de façon incohérente selon la semaine consultée dans le Planning. La vue graphique/semaine compare désormais la plage exacte de la semaine affichée aux périodes d\'emploi de chaque employé : il reste visible pour toute semaine chevauchant au moins un jour travaillé, et disparaît proprement à partir de la première semaine entièrement postérieure à son départ (ou antérieure à sa reprise)',
+  ] },
   { v: '2.2.0', items: [
     'Nouveau : les employés qui quittent l\'entreprise n\'ont plus besoin d\'être supprimés. Fiche employé enrichie d\'un statut d\'emploi ("🚪 Marquer comme parti" / "↩️ Réintégrer") avec un historique complet des périodes, qui gère nativement plusieurs allers-retours (chaque départ ferme la période en cours, chaque réintégration en ouvre une nouvelle, sans limite de nombre)',
     'Un employé parti disparaît des plannings à venir et des listes de sélection actives (Planning, Compétences, Distribution, Compteur & modulation...), mais reste pleinement consultable dans le Récap paie, l\'Historique et les Clôtures pour les périodes où il était en poste — plus aucune perte de nom, de compétences ou de contrat comme avec une suppression',
@@ -4462,7 +4475,7 @@ function renderGraphiqueSemaine() {
   });
   cells += `<div class="grw-cell grw-head-cell" style="grid-row:1;grid-column:9;">Semaine</div>`;
 
-  const groupes = getEmployesGroupesParEquipe(true);
+  const groupes = getEmployesGroupesParEquipe(true, dateKey(days[0]), dateKey(days[6]));
   let row = 2;
   groupes.forEach(groupe => {
     // Bandeau de séparation d'équipe : une cellule de grille par colonne (nom + 7 jours +
@@ -5256,9 +5269,22 @@ function completerJournee() {
 // ===================================================
 function getEquipeById(id) { return db.equipes.find(e => e.id === id); }
 
-function getEmployesGroupesParEquipe(excludeSansPointage) {
+// Un employé est actif pendant [dkDebut, dkFin] si au moins une de ses périodes d'emploi
+// chevauche cet intervalle — jamais un simple statut figé "actif/parti" qui ignorerait qu'un
+// départ ou une réintégration programmé(e) dans le futur (ou le passé) doit s'appliquer à la
+// bonne date, pas immédiatement partout (bug découvert le 13/09 : un départ fixé à demain
+// masquait/affichait l'employé de façon incohérente selon la semaine consultée).
+function estActifPendant(emp, dkDebut, dkFin) {
+  if (!emp.periodesEmploi || !emp.periodesEmploi.length) return emp.actif !== false;
+  return emp.periodesEmploi.some(p => (!p.fin || p.fin >= dkDebut) && (!p.debut || p.debut <= dkFin));
+}
+
+function getEmployesGroupesParEquipe(excludeSansPointage, dkDebut, dkFin) {
   const nomComplet = e => `${e.prenom} ${e.nom}`;
-  const employesActifs = db.employes.filter(e => e.actif !== false);
+  // Sans plage de dates fournie (écrans sans contexte de date précis, ex: Compétences,
+  // Distribution), on retombe sur le statut du jour même — cohérent avec avant.
+  const aujourdhui = dateKey(new Date());
+  const employesActifs = db.employes.filter(e => estActifPendant(e, dkDebut || aujourdhui, dkFin || dkDebut || aujourdhui));
   const equipesTriees = [...db.equipes].sort((a, b) => (a.ordre || 0) - (b.ordre || 0));
   const groupes = [];
   equipesTriees.forEach(eq => {
@@ -5473,17 +5499,35 @@ function renderEquipeFilterSelects() {
   formSel.value = curForm;
 }
 
+let empTab = 'actifs';
+function setEmployesTab(tab) {
+  empTab = tab;
+  document.getElementById('emp-tab-actifs').classList.toggle('active', tab === 'actifs');
+  document.getElementById('emp-tab-inactifs').classList.toggle('active', tab === 'inactifs');
+  renderEmployes();
+}
+
 function renderEmployes() {
   renderEquipeFilterSelects();
   const wrap = document.getElementById('employes-wrap');
   const q = document.getElementById('emp-search').value.trim().toLowerCase();
   const eqFilter = document.getElementById('emp-equipe-filter').value;
+  // Compteurs sur les onglets — toujours à jour, même quand on est sur l'autre onglet.
+  const nbActifs = db.employes.filter(e => e.actif !== false).length;
+  const nbInactifs = db.employes.length - nbActifs;
+  document.getElementById('emp-tab-actifs').textContent = `✅ Actifs (${nbActifs})`;
+  document.getElementById('emp-tab-inactifs').textContent = `🚪 Inactifs (${nbInactifs})`;
   const list = db.employes.filter(e =>
+    (empTab === 'actifs' ? e.actif !== false : e.actif === false) &&
     (!q || `${e.prenom} ${e.nom}`.toLowerCase().includes(q)) &&
     (!eqFilter || e.equipeId === eqFilter)
   );
   if (!list.length) {
-    wrap.innerHTML = `<div class="empty-state"><div class="ico">👥</div><p>${db.employes.length ? 'Aucun employé ne correspond à ce filtre.' : 'Aucun employé pour le moment. Crée le premier pour commencer.'}</p></div>`;
+    wrap.innerHTML = `<div class="empty-state"><div class="ico">👥</div><p>${
+      empTab === 'inactifs'
+        ? 'Aucun employé inactif pour le moment.'
+        : (db.employes.length ? 'Aucun employé ne correspond à ce filtre.' : 'Aucun employé pour le moment. Crée le premier pour commencer.')
+    }</p></div>`;
     return;
   }
 
@@ -5840,7 +5884,14 @@ function saveEmploye() {
     prodFroid: parseFloat(document.getElementById('em-prod-froid').value) || 0,
     soldeInitial: parseFloat(document.getElementById('em-solde-initial').value) || 0,
     dateDebutContrat,
+    // Même protection que pour les compétences (bug v1.97.0) : ce formulaire ne gère ni le statut
+    // d'emploi ni son historique (voir renderStatutEmploiFiche / marquerEmployeParti /
+    // reintegrerEmploye), donc l'objet reconstruit ici ne doit jamais les faire disparaître —
+    // sinon "Marquer comme parti" puis "Enregistrer" ramènerait l'employé actif à tort (bug
+    // découvert le 13/09).
     competences: (idx >= 0 ? db.employes[idx].competences : null) || [],
+    actif: idx >= 0 ? db.employes[idx].actif !== false : true,
+    periodesEmploi: (idx >= 0 ? db.employes[idx].periodesEmploi : null) || [{ debut: dateDebutContrat, fin: null }],
   };
   if (idx >= 0) db.employes[idx] = employe; else db.employes.push(employe);
   saveDB();
