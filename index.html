@@ -2114,10 +2114,16 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <div class="form-group"><label>Productivité froid (u/h)</label><input type="number" id="em-prod-froid" min="0" step="0.5" value="0"></div>
     </div>
 
+    <div class="section-label">🚪 Statut d'emploi</div>
+    <div id="em-statut-emploi-badge" style="margin-bottom:8px;"></div>
+    <div class="hint" style="margin-bottom:8px;">Historique des périodes (embauche/départ) — un employé parti reste consultable partout dans les rapports et l'historique, mais disparaît des plannings à venir et des listes de sélection.</div>
+    <div id="em-periodes-emploi-liste" style="margin-bottom:10px;"></div>
+    <div id="em-statut-emploi-actions"></div>
+
     <div style="display:flex;gap:10px;align-items:center;margin-top:18px;">
       <button class="btn btn-primary" onclick="saveEmploye()">💾 Enregistrer</button>
       <button class="btn btn-secondary" onclick="closeModal('modal-employe')">Annuler</button>
-      <button class="btn btn-danger" id="btn-delete-employe" style="margin-left:auto;display:none;" onclick="deleteEmploye()">🗑️ Supprimer</button>
+      <button class="btn btn-danger" id="btn-delete-employe" style="margin-left:auto;display:none;" onclick="deleteEmploye()">🗑️ Supprimer définitivement</button>
     </div>
   </div>
 </div>
@@ -2185,7 +2191,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.2.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2216,6 +2222,11 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.2.0', items: [
+    'Nouveau : les employés qui quittent l\'entreprise n\'ont plus besoin d\'être supprimés. Fiche employé enrichie d\'un statut d\'emploi ("🚪 Marquer comme parti" / "↩️ Réintégrer") avec un historique complet des périodes, qui gère nativement plusieurs allers-retours (chaque départ ferme la période en cours, chaque réintégration en ouvre une nouvelle, sans limite de nombre)',
+    'Un employé parti disparaît des plannings à venir et des listes de sélection actives (Planning, Compétences, Distribution, Compteur & modulation...), mais reste pleinement consultable dans le Récap paie, l\'Historique et les Clôtures pour les périodes où il était en poste — plus aucune perte de nom, de compétences ou de contrat comme avec une suppression',
+    'À la réintégration, la date de début de contrat est automatiquement mise à jour sur la date de reprise — réutilise le même mécanisme que celui qui protège la mise en service de la pointeuse : la semaine de reprise, si partielle, n\'est jamais comptée à tort comme un déficit d\'heures sup',
+  ] },
   { v: '2.1.0', items: [
     'Correction importante de synchronisation (découverte le 12/09) : les collections "clotures" et "reglements" n\'étaient jamais écoutées en temps réel entre postes admin — supprimer une clôture sur un poste n\'atteignait jamais les autres postes déjà ouverts sans recharger complètement la page. Un garde-fou existant, censé protéger contre une collection distante vidée par erreur, bloquait aussi ce cas précis (supprimer la toute dernière clôture existante) : il ne s\'applique plus à ces deux collections, où vider jusqu\'à zéro élément est une action délibérée et confirmée',
     'Correction : le Compteur & modulation était absent de la table de rafraîchissement temps réel — il ne se redessinait jamais tout seul suite à un changement distant (pas seulement une suppression de clôture), obligeant à recharger la page entière pour voir l\'écran à jour',
@@ -2738,6 +2749,8 @@ function migrerEmployesDefauts(employes) {
       e.objectifsJours = [base, base, base, base, base, base, base];
     }
     if (!e.competences) e.competences = [];
+    if (e.actif === undefined) e.actif = true;
+    if (!e.periodesEmploi) e.periodesEmploi = [{ debut: e.dateDebutContrat || null, fin: null }];
     delete e.objectif;
     delete e.matricule;
   });
@@ -5245,14 +5258,15 @@ function getEquipeById(id) { return db.equipes.find(e => e.id === id); }
 
 function getEmployesGroupesParEquipe(excludeSansPointage) {
   const nomComplet = e => `${e.prenom} ${e.nom}`;
+  const employesActifs = db.employes.filter(e => e.actif !== false);
   const equipesTriees = [...db.equipes].sort((a, b) => (a.ordre || 0) - (b.ordre || 0));
   const groupes = [];
   equipesTriees.forEach(eq => {
     if (excludeSansPointage && eq.sansPointage) return;
-    const membres = db.employes.filter(e => e.equipeId === eq.id).sort((a, b) => nomComplet(a).localeCompare(nomComplet(b), 'fr'));
+    const membres = employesActifs.filter(e => e.equipeId === eq.id).sort((a, b) => nomComplet(a).localeCompare(nomComplet(b), 'fr'));
     if (membres.length) groupes.push({ equipe: eq, employes: membres });
   });
-  const sansEquipe = db.employes.filter(e => !e.equipeId || !getEquipeById(e.equipeId)).sort((a, b) => nomComplet(a).localeCompare(nomComplet(b), 'fr'));
+  const sansEquipe = employesActifs.filter(e => !e.equipeId || !getEquipeById(e.equipeId)).sort((a, b) => nomComplet(a).localeCompare(nomComplet(b), 'fr'));
   if (sansEquipe.length) groupes.push({ equipe: null, employes: sansEquipe });
   return groupes;
 }
@@ -5485,6 +5499,7 @@ function renderEmployes() {
         <span>${minToHM(Math.round((e.contratH || 35) * 60))}/sem</span>
       </div>
       ${e.email ? `<div class="flags"><span class="flag-badge">✉️ ${e.email}</span></div>` : ''}
+      ${e.actif === false ? `<div class="flags"><span class="flag-badge" style="background:rgba(255,77,106,.12);color:var(--danger);">🚪 Parti</span></div>` : ''}
     </div>`;
   };
 
@@ -5581,7 +5596,87 @@ function openEmployeModal() {
   document.getElementById('em-date-debut-contrat').value = '';
   document.getElementById('btn-delete-employe').style.display = 'none';
   window._hcListeTemp = [];
+  renderStatutEmploiFiche(null);
   openModal('modal-employe');
+}
+
+// Affiche le badge, l'historique des périodes et le(s) bouton(s) d'action (Marquer comme parti /
+// Réintégrer) dans la fiche employé — appelée à l'ouverture du modal (nouvel employé ou édition) et
+// après chaque changement de statut, pour rester toujours synchronisée avec l'objet employé.
+function renderStatutEmploiFiche(emp) {
+  const badgeWrap = document.getElementById('em-statut-emploi-badge');
+  const listeWrap = document.getElementById('em-periodes-emploi-liste');
+  const actionsWrap = document.getElementById('em-statut-emploi-actions');
+  const aujourdhui = dateKey(new Date());
+  if (!emp) {
+    badgeWrap.innerHTML = '<span class="flag-badge" style="background:rgba(46,204,113,.12);color:var(--success);">✅ Actif dès l\'enregistrement</span>';
+    listeWrap.innerHTML = '';
+    actionsWrap.innerHTML = '';
+    return;
+  }
+  const actif = emp.actif !== false;
+  const periodes = [...(emp.periodesEmploi || [])].sort((a, b) => (a.debut || '').localeCompare(b.debut || ''));
+  const derniereFin = [...periodes].reverse().find(p => p.fin)?.fin;
+  badgeWrap.innerHTML = actif
+    ? '<span class="flag-badge" style="background:rgba(46,204,113,.12);color:var(--success);">✅ Actif</span>'
+    : `<span class="flag-badge" style="background:rgba(255,77,106,.12);color:var(--danger);">🚪 Parti${derniereFin ? ' le ' + formatDateFR(isoToDate(derniereFin)) : ''}</span>`;
+  listeWrap.innerHTML = periodes.length
+    ? periodes.map(p => `<div style="font-size:13px;color:var(--text-dim);padding:2px 0;">📅 ${p.debut ? formatDateFR(isoToDate(p.debut)) : '—'} → ${p.fin ? '🚪 ' + formatDateFR(isoToDate(p.fin)) : 'aujourd\'hui'}</div>`).join('')
+    : '<div class="hint">Aucun historique de période enregistré.</div>';
+  actionsWrap.innerHTML = actif
+    ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="date" id="em-date-depart" value="${aujourdhui}" style="max-width:170px;">
+        <button class="btn btn-secondary btn-sm" onclick="marquerEmployeParti('${emp.id}')">🚪 Marquer comme parti</button>
+      </div>`
+    : `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="date" id="em-date-reprise" value="${aujourdhui}" style="max-width:170px;">
+        <button class="btn btn-primary btn-sm" onclick="reintegrerEmploye('${emp.id}')">↩️ Réintégrer</button>
+      </div>`;
+}
+
+// Marque l'employé comme parti à la date choisie : ferme sa période d'emploi en cours, mais ne
+// touche à rien d'autre (compétences, contrat, planning et pointages passés restent intacts et
+// consultables). Il disparaît des plannings à venir et des listes de sélection actives (voir
+// getEmployesGroupesParEquipe) — jamais des rapports historiques (Récap paie, Historique, Clôtures),
+// qui continuent de le résoudre par son id comme n'importe quel employé actif.
+function marquerEmployeParti(id) {
+  const e = getEmpById(id);
+  const dateInput = document.getElementById('em-date-depart');
+  if (!e || !dateInput?.value) return;
+  const dk = dateInput.value;
+  if (!confirm(`Marquer ${e.prenom} ${e.nom} comme parti le ${formatDateFR(isoToDate(dk))} ?\n\nSon planning et son historique restent consultables partout, mais il disparaîtra des plannings à venir et des listes de sélection.`)) return;
+  if (!e.periodesEmploi || !e.periodesEmploi.length) e.periodesEmploi = [{ debut: e.dateDebutContrat || null, fin: null }];
+  const derniere = e.periodesEmploi[e.periodesEmploi.length - 1];
+  derniere.fin = dk;
+  e.actif = false;
+  saveDB();
+  logAudit('Employé marqué comme parti', `${e.prenom} ${e.nom} — départ le ${dk}`);
+  notify(`${e.prenom} ${e.nom} marqué comme parti`);
+  renderStatutEmploiFiche(e);
+  renderEmployes();
+}
+
+// Réintègre un employé parti : ouvre une NOUVELLE période d'emploi (l'historique de la précédente
+// reste visible, pour gérer d'éventuels allers-retours multiples). Met aussi à jour la date de
+// début de contrat sur la date de reprise — même mécanisme déjà utilisé pour un nouveau contrat ou
+// la mise en service de la pointeuse : la semaine de reprise, si partielle, n'est jamais comptée à
+// tort comme un déficit d'heures sup.
+function reintegrerEmploye(id) {
+  const e = getEmpById(id);
+  const dateInput = document.getElementById('em-date-reprise');
+  if (!e || !dateInput?.value) return;
+  const dk = dateInput.value;
+  if (!confirm(`Réintégrer ${e.prenom} ${e.nom} à partir du ${formatDateFR(isoToDate(dk))} ?\n\nSes compétences et son ancien contrat sont conservés tels quels.`)) return;
+  if (!e.periodesEmploi) e.periodesEmploi = [];
+  e.periodesEmploi.push({ debut: dk, fin: null });
+  e.actif = true;
+  e.dateDebutContrat = dk;
+  saveDB();
+  logAudit('Employé réintégré', `${e.prenom} ${e.nom} — reprise le ${dk}`);
+  notify(`${e.prenom} ${e.nom} réintégré`);
+  document.getElementById('em-date-debut-contrat').value = dk;
+  renderStatutEmploiFiche(e);
+  renderEmployes();
 }
 
 function editEmploye(id) {
@@ -5619,6 +5714,7 @@ function editEmploye(id) {
   window._hcListeTemp = e.contratHistorique
     ? e.contratHistorique.map(x => ({ ...x }))
     : (e.contratH ? [{ depuis: e.dateDebutContrat || '2000-01-01', contratH: e.contratH }] : []);
+  renderStatutEmploiFiche(e);
   openModal('modal-employe');
 }
 
