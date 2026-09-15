@@ -1605,7 +1605,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <button class="btn btn-secondary btn-sm" onclick="toggleAllCopyEmp(true)">Tout sélectionner</button>
       <button class="btn btn-secondary btn-sm" onclick="toggleAllCopyEmp(false)">Tout désélectionner</button>
     </div>
-    <div id="cw-employes-list" style="max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:16px;display:grid;grid-template-columns:1fr 1fr;gap:4px;"></div>
+    <div id="cw-employes-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:16px;"></div>
 
     <div class="section-label">Semaines cibles</div>
     <div id="cw-weeks-list" style="max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:16px;"></div>
@@ -2195,7 +2195,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.3.0';
+const APP_VERSION = '2.4.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2226,6 +2226,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.4.0', items: [
+    '"Copier la semaine" : la liste des employés est désormais groupée par équipe, avec une case à cocher par équipe pour sélectionner/désélectionner tous ses membres d\'un coup — plus besoin de cocher un par un pour copier une semaine complète sur toute une équipe. Un employé inactif sur la semaine source n\'apparaît plus dans la liste',
+  ] },
   { v: '2.3.0', items: [
     'Menu Employés : deux onglets "✅ Actifs" et "🚪 Inactifs" (avec compteur sur chacun) pour séparer les employés en poste des employés partis — plus besoin de les voir mélangés dans la même liste. La recherche et le filtre par équipe s\'appliquent toujours dans l\'onglet sélectionné',
   ] },
@@ -5995,8 +5998,25 @@ function openCopyWeekModal() {
   document.getElementById('cw-source-label').textContent = formatWeekLabel(pgWeekMonday);
 
   const empWrap = document.getElementById('cw-employes-list');
-  empWrap.innerHTML = db.employes.length
-    ? getEmployesTries().map(e => `<label class="checkbox-row"><input type="checkbox" class="cw-emp-cb" data-id="${e.id}" checked><span>${e.prenom} ${e.nom}</span></label>`).join('')
+  // Groupé par équipe (comme partout ailleurs dans l'appli) — chaque équipe a sa propre case à
+  // cocher pour sélectionner/désélectionner tous ses membres d'un coup, demandé pour éviter de
+  // cocher un par un quand on copie une semaine complète pour toute une équipe. Respecte la plage
+  // de la semaine source (un employé inactif cette semaine-là n'apparaît pas, cohérent avec le
+  // reste du Planning).
+  const groupes = getEmployesGroupesParEquipe(false, dateKey(pgWeekMonday), dateKey(addDays(pgWeekMonday, 6)));
+  empWrap.innerHTML = groupes.length
+    ? groupes.map(g => {
+        const eqId = g.equipe?.id || '__none__';
+        return `<div style="margin-bottom:8px;">
+          <label class="checkbox-row" style="font-weight:600;">
+            <input type="checkbox" class="cw-equipe-cb" data-equipe="${eqId}" checked onchange="toggleEquipeCopyEmp(this)">
+            <span>${g.equipe?.nom || 'Sans équipe'}</span>
+          </label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;padding-left:22px;">
+            ${g.employes.map(e => `<label class="checkbox-row"><input type="checkbox" class="cw-emp-cb" data-equipe="${eqId}" data-id="${e.id}" checked onchange="onCopyEmpChange(this)"><span>${e.prenom} ${e.nom}</span></label>`).join('')}
+          </div>
+        </div>`;
+      }).join('')
     : '<div class="hint">Aucun employé.</div>';
 
   const weeksWrap = document.getElementById('cw-weeks-list');
@@ -6013,8 +6033,29 @@ function openCopyWeekModal() {
   openModal('modal-copy-week');
 }
 
+// Coche/décoche tous les membres de cette équipe d'un coup, en cliquant la case de l'équipe.
+function toggleEquipeCopyEmp(equipeCb) {
+  const eqId = equipeCb.dataset.equipe;
+  document.querySelectorAll(`.cw-emp-cb[data-equipe="${eqId}"]`).forEach(m => { m.checked = equipeCb.checked; });
+}
+
+// Quand un employé est coché/décoché individuellement, remet la case de son équipe dans le bon
+// état : cochée si tous ses membres le sont, décochée si aucun, entre les deux (indeterminate)
+// sinon — pour que la case équipe reflète toujours fidèlement sa sélection.
+function onCopyEmpChange(empCb) {
+  const eqId = empCb.dataset.equipe;
+  const membres = [...document.querySelectorAll(`.cw-emp-cb[data-equipe="${eqId}"]`)];
+  const eqCb = document.querySelector(`.cw-equipe-cb[data-equipe="${eqId}"]`);
+  if (!eqCb) return;
+  const tousCoches = membres.every(m => m.checked);
+  const aucunCoche = membres.every(m => !m.checked);
+  eqCb.checked = tousCoches;
+  eqCb.indeterminate = !tousCoches && !aucunCoche;
+}
+
 function toggleAllCopyEmp(state) {
   document.querySelectorAll('.cw-emp-cb').forEach(cb => cb.checked = state);
+  document.querySelectorAll('.cw-equipe-cb').forEach(cb => { cb.checked = state; cb.indeterminate = false; });
 }
 
 function doCopyWeek() {
