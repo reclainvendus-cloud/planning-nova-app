@@ -2195,7 +2195,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.4.0';
+const APP_VERSION = '2.5.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2226,6 +2226,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.5.0', items: [
+    'Écran Validation : les anomalies de pointage en attente sont désormais séparées par jour, avec une ligne rose et la date complète en toutes lettres (ex: "Lundi 16 novembre") — pour mieux s\'y retrouver dans une longue liste couvrant plusieurs jours',
+  ] },
   { v: '2.4.0', items: [
     '"Copier la semaine" : la liste des employés est désormais groupée par équipe, avec une case à cocher par équipe pour sélectionner/désélectionner tous ses membres d\'un coup — plus besoin de cocher un par un pour copier une semaine complète sur toute une équipe. Un employé inactif sur la semaine source n\'apparaît plus dans la liste',
   ] },
@@ -12712,6 +12715,11 @@ function calculerValidation() {
   });
 }
 
+function formatJourLongFR(d) {
+  const s = d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function renderValidationList(anomalies) {
   const wrap = document.getElementById('va-wrap');
   if (!anomalies.length) {
@@ -12720,10 +12728,21 @@ function renderValidationList(anomalies) {
   }
   const sorted = anomalies.map((a, idx) => ({ ...a, idx })).sort((a, b) => b.dk.localeCompare(a.dk));
   const DOW = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+  const COULEUR_SEPARATEUR = '#ff5ea8';
 
-  wrap.innerHTML = sorted.map(a => {
+  wrap.innerHTML = sorted.map((a, i) => {
     const d = isoToDate(a.dk);
     const dowLabel = DOW[d.getDay()];
+    // Séparateur de jour — une seule fois par jour, dès que la date change par rapport à la carte
+    // précédente (la liste est déjà triée par date décroissante), pour mieux distinguer les jours
+    // entre eux d'un coup d'œil dans une longue liste d'anomalies.
+    const separateurJour = (i === 0 || sorted[i - 1].dk !== a.dk)
+      ? `<div style="display:flex;align-items:center;gap:10px;margin:${i === 0 ? '0' : '20px'} 0 10px;">
+          <div style="flex:1;height:2px;background:${COULEUR_SEPARATEUR};border-radius:1px;"></div>
+          <div style="color:${COULEUR_SEPARATEUR};font-weight:700;font-size:13px;white-space:nowrap;">${formatJourLongFR(d)}</div>
+          <div style="flex:1;height:2px;background:${COULEUR_SEPARATEUR};border-radius:1px;"></div>
+        </div>`
+      : '';
     const label = a.typePointage === 'embauche' ? 'Embauche' : 'Débauche';
     const heurePrevue = a.typePointage === 'embauche' ? minToTime(a.inst.debut) : minToTime(a.inst.fin);
     const taskColor = a.task?.color || '#888';
@@ -12771,7 +12790,7 @@ function renderValidationList(anomalies) {
     }
     const clsStyle = { danger: 'background:rgba(255,77,106,.15);color:var(--danger);', warning: 'background:rgba(245,166,35,.15);color:var(--warning);' };
 
-    return `<div class="task-card" style="margin-bottom:8px;cursor:default;" id="anomalie-${a.idx}">
+    return `${separateurJour}<div class="task-card" style="margin-bottom:8px;cursor:default;" id="anomalie-${a.idx}">
       <div style="display:flex;align-items:flex-start;gap:12px;">
         <span class="flag-badge" style="${clsStyle[badgeCls]};flex-shrink:0;margin-top:2px;">${badgeTxt}</span>
         <div style="flex:1;min-width:0;">
