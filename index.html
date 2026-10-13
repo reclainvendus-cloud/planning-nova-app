@@ -2195,7 +2195,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.5.0';
+const APP_VERSION = '2.6.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2226,6 +2226,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.6.0', items: [
+    'Nouveau : suivi de la pénibilité (travail de nuit). Une nuit est "pénible" quand l\'employé travaille au moins 1 heure complète entre 00h et 05h (la nuit est rattachée au jour où tombe cette fenêtre, au pointage réel quand il existe, sinon au planning — comme les heures de nuit). Seuil annuel : 100 nuits = 4 points.',
+    'Récap paie : nouvelle case à cocher "Pénibilité" (colonne 🌛 par jour, total par semaine, badge par employé et carte dans le résumé global). Les nuits pénibles figurent aussi dans l\'export Excel (colonne détail, synthèse, récapitulatif), le CSV (colonne + ligne "TOTAL NUITS PÉNIBLES" par employé) et les e-mails de récap.',
+    'Clôture Paie : colonne "🌛 Pénib." dans l\'aperçu Décalage, nuits pénibles anticipées dans le résumé Anticipation, écart de nuits pénibles dans la régularisation (écran + exports), colonnes dans les fichiers de clôture.',
+    'Compteur & modulation : nouvelle ligne "🌛 Pénibilité" sous chaque employé — cumul des nuits pénibles de l\'année civile en cours vers les 100 nuits, avec la part pointée, la part estimée d\'après le planning, et la projection avec le planning à venir.',
+  ] },
   { v: '2.5.0', items: [
     'Écran Validation : les anomalies de pointage en attente sont désormais séparées par jour, avec une ligne rose et la date complète en toutes lettres (ex: "Lundi 16 novembre") — pour mieux s\'y retrouver dans une longue liste couvrant plusieurs jours',
   ] },
@@ -7189,6 +7195,72 @@ function computeNuitMinutes(debut, fin, crosseMinuit) {
 }
 
 // ===================================================
+// PÉNIBILITÉ — facteur de risque "travail de nuit" (compte professionnel de prévention)
+// ===================================================
+// Une NUIT est dite "pénible" quand le salarié travaille au moins 1 heure complète entre minuit et
+// 5h du matin. L'année, 100 nuits pénibles ou plus déclenchent le facteur : 4 points forfaitaires
+// (1 par trimestre d'exposition). Règles simplifiées demandées par l'admin — modifiables ici.
+// RATTACHEMENT : la nuit est comptée sur le jour CIVIL où tombe la fenêtre 00h-05h (le "matin"),
+// comme le panier nuit à l'écran — ainsi une nuit 22h→06h commencée le 31/12 compte le 01/01.
+// Pauses : non déduites de la fenêtre (une pause n'a d'effet que si elle fait passer le travail
+// effectif sous 1h dans la fenêtre — cas marginal).
+const PENIBILITE_FENETRE_DEBUT_MIN = 0;     // 00:00
+const PENIBILITE_FENETRE_FIN_MIN = 300;     // 05:00
+const PENIBILITE_SEUIL_NUIT_MIN = 60;       // au moins 1h complète dans la fenêtre
+const PENIBILITE_SEUIL_ANNEE_NUITS = 100;   // nuits pénibles dans l'année civile
+const PENIBILITE_POINTS_ANNEE = 4;          // points forfaitaires si le seuil est atteint
+
+// Minutes d'un intervalle [debut, fin] (en minutes depuis 00:00 du jour concerné) qui tombent dans
+// la fenêtre 00h-05h de CE jour.
+function minutesFenetrePenibilite(debut, fin) {
+  return Math.max(0, Math.min(fin, PENIBILITE_FENETRE_FIN_MIN) - Math.max(debut, PENIBILITE_FENETRE_DEBUT_MIN));
+}
+
+// Version PLANNING (repli quand rien n'est pointé) — même structure que le calcul de nuitPlanMin :
+// portion des tâches du jour qui tombe avant 5h + portion après minuit des services de la veille.
+function nuitPenibleMinPlanning(insts, instsHierCross) {
+  let m = 0;
+  insts.forEach(i => { m += minutesFenetrePenibilite(i.debut, i.crosseMinuit ? 1440 : i.fin); });
+  instsHierCross.forEach(i => { if (i.crosseMinuit) m += minutesFenetrePenibilite(0, i.fin); });
+  return m;
+}
+
+// Une nuit pénible pour (employé, jour) : pointage réel dès qu'il en existe un (comme les heures de
+// nuit), sinon planning. Renvoie les minutes dans la fenêtre, le booléen et la source utilisée.
+function calculerNuitPenibleJour(empId, dk, pointagesParAnnee, splitSeuil) {
+  // Chemin rapide (le cumul annuel parcourt 365 jours × tous les employés) : ni planning ce jour-là
+  // ni la veille, ni aucun pointage → rien à calculer.
+  const dkVeille = dateKey(addDays(isoToDate(dk), -1));
+  const aPlan = (db.planning[empId]?.[dk] || []).length > 0 || (db.planning[empId]?.[dkVeille] || []).length > 0;
+  const aPointage = !!pointagesParAnnee?.[dk.slice(0, 4)]?.[dk]?.[empId] || !!pointagesParAnnee?.[dkVeille.slice(0, 4)]?.[dkVeille]?.[empId];
+  if (!aPlan && !aPointage) return { min: 0, penible: false, source: 'planning' };
+  const r = calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil);
+  if (r.pointeMin > 0) return { min: r.nuitPenibleMin, penible: r.nuitPenibleMin >= PENIBILITE_SEUIL_NUIT_MIN, source: 'pointe' };
+  const base = calculerAnticipationJour(empId, dk, splitSeuil, false);
+  return { min: base.nuitPenibleMin, penible: base.nuitPenibleMin >= PENIBILITE_SEUIL_NUIT_MIN, source: 'planning' };
+}
+
+// Cumul sur une année civile pour un employé : nuits déjà pointées, nuits estimées au planning
+// pour un jour passé non pointé, et nuits prévues au planning pour les jours à venir.
+function calculerPenibiliteAnnee(empId, annee, pointagesParAnnee, splitSeuil) {
+  const aujourdhui = dateKey(new Date());
+  let pointees = 0, planningPasse = 0, futures = 0;
+  let d = new Date(annee, 0, 1);
+  const fin = new Date(annee, 11, 31);
+  while (d <= fin) {
+    const dk = dateKey(d);
+    const n = calculerNuitPenibleJour(empId, dk, pointagesParAnnee, splitSeuil);
+    if (n.penible) {
+      if (dk > aujourdhui) futures++;
+      else if (n.source === 'pointe') pointees++;
+      else planningPasse++;
+    }
+    d = addDays(d, 1);
+  }
+  return { pointees, planningPasse, futures, total: pointees + planningPasse, projete: pointees + planningPasse + futures };
+}
+
+// ===================================================
 // PHASE D — Récap paie
 // ===================================================
 // ===================================================
@@ -7332,6 +7404,7 @@ const RECAP_COLONNES = [
   { id: 'ecartTotal', label: 'Écart planning', defaut: true },
   { id: 'ecartContrat', label: 'Écart contrat', defaut: true },
   { id: 'nuit', label: 'Nuit', defaut: true },
+  { id: 'penibilite', label: 'Pénibilité', defaut: false },
   { id: 'panier', label: 'Panier jour', defaut: true },
   { id: 'panierNuit', label: 'Panier nuit', defaut: true },
   { id: 'primes', label: 'Primes', defaut: true },
@@ -7511,6 +7584,9 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
   // d'hier" (21h hier → 6h aujourd'hui), sous peine de perdre des heures de nuit réellement
   // travaillées si le planning ne modélise pas explicitement un service à cheval sur minuit.
   let nuitMatineeMin = 0;
+  // Minutes travaillées entre 00h et 05h CE jour (pénibilité, voir PENIBILITE_*), quelle que soit
+  // la source (service commencé hier, service matinal isolé, hors planning).
+  let nuitPenibleMin = 0;
 
   if (instsHierCross.length) {
     const evtsHier = Object.values(pointagesParAnnee[dkHier.slice(0, 4)]?.[dkHier]?.[empId]?.evenements || {});
@@ -7536,6 +7612,7 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
       const nuitPortion = computeNuitMinutes(1440, fMin, false);
       nuitReelMin += nuitPortion;
       nuitMatineeMin += nuitPortion;
+      nuitPenibleMin += minutesFenetrePenibilite(0, fMin - 1440);
     }
   }
 
@@ -7580,6 +7657,7 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
         if (embEvt2 && debEvt2) {
           let dMin2 = timeToMin(embEvt2.heureRetenue || embEvt2.heure), fMin2 = timeToMin(debEvt2.heureRetenue || debEvt2.heure);
           if (fMin2 <= dMin2) fMin2 += 1440;
+          nuitPenibleMin += minutesFenetrePenibilite(dMin2, curDk === dk ? fMin2 : Math.min(fMin2, 1440));
           if (curDk === dk) {
             const pauseTotaleChaine = chaine.reduce((s, i) => s + (i.pauseDuree || 0), 0);
             pointeMin += Math.max(0, fMin2 - dMin2 - pauseTotaleChaine);
@@ -7626,6 +7704,7 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
       // Service standalone démarré tôt ce matin (ex: 00:30-08:30), sans lien de chaînage avec
       // hier — sa portion 0h-6h compte quand même pour "la nuit d'hier" (voir note plus haut).
       nuitMatineeMin += Math.max(0, Math.min(fMin, 360) - Math.max(dMin, 0));
+      nuitPenibleMin += minutesFenetrePenibilite(dMin, fMin);
     });
   }
 
@@ -7646,12 +7725,13 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
         nuitReelMin += computeNuitMinutes(dMin, fMin, false);
         nuitSoireeMin += Math.max(0, Math.min(fMin, 1440) - Math.max(dMin, 1260));
         nuitMatineeMin += Math.max(0, Math.min(fMin, 360) - Math.max(dMin, 0));
+        nuitPenibleMin += minutesFenetrePenibilite(dMin, fMin);
       }
     });
     pointeMin += pointeHorsPlanning;
   }
 
-  return { pointeMin, pointeHorsPlanning, nuitReelMin, nuitSoireeMin, nuitMatineeMin };
+  return { pointeMin, pointeHorsPlanning, nuitReelMin, nuitSoireeMin, nuitMatineeMin, nuitPenibleMin };
 }
 
 // ===================================================
@@ -8005,6 +8085,7 @@ const AIDE_HTML = `
 <tr><td>Écart planning</td><td>Pointé moins Planifié. Neutralisé sur un férié chômé légitime (n'affiche pas de faux déficit).</td></tr>
 <tr><td>Écart contrat</td><td>Comparaison hebdomadaire au contrat de l'employé, neutralisée des fériés/congés isolés. Affiche "—" si la semaine est à cheval sur le bord de la période choisie (comparaison impossible à faire équitablement).</td></tr>
 <tr><td>Nuit</td><td>Heures de nuit cumulées.</td></tr>
+<tr><td>Pénibilité</td><td>Colonne à cocher. 🌛 1 = nuit pénible : au moins 1 h travaillée entre 00h et 05h (comptée sur le jour où tombe cette fenêtre, pointage réel sinon planning). Le cumul annuel (seuil 100 nuits = 4 points) se suit dans Compteur &amp; modulation.</td></tr>
 <tr><td>Congé</td><td>Nom du congé posé ce jour-là, avec sa durée entre parenthèses s'il s'agit d'un férié.</td></tr>
 </table>
 
@@ -8438,10 +8519,11 @@ function calculerAnticipationJour(empId, dk, splitSeuil, utiliserSemaineType) {
   const planMinHier = instsHierCross.reduce((s, i) => s + postMinuitWorkMinutes(i), 0);
   const planMin = insts.reduce((s, i) => s + ownDayMinutes(i), 0) + planMinHier;
   const nuitMin = insts.reduce((s, i) => s + preMinuitNuitMinutes(i), 0) + instsHierCross.reduce((s, i) => s + postMinuitNuitMinutes(i), 0);
+  const nuitPenibleMin = nuitPenibleMinPlanning(insts, instsHierCross);
   const panierJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.panier || 0); }, 0);
   const primesJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.primeMontant || 0); }, 0);
   const decouchageJour = insts.reduce((s, i) => { const t = db.tasks.find(tt => tt.id === i.taskId); return s + (t?.decouchage || 0); }, 0);
-  return { planMin, nuitMin, panierJour, primesJour, decouchageJour, source, estConge: congeInsts.length > 0, congeTaskId: congeInsts.length ? congeInsts[0].taskId : null };
+  return { planMin, nuitMin, nuitPenibleMin, panierJour, primesJour, decouchageJour, source, estConge: congeInsts.length > 0, congeTaskId: congeInsts.length ? congeInsts[0].taskId : null };
 }
 
 // Estimation "réelle" d'un jour désormais passé — reprend les heures réellement pointées si elles
@@ -8456,7 +8538,7 @@ function calculerAnticipationJour(empId, dk, splitSeuil, utiliserSemaineType) {
 // valeurs distinctes — d'où "planifieMin" et "pointeMin" ajoutés séparément ci-dessous.
 function calculerReelPourRegularisation(empId, dk, splitSeuil, pointagesParAnnee) {
   const base = calculerAnticipationJour(empId, dk, splitSeuil, false);
-  const { pointeMin, nuitReelMin } = calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil);
+  const { pointeMin, nuitReelMin, nuitPenibleMin: nuitPenibleReelMin } = calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil);
   // Paniers/découchage : toujours via les 4 règles combinées (voir calculerPaniersJourNuit), pas
   // via calculerAnticipationJour — sinon la régularisation comparerait des choses différentes
   // (anticipé = 4 règles complètes, réel = simple flag de tâche), faussant tout l'écart.
@@ -8466,6 +8548,7 @@ function calculerReelPourRegularisation(empId, dk, splitSeuil, pointagesParAnnee
     planifieMin: base.planMin, // vraie durée planifiée, jamais confondue avec le pointé
     pointeMin, // vraie durée pointée (0 si rien pointé)
     nuitMin: pointeMin > 0 ? nuitReelMin : base.nuitMin,
+    nuitPenibleMin: pointeMin > 0 ? nuitPenibleReelMin : base.nuitPenibleMin,
     panierJour: paniers.panierJour, panierNuit: paniers.panierNuit, primesJour: base.primesJour, decouchageJour: paniers.decouchage,
     estConge: base.estConge, congeTaskId: base.congeTaskId,
   };
@@ -8598,6 +8681,7 @@ async function calculerRegularisationMoisPrecedent(clotureAReguler) {
   const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
   const parEmploye = {};
   Object.entries(clotureAReguler.parEmploye).forEach(([empId, data]) => {
+    let deltaNuitsPenibles = 0;
     let deltaPlanMin = 0, deltaNuitMin = 0, deltaPanier = 0, deltaPanierNuit = 0, deltaPrimes = 0, deltaDecouchage = 0;
     const details = [];
     Object.entries(data.joursAnticipes).forEach(([dk, anticipe]) => {
@@ -8608,6 +8692,11 @@ async function calculerRegularisationMoisPrecedent(clotureAReguler) {
       const dPanierNuit = (reel.panierNuit || 0) - (anticipe.panierNuit || 0);
       const dPrimes = reel.primesJour - anticipe.primesJour;
       const dDecouchage = reel.decouchageJour - anticipe.decouchageJour;
+      // Pénibilité : nuits pénibles réelles moins anticipées. Une clôture antérieure à cette
+      // fonction n'a pas figé nuitPenibleMin — on ne devine pas, écart nul pour ce jour.
+      const nPenReel = (reel.nuitPenibleMin ?? 0) >= PENIBILITE_SEUIL_NUIT_MIN ? 1 : 0;
+      const nPenAnt = anticipe.nuitPenibleMin === undefined ? nPenReel : (anticipe.nuitPenibleMin >= PENIBILITE_SEUIL_NUIT_MIN ? 1 : 0);
+      deltaNuitsPenibles += nPenReel - nPenAnt;
       deltaPlanMin += dPlan; deltaNuitMin += dNuit; deltaPanier += dPanier; deltaPanierNuit += dPanierNuit; deltaPrimes += dPrimes; deltaDecouchage += dDecouchage;
       details.push({ dk, anticipe, reel, dPlan, dNuit, dPanier, dPanierNuit, dPrimes, dDecouchage });
     });
@@ -8626,7 +8715,7 @@ async function calculerRegularisationMoisPrecedent(clotureAReguler) {
     });
     dejaRegleAnticipe = clotureAReguler.reglementsAnticipeHS?.[empId] || 0;
 
-    parEmploye[empId] = { deltaPlanMin, deltaNuitMin, deltaPanier, deltaPanierNuit, deltaPrimes, deltaDecouchage, deltaHeuresSup, dejaRegleAnticipe, semainesHS, details };
+    parEmploye[empId] = { deltaNuitsPenibles, deltaPlanMin, deltaNuitMin, deltaPanier, deltaPanierNuit, deltaPrimes, deltaDecouchage, deltaHeuresSup, dejaRegleAnticipe, semainesHS, details };
   });
   return { mois: clotureAReguler.mois, parEmploye };
 }
@@ -8750,7 +8839,7 @@ async function chargerRegularisationSiApplicable(mois) {
     const emps = getEmployesTries();
     const lignes = emps
       .map(emp => ({ emp, d: regul.parEmploye[emp.id] }))
-      .filter(x => x.d && (x.d.deltaPlanMin !== 0 || x.d.deltaNuitMin !== 0 || x.d.deltaPanier !== 0 || x.d.deltaPanierNuit !== 0 || x.d.deltaPrimes !== 0 || x.d.deltaDecouchage !== 0 || x.d.deltaHeuresSup !== 0));
+      .filter(x => x.d && (x.d.deltaPlanMin !== 0 || x.d.deltaNuitMin !== 0 || x.d.deltaNuitsPenibles !== 0 || x.d.deltaPanier !== 0 || x.d.deltaPanierNuit !== 0 || x.d.deltaPrimes !== 0 || x.d.deltaDecouchage !== 0 || x.d.deltaHeuresSup !== 0));
 
     if (!lignes.length) {
       wrap.innerHTML = '<div class="hint" style="color:var(--success);">✅ Aucun écart entre l\'anticipé et le réel — rien à régulariser.</div>';
@@ -8761,6 +8850,7 @@ async function chargerRegularisationSiApplicable(mois) {
         <th style="padding:6px 9px;text-align:left;font-size:12px;font-weight:700;color:var(--text-muted);">Employé</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Heures</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Nuit</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);" title="Écart de nuits pénibles (≥ 1h entre 00h et 05h)">🌛 Pénib.</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">⚖️ Écart HS</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🍱 Panier jour</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🌙 Panier nuit</th>
@@ -8772,6 +8862,7 @@ async function chargerRegularisationSiApplicable(mois) {
           <td style="padding:6px 9px;font-size:13px;font-weight:700;color:var(--text);">${emp.prenom} ${emp.nom}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaPlanMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaPlanMin >= 0 ? '+' : '-'}${minToHM(Math.abs(d.deltaPlanMin))}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaNuitMin >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.deltaNuitMin >= 0 ? '+' : '-'}${minToHM(Math.abs(d.deltaNuitMin))}</td>
+          <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:#c58bff;">${d.deltaNuitsPenibles ? (d.deltaNuitsPenibles >= 0 ? '+' : '') + d.deltaNuitsPenibles : '—'}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:${d.deltaHeuresSup >= 0 ? 'var(--success)' : 'var(--danger)'};" title="${d.dejaRegleAnticipe ? 'Dont ' + minToHM(d.dejaRegleAnticipe) + ' déjà réglées en avance à la clôture précédente' : ''}">${d.deltaHeuresSup ? (d.deltaHeuresSup >= 0 ? '+' : '-') + minToHM(Math.abs(d.deltaHeuresSup)) : '—'}${d.dejaRegleAnticipe ? ' 🔒' : ''}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaPanier ? (d.deltaPanier >= 0 ? '+' : '') + d.deltaPanier : '—'}</td>
           <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-size:13px;color:var(--text);">${d.deltaPanierNuit ? (d.deltaPanierNuit >= 0 ? '+' : '') + d.deltaPanierNuit : '—'}</td>
@@ -8934,9 +9025,9 @@ function rendreApercuCloturePaie() {
 
   // Résumé récapitulatif — ce qui sera exactement figé si tu cliques "Clôturer", pour que tu
   // valides en connaissance de cause avant l'enregistrement définitif.
-  let totalMinAnticipe = 0, totalReglementHS = 0, nbEmployesAvecReglement = 0, totalPanierJour = 0, totalPanierNuit = 0;
+  let totalMinAnticipe = 0, totalReglementHS = 0, nbEmployesAvecReglement = 0, totalPanierJour = 0, totalPanierNuit = 0, totalNuitsPenAnt = 0;
   emps.forEach(emp => {
-    Object.values(parEmploye[emp.id].joursAnticipes).forEach(j => { totalMinAnticipe += j.planMin; totalPanierJour += j.panierJour || 0; totalPanierNuit += j.panierNuit || 0; });
+    Object.values(parEmploye[emp.id].joursAnticipes).forEach(j => { totalMinAnticipe += j.planMin; totalPanierJour += j.panierJour || 0; totalPanierNuit += j.panierNuit || 0; if ((j.nuitPenibleMin || 0) >= PENIBILITE_SEUIL_NUIT_MIN) totalNuitsPenAnt++; });
     const r = getReglementMois(emp.id, mois);
     if (r) { totalReglementHS += r.montantMin; nbEmployesAvecReglement++; }
   });
@@ -8947,6 +9038,7 @@ function rendreApercuCloturePaie() {
         <li>${emps.length} employé(s), ${joursAAnticiper.length} jour(s) anticipé(s) chacun (du ${formatDateFR(isoToDate(joursAAnticiper[0]))} au ${formatDateFR(isoToDate(joursAAnticiper[joursAAnticiper.length-1]))})</li>
         <li>${minToHM(totalMinAnticipe)} d'heures anticipées au total, sur la base du planning</li>
         <li>🍱 ${totalPanierJour} panier(s) jour · 🌙 ${totalPanierNuit} panier(s) nuit anticipés (hors paniers mensualisés, comptés à part)</li>
+        <li>🌛 ${totalNuitsPenAnt} nuit(s) pénible(s) anticipée(s) (≥ 1h entre 00h et 05h) — régularisées le mois suivant comme le reste</li>
         <li>${nbEmployesAvecReglement > 0 ? `Règlement d'heures sup déjà validé pour ${nbEmployesAvecReglement} employé(s) (${minToHM(totalReglementHS)} au total) — sera figé avec cette clôture` : '⚠️ Aucun règlement d\'heures sup validé pour ce mois — vérifie l\'étape 1 si ce n\'est pas volontaire'}</li>
       </ul>
     </div>
@@ -9124,7 +9216,7 @@ function construireLigneCloture(empId, dk, statutCloture, valeurs, pointagesParA
   return {
     type: 'jour', dk, d, dow: d.getDay(),
     planMin: planMinAffiche, pointeMin: pointeMinAffiche, ecartMin: pointeMinAffiche > 0 ? pointeMinAffiche - planMinAffiche : null,
-    nuitMin: valeurs.nuitMin, panierJour: paniers.panierJour, panierNuit: paniers.panierNuit, panierNuitBordure, primesJour: valeurs.primesJour, decouchageJour: paniers.decouchage,
+    nuitMin: valeurs.nuitMin, nuitPenibleMin: valeurs.nuitPenibleMin ?? 0, nuitPenible: (valeurs.nuitPenibleMin ?? 0) >= PENIBILITE_SEUIL_NUIT_MIN ? 1 : 0, panierJour: paniers.panierJour, panierNuit: paniers.panierNuit, panierNuitBordure, primesJour: valeurs.primesJour, decouchageJour: paniers.decouchage,
     congeLabel: info.congeLabel, congeTaskId: info.congeTaskId, congeFerieMin: info.congeFerieMin, nomFerie: info.nomFerie,
     ferieTravaille, pctMajoration, heuresMajorees, statutCloture,
     embInfo: embDeb?.embInfo || null, debInfo: embDeb?.debInfo || null, ecartEmb: embDeb?.ecartEmb ?? null, ecartDeb: embDeb?.ecartDeb ?? null,
@@ -9160,13 +9252,14 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
     catch { pointagesParAnnee[an2] = {}; }
   }));
 
-  let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPanierNuit = 0, gtPrimes = 0, gtDecouchage = 0;
+  let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPanierNuit = 0, gtPrimes = 0, gtDecouchage = 0, gtNuitsPen = 0;
   let gtHSValidees = 0, gtHSNonValidees = 0, gtFerieTravailleJours = 0, gtHeuresMajorees = 0, gtFerieChomeMin = 0;
   let gtPanierJourMensualise = 0, gtPanierNuitMensualise = 0;
   const gtAbsenceCompteParType = {}, gtAbsenceNonCompteParType = {};
 
   const donnees = emps.map(emp => {
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0;
+    let weekNuitsPen = 0, empNuitsPen = 0; // pénibilité (nuits ≥ 1h entre 00h et 05h)
     // Réduction du seuil hebdomadaire de comparaison — chaque jour d'absence qui NE compte pas
     // pour les HS (ex: accident du travail, maladie) réduit d'autant le contrat de la semaine,
     // pour ne jamais créer de déficit artificiel face à une absence protégée (voir la découverte
@@ -9251,7 +9344,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       const weekComplete = (weekMonday >= premierJour || weekKey === semaineInitialeEtendue) && addDays(weekMonday, 6) <= dernierJour;
       if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
       if (weekComplete && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
-      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekBrute, weekPause, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, contratMin, weekComplete, weekHeuresSup: weekComplete && weekPtContrat > contratMin ? weekPtContrat - contratMin : null });
+      lignes.push({ type: 'week', label: weekKey, weekNuitsPenibles: weekNuitsPen, weekPlan, weekPt, weekPtContrat, weekNuit, weekBrute, weekPause, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, contratMin, weekComplete, weekHeuresSup: weekComplete && weekPtContrat > contratMin ? weekPtContrat - contratMin : null });
     }
 
     let d = new Date(premierJour);
@@ -9260,7 +9353,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       const dayWeekKey = dateKey(getMonday(d));
       if (weekKey !== null && dayWeekKey !== weekKey) {
         flushSemaine();
-        weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0;
+        weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0; weekNuitsPen = 0;
         weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0;
         weekBrute = 0; weekPause = 0; weekReductionContrat = 0;
       }
@@ -9277,7 +9370,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       }
       const ligne = construireLigneCloture(emp.id, dk, estAnticipe ? 'Anticipé' : 'Réel', valeurs, pointagesParAnnee, splitSeuil, dk === dateKey(premierJour));
 
-      weekPlan += ligne.planMin; weekPt += ligne.pointeMin; weekNuit += ligne.nuitMin;
+      weekPlan += ligne.planMin; weekPt += ligne.pointeMin; weekNuit += ligne.nuitMin; weekNuitsPen += ligne.nuitPenible; empNuitsPen += ligne.nuitPenible;
       weekPanierJour += ligne.panierJour; weekPanierNuit += ligne.panierNuit; weekPrimes += ligne.primesJour; weekDecouchage += ligne.decouchageJour;
       // Durée brute/pause : uniquement disponibles pour un jour RÉEL (voir construireLigneCloture,
       // pauseJourMin reste null pour un jour anticipé, faute de vrai pointage à mesurer).
@@ -9353,7 +9446,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
     const hsValidees = reglementRecap ? reglementRecap.montantMin : 0;
     const hsNonValidees = !reglementRecap && empSemainesComptees > 0 && empEcartContrat > 0 ? empEcartContrat : 0;
 
-    gtPlannifie += empPlannifie; gtPointe += empPointe; gtNuit += empNuit;
+    gtPlannifie += empPlannifie; gtPointe += empPointe; gtNuit += empNuit; gtNuitsPen += empNuitsPen;
     gtPanier += empPanier; gtPanierNuit += empPanierNuit; gtPrimes += empPrimes; gtDecouchage += empDecouchage;
     gtHSValidees += hsValidees; gtHSNonValidees += hsNonValidees;
     gtFerieTravailleJours += empFerieTravailleJours; gtHeuresMajorees += empHeuresMajorees; gtFerieChomeMin += empFerieChomeMin;
@@ -9362,7 +9455,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
     fusionnerMinutesParType(gtAbsenceNonCompteParType, empAbsenceNonCompteParType);
 
     return {
-      emp, lignes, contratMin: getContratMinPourDate(emp, dateKey(dernierJour)), empPlannifie, empPointe, empNuit, empPanier, empPanierNuit, empPrimes, empDecouchage,
+      emp, lignes, contratMin: getContratMinPourDate(emp, dateKey(dernierJour)), empPlannifie, empPointe, empNuit, empNuitsPen, empPanier, empPanierNuit, empPrimes, empDecouchage,
       empPanierJourMensualise, empPanierNuitMensualise,
       empEcartContrat, empSemainesComptees, ecartTotal, reglementRecap, congesParType,
       empFerieTravailleJours, empHeuresMajorees, empFerieChomeMin,
@@ -9370,7 +9463,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
     };
   });
 
-  const contexteGlobal = { gtPlannifie, gtPointe, gtNuit, gtPanier, gtPanierNuit, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin, gtPanierJourMensualise, gtPanierNuitMensualise, gtAbsenceCompteParType, gtAbsenceNonCompteParType };
+  const contexteGlobal = { gtPlannifie, gtPointe, gtNuit, gtNuitsPen, gtPanier, gtPanierNuit, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin, gtPanierJourMensualise, gtPanierNuitMensualise, gtAbsenceCompteParType, gtAbsenceNonCompteParType };
   return { donnees, contexteGlobal, periode: { debut: premierJour, fin: dernierJour } };
 }
 
@@ -9423,6 +9516,7 @@ async function rendreApercuClotureDecalage() {
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);color:var(--accent);font-weight:700;">${d.empPointe ? minToHM(d.empPointe) : '—'}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);color:${d.empEcartContrat >= 0 ? 'var(--success)' : 'var(--danger)'};">${d.empSemainesComptees > 0 ? (d.empEcartContrat >= 0 ? '+' : '-') + minToHM(Math.abs(d.empEcartContrat)) : '—'}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);">${d.empNuit ? minToHM(d.empNuit) : '—'}</td>
+        <td style="padding:6px 9px;text-align:center;font-family:var(--mono);color:#c58bff;">${d.empNuitsPen ? '🌛 ' + d.empNuitsPen : '—'}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);">${d.empPanier || '—'}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);">${d.empPanierNuit || '—'}</td>
         <td style="padding:6px 9px;text-align:center;font-family:var(--mono);font-weight:700;color:${solde >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Solde initial + tout le réel accumulé depuis le début du suivi, moins tout ce qui a déjà été réglé — même calcul que le Compteur & modulation, figé à la date de fin choisie">${solde >= 0 ? '+' : '-'}${minToHM(Math.abs(solde))}</td>
@@ -9442,6 +9536,7 @@ async function rendreApercuClotureDecalage() {
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Pointé net</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Écart contrat</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">Nuit</th>
+        <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);" title="Nuits pénibles : au moins 1h entre 00h et 05h">🌛 Pénib.</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🍱</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">🌙</th>
         <th style="padding:6px 9px;font-size:12px;font-weight:700;color:var(--text-muted);">⚖️ Solde dispo</th>
@@ -10090,13 +10185,25 @@ function calculerCompteurModulation() {
   loadingEl.textContent = 'Calcul en cours…';
   cardsEl.innerHTML = '';
 
-  calculerCartesCompteurPures(depuisStr, equipeFiltre).then(({ cartes, debutEffectif, hier, aucuneSemaineComplete }) => {
+  calculerCartesCompteurPures(depuisStr, equipeFiltre).then(async ({ cartes, debutEffectif, hier, aucuneSemaineComplete }) => {
     if (aucuneSemaineComplete) { loadingEl.textContent = 'Aucune semaine complète écoulée depuis cette date.'; return; }
     _dernieresCartesCompteur = cartes;
 
     loadingEl.style.display = 'none';
     const noteEl = document.getElementById('cpt-note');
     if (!cartes.length) { cardsEl.innerHTML = '<div class="hint">Aucun employé pour ce filtre.</div>'; noteEl.innerHTML = ''; return; }
+
+    // Pénibilité de l'année civile en cours, par employé (voir calculerPenibiliteAnnee) : charge les
+    // pointages de l'année (et de la précédente pour la nuit du 31/12 → 01/01) puis cumule.
+    const anneePen = new Date().getFullYear();
+    const splitSeuilPen = db.params.pointagePauseSeuilMin ?? 40;
+    const pointagesPen = {};
+    await Promise.all([anneePen - 1, anneePen].map(async an => {
+      if (!fbDb) { pointagesPen[String(an)] = {}; return; }
+      try { const snap = await fbDb.ref(`pointages/${an}`).once('value'); pointagesPen[String(an)] = snap.val() || {}; }
+      catch { pointagesPen[String(an)] = {}; }
+    }));
+    cartes.forEach(c => { c.penibilite = calculerPenibiliteAnnee(c.emp.id, anneePen, pointagesPen, splitSeuilPen); });
 
     const totalSemainesComptees = cartes.reduce((s, c) => s + c.semainesComptees, 0);
     if (totalSemainesComptees === 0) {
@@ -10127,6 +10234,33 @@ function calculerCompteurModulation() {
     // Plafond pour la jauge visuelle : la plus grande valeur absolue rencontrée, au minimum 8h
     // pour éviter des barres disproportionnées quand tous les écarts sont minimes.
     const maxAbs = Math.max(8 * 60, ...cartes.map(c => Math.abs(c.total)));
+
+    // Ligne "🌛 Pénibilité" sous la carte de l'employé : cumul des nuits pénibles de l'année civile
+    // (pointées + estimées au planning pour un jour passé non pointé) vers le seuil de 100 nuits,
+    // avec la projection incluant le planning à venir.
+    const lignePenibiliteHTML = c => {
+      const p = c.penibilite;
+      if (!p) return '';
+      const seuil = PENIBILITE_SEUIL_ANNEE_NUITS;
+      const atteint = p.total >= seuil;
+      const projeteAtteint = !atteint && p.projete >= seuil;
+      const pct = Math.min(100, Math.round((p.total / seuil) * 100));
+      const pctProj = Math.min(100, Math.round((p.projete / seuil) * 100));
+      const couleur = atteint ? 'var(--success)' : '#c58bff';
+      const statut = atteint
+        ? `✅ Seuil atteint — ${PENIBILITE_POINTS_ANNEE} points pour ${anneePen}`
+        : (projeteAtteint ? `⏳ Atteint avec le planning à venir (${p.projete})` : `Encore ${seuil - p.total} nuit${seuil - p.total > 1 ? 's' : ''} pour le seuil`);
+      const detail = `${p.pointees} pointée${p.pointees > 1 ? 's' : ''}${p.planningPasse ? ` + ${p.planningPasse} estimée${p.planningPasse > 1 ? 's' : ''} d'après le planning (non pointée${p.planningPasse > 1 ? 's' : ''})` : ''}${p.futures ? ` + ${p.futures} prévue${p.futures > 1 ? 's' : ''} au planning à venir` : ''}`;
+      return `<div style="display:flex;align-items:center;gap:14px;padding:6px 14px;margin:-2px 0 4px 0;background:var(--surface2);border-radius:0 0 8px 8px;border-top:1px dashed var(--border);" title="${detail}">
+        <div style="min-width:150px;max-width:150px;font-size:12px;color:#c58bff;font-weight:700;">🌛 Pénibilité ${anneePen}</div>
+        <div style="flex:1;min-width:80px;height:6px;background:var(--surface3,rgba(255,255,255,.06));border-radius:3px;overflow:hidden;position:relative;">
+          <div style="position:absolute;left:0;top:0;width:${pctProj}%;height:100%;background:rgba(197,139,255,.25);"></div>
+          <div style="position:absolute;left:0;top:0;width:${pct}%;height:100%;background:${couleur};"></div>
+        </div>
+        <div style="min-width:78px;text-align:right;font-size:14px;font-weight:800;color:${couleur};font-family:var(--mono);">${p.total} / ${seuil}</div>
+        <div style="min-width:240px;font-size:11px;color:var(--text-dim);">${statut}</div>
+      </div>`;
+    };
 
     const carteHTML = c => {
       const positif = c.total >= 0;
@@ -10160,7 +10294,7 @@ function calculerCompteurModulation() {
       <div style="margin-bottom:20px;">
         ${!equipeFiltre ? `<div style="font-size:13px;font-weight:800;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;padding-left:2px;">${g.nom} <span style="font-weight:400;">· ${g.cartes.length}</span></div>` : ''}
         <div style="display:flex;flex-direction:column;gap:6px;">
-          ${g.cartes.map(carteHTML).join('')}
+          ${g.cartes.map(c => `<div>${carteHTML(c)}${lignePenibiliteHTML(c)}</div>`).join('')}
         </div>
       </div>
     `).join('');
@@ -10334,7 +10468,7 @@ function construireCSV(donnees, regul) {
     'Emb. prévue', 'Emb. pointée', 'Emb. retenue', 'Écart emb.',
     'Déb. prévue', 'Déb. pointée', 'Déb. retenue', 'Écart déb.',
     'Durée brute', 'Pause', 'Pointé net', 'Écart planning', 'Écart contrat / HS',
-    'Nuit', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Découchage', 'Congé'];
+    'Nuit', 'Nuit pénible', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Découchage', 'Congé'];
   const lignesCsv = [entetes.map(esc).join(sep)];
   const nbColsVides = entetes.length - 2; // toutes les colonnes sauf "Employé" pour les lignes de titre/texte libre
   donnees.forEach(d => {
@@ -10354,6 +10488,7 @@ function construireCSV(donnees, regul) {
           l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '',
           '',
           l.nuitMin ? minToHM(l.nuitMin) : '',
+          l.nuitPenible ? 1 : '',
           d.emp.panierMensualiseJour ? 'Mensualisé' : (l.panierJour ? l.panierJour : ''),
           d.emp.panierMensualiseNuit ? 'Mensualisé' : ((l.panierNuitAffiche ?? l.panierNuit) ? (l.panierNuitAffiche ?? l.panierNuit) : ''),
           l.primesJour ? l.primesJour.toFixed(2) : '', l.decouchageJour ? 'Oui' : '', libelleCongeJour(l),
@@ -10371,17 +10506,25 @@ function construireCSV(donnees, regul) {
           ecartPlanningSemaine !== null ? (ecartPlanningSemaine >= 0 ? '+' : '-') + minToHM(Math.abs(ecartPlanningSemaine)) : '',
           l.weekHeuresSup ? '+' + minToHM(l.weekHeuresSup) + ' (HS)' : (l.weekComplete && l.weekPtContrat > 0 ? '+0h00' : ''),
           l.weekNuit ? minToHM(l.weekNuit) : '',
+          l.weekNuitsPenibles || '',
           l.weekPanierJour || '', l.weekPanierNuit || '',
           l.weekPrimes ? l.weekPrimes.toFixed(2) : '', l.weekDecouchage || '', '',
         ].map(esc).join(sep));
       }
     });
+    // Total pénibilité de CET employé sur la période (nuits avec ≥ 1h entre 00h et 05h) — une ligne
+    // dédiée, repérable par la compta, juste avant la régularisation éventuelle.
+    {
+      const totPen = Array(entetes.length).fill('');
+      totPen[0] = `${d.emp.nom} ${d.emp.prenom}`; totPen[3] = 'TOTAL NUITS PÉNIBLES'; totPen[entetes.indexOf('Nuit pénible')] = d.empNuitsPen || 0;
+      lignesCsv.push(totPen.map(esc).join(sep));
+    }
     // Régularisation du mois précédent — juste après les lignes de CET employé, avant de passer
     // au suivant (voir aussi le même bloc dans l'onglet Excel, avant son récapitulatif).
     const r = regul?.parEmploye?.[d.emp.id];
     if (r) {
       lignesCsv.push([`RÉGULARISATION DE ${regul.mois}`, ...Array(nbColsVides).fill('')].map(esc).join(sep));
-      lignesCsv.push(['Écart heures', (r.deltaPlanMin >= 0 ? '+' : '-') + minToHM(Math.abs(r.deltaPlanMin)), 'Écart nuit', (r.deltaNuitMin >= 0 ? '+' : '-') + minToHM(Math.abs(r.deltaNuitMin)), 'Écart heures sup', r.deltaHeuresSup ? (r.deltaHeuresSup >= 0 ? '+' : '-') + minToHM(Math.abs(r.deltaHeuresSup)) : '', 'Dont déjà réglé en avance', r.dejaRegleAnticipe ? minToHM(r.dejaRegleAnticipe) : '', 'Écart panier jour', r.deltaPanier, 'Écart panier nuit', r.deltaPanierNuit, 'Écart primes (€)', r.deltaPrimes.toFixed(2), 'Écart découchage', r.deltaDecouchage, ...Array(Math.max(0, nbColsVides - 15)).fill('')].map(esc).join(sep));
+      lignesCsv.push(['Écart heures', (r.deltaPlanMin >= 0 ? '+' : '-') + minToHM(Math.abs(r.deltaPlanMin)), 'Écart nuit', (r.deltaNuitMin >= 0 ? '+' : '-') + minToHM(Math.abs(r.deltaNuitMin)), 'Écart heures sup', r.deltaHeuresSup ? (r.deltaHeuresSup >= 0 ? '+' : '-') + minToHM(Math.abs(r.deltaHeuresSup)) : '', 'Dont déjà réglé en avance', r.dejaRegleAnticipe ? minToHM(r.dejaRegleAnticipe) : '', 'Écart panier jour', r.deltaPanier, 'Écart panier nuit', r.deltaPanierNuit, 'Écart primes (€)', r.deltaPrimes.toFixed(2), 'Écart découchage', r.deltaDecouchage, 'Écart nuits pénibles', r.deltaNuitsPenibles ? (r.deltaNuitsPenibles >= 0 ? '+' : '') + r.deltaNuitsPenibles : 0, ...Array(Math.max(0, nbColsVides - 17)).fill('')].map(esc).join(sep));
     }
   });
   return lignesCsv.join('\r\n');
@@ -10429,6 +10572,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
     ['Heures pointées (nettes)', g.gtPointe ? minToHM(g.gtPointe) : '—'],
     ['Écart vs planning', g.gtPointe ? (g.gtPointe >= (g.gtPlannifie - (g.gtFerieChomeMin||0)) ? '+' : '-') + minToHM(Math.abs(g.gtPointe - (g.gtPlannifie - (g.gtFerieChomeMin||0)))) + (g.gtFerieChomeMin ? ' (férié neutralisé)' : '') : '—'],
     ['Heures de nuit', minToHM(g.gtNuit)],
+    ['🌛 Nuits pénibles (≥ 1h entre 00h et 05h)', g.gtNuitsPen || '—'],
     ['🔒 Heures sup validées (réglées)', g.gtHSValidees ? '+' + minToHM(g.gtHSValidees) : '—'],
     ['⚠️ Heures sup non validées', g.gtHSNonValidees ? '+' + minToHM(g.gtHSNonValidees) : '—'],
     ...Object.entries(g.gtAbsenceCompteParType || {}).map(([type, min]) => [`🏖️ Absences comptant pour les HS — ${type}`, minToHM(min)]),
@@ -10458,7 +10602,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
   if (contenu === 'synthese' || contenu === 'both') {
     const wsSyn = wb.addWorksheet('Synthèse employés');
     const typesConge = Object.keys(congesTotal);
-    const entetes = ['Nom', 'Prénom', 'Contrat/sem', 'Planifié', 'Pointé net', 'Écart planning', 'Écart contrat', 'Statut HS', 'Heures sup', 'Nuit', 'Primes (€)', 'Découchages', 'Panier jour', 'Panier nuit', 'Panier jour mens.', 'Panier nuit mens.', ...typesConge.map(t => `Congé: ${t}`)];
+    const entetes = ['Nom', 'Prénom', 'Contrat/sem', 'Planifié', 'Pointé net', 'Écart planning', 'Écart contrat', 'Statut HS', 'Heures sup', 'Nuit', 'Nuits pénibles', 'Primes (€)', 'Découchages', 'Panier jour', 'Panier nuit', 'Panier jour mens.', 'Panier nuit mens.', ...typesConge.map(t => `Congé: ${t}`)];
     wsSyn.columns = entetes.map((h, i) => ({ width: i < 2 ? 16 : 15 }));
     const headerRow = wsSyn.addRow(entetes);
     headerRow.eachCell(cell => { cell.font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } }; cell.fill = xlsFill(XLS_COULEURS.entete); cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center', vertical: 'middle' }; });
@@ -10475,6 +10619,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         d.reglementRecap ? 'Validée' : (hsNonValidees ? 'Non validée' : '—'),
         hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—'),
         d.empNuit ? minToHM(d.empNuit) : '—',
+        d.empNuitsPen || '—',
         d.empPrimes ? d.empPrimes.toFixed(2) : '—',
         d.empDecouchage || '—',
         d.empPanier || '—', d.empPanierNuit || '—',
@@ -10516,7 +10661,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         'Emb. prévue', 'Emb. pointée', 'Emb. retenue', 'Écart emb.',
         'Déb. prévue', 'Déb. pointée', 'Déb. retenue', 'Écart déb.',
         'Durée brute', 'Pause', 'Pointé net', 'Écart planning', 'Écart contrat / HS',
-        'Nuit', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Découchage', 'Congé'];
+        'Nuit', 'Nuit pénible', 'Panier jour', 'Panier nuit', 'Primes (€)', 'Découchage', 'Congé'];
       const nbCols = entetes.length;
       // Colonnes B et C élargies : elles servent aussi de support au récapitulatif en bas de page
       // (labels sur A:B fusionnées, valeurs sur C) — doivent rester assez larges pour ne jamais
@@ -10537,7 +10682,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         cell.font = { bold: true, color: { argb: XLS_COULEURS.enteteTxt } };
         // Repère visuel dès l'en-tête pour les colonnes importantes côté compta (retenue, nuit,
         // écart contrat/HS, paniers, découchage) — bleu plutôt que la couleur d'en-tête standard.
-        cell.fill = xlsFill(['Pointé net', 'Écart contrat / HS', 'Nuit', 'Panier jour', 'Panier nuit', 'Découchage'].includes(cell.value) ? XLS_COULEURS.bleuTxt : XLS_COULEURS.entete);
+        cell.fill = xlsFill(['Pointé net', 'Écart contrat / HS', 'Nuit', 'Nuit pénible', 'Panier jour', 'Panier nuit', 'Découchage'].includes(cell.value) ? XLS_COULEURS.bleuTxt : XLS_COULEURS.entete);
         cell.border = xlsBordureFine(); cell.alignment = { horizontal: 'center' };
       });
 
@@ -10546,8 +10691,8 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
       const offset = aStatut ? 1 : 0;
       const idx = {
         ecartEmb: 7 + offset, ecartDeb: 11 + offset, pointeNet: 14 + offset, ecartPlanning: 15 + offset,
-        ecartContratHS: 16 + offset, nuit: 17 + offset, panierJour: 18 + offset, panierNuit: 19 + offset,
-        decouchage: 21 + offset, statut: 4,
+        ecartContratHS: 16 + offset, nuit: 17 + offset, nuitPenible: 18 + offset, panierJour: 19 + offset, panierNuit: 20 + offset,
+        decouchage: 22 + offset, statut: 4,
       };
       const colBleuFont = { color: { argb: XLS_COULEURS.bleuTxt }, bold: true };
 
@@ -10568,6 +10713,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
             l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '—',
             '—', // Écart contrat/HS : concept hebdomadaire, jamais par jour (voir ligne semaine)
             l.nuitMin ? minToHM(l.nuitMin) : '—',
+            l.nuitPenible ? 1 : '—',
             d.emp.panierMensualiseJour ? 'Mens.' : (l.panierJour ? l.panierJour : '—'),
             d.emp.panierMensualiseNuit ? 'Mens.' : ((l.panierNuitAffiche ?? l.panierNuit) ? (l.panierNuitAffiche ?? l.panierNuit) : '—'),
             l.primesJour ? l.primesJour.toFixed(2) : '—', l.decouchageJour ? 'Oui' : '—', libelleCongeJour(l) || '—',
@@ -10579,7 +10725,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
           if (l.ecartDeb !== undefined && l.ecartDeb !== null) row.getCell(idx.ecartDeb).font = { color: { argb: l.ecartDeb >= 0 ? XLS_COULEURS.vertTxt : XLS_COULEURS.rougeTxt } };
           if (aStatut && l.statutCloture === 'Anticipé') row.getCell(idx.statut).font = { color: { argb: XLS_COULEURS.orangeTxt }, bold: true };
           // Colonnes importantes côté compta, en valeur bleue/gras pour ressortir visuellement.
-          [idx.pointeNet, idx.nuit, idx.panierJour, idx.panierNuit, idx.decouchage].forEach(ci => { row.getCell(ci).font = colBleuFont; });
+          [idx.pointeNet, idx.nuit, idx.nuitPenible, idx.panierJour, idx.panierNuit, idx.decouchage].forEach(ci => { row.getCell(ci).font = colBleuFont; });
           // Panier mensualisé : toute la colonne concernée teintée en violet pour cet employé, pour
           // signaler d'un coup d'œil que ces cases ne reflètent pas le travail réel de ce jour-là
           // (voir badge "Panier mensualisé" en résumé).
@@ -10600,6 +10746,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
             ecartPlanningSemaine !== null ? (ecartPlanningSemaine >= 0 ? '+' : '-') + minToHM(Math.abs(ecartPlanningSemaine)) : '—',
             l.weekHeuresSup ? '+' + minToHM(l.weekHeuresSup) + ' (HS)' : (l.weekComplete && l.weekPtContrat > 0 ? '+0h00' : '—'),
             l.weekNuit ? minToHM(l.weekNuit) : '—',
+            l.weekNuitsPenibles || '—',
             l.weekPanierJour || '—', l.weekPanierNuit || '—',
             l.weekPrimes ? l.weekPrimes.toFixed(2) : '—', l.weekDecouchage || '—', '',
           ];
@@ -10624,6 +10771,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         [
           ['Écart heures', (regulEmp.deltaPlanMin >= 0 ? '+' : '-') + minToHM(Math.abs(regulEmp.deltaPlanMin))],
           ['Écart nuit', (regulEmp.deltaNuitMin >= 0 ? '+' : '-') + minToHM(Math.abs(regulEmp.deltaNuitMin))],
+          ['Écart nuits pénibles', regulEmp.deltaNuitsPenibles ? (regulEmp.deltaNuitsPenibles >= 0 ? '+' : '') + regulEmp.deltaNuitsPenibles : '—'],
           ['Écart heures sup', regulEmp.deltaHeuresSup ? (regulEmp.deltaHeuresSup >= 0 ? '+' : '-') + minToHM(Math.abs(regulEmp.deltaHeuresSup)) : '—'],
           ...(regulEmp.dejaRegleAnticipe ? [['Dont déjà réglé en avance', minToHM(regulEmp.dejaRegleAnticipe)]] : []),
           ['Écart panier jour', regulEmp.deltaPanier],
@@ -10692,6 +10840,7 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
         ] : []),
         ['🔶 Fériés travaillés', d.empFerieTravailleJours ? `${d.empFerieTravailleJours} j.${d.empHeuresMajorees ? ' (majoration +' + minToHM(d.empHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
         ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
+        ['🌛 Nuits pénibles (≥ 1h entre 00h et 05h)', d.empNuitsPen || '—'],
         ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
         ['Découchages', d.empDecouchage || '—'],
         ['🍱 Panier jour', d.empPanier || '—'],
@@ -10765,6 +10914,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
   const nowMin = now.getHours() * 60 + now.getMinutes();
 
   // Calcule les totaux globaux pour le résumé
+  let gtNuitsPen = 0;
   let gtPlannifie = 0, gtPointe = 0, gtNuit = 0, gtPanier = 0, gtPanierNuit = 0, gtPrimes = 0, gtDecouchage = 0, gtHSValidees = 0, gtHSNonValidees = 0, gtFerieTravailleJours = 0, gtHeuresMajorees = 0, gtFerieChomeMin = 0;
   const gtAbsenceCompteParType = {}, gtAbsenceNonCompteParType = {};
   let gtPanierJourMensualise = 0, gtPanierNuitMensualise = 0;
@@ -10794,6 +10944,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     let empPanierNuitMensualise = emp.panierMensualiseNuit ? nbMoisTouchesPeriode * PANIER_MENSUALISE_PAR_MOIS : 0;
     let weekFerieChomeMin = 0;
     let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0, weekPause = 0;
+    let weekNuitsPen = 0, empNuitsPen = 0; // pénibilité (nuits ≥ 1h entre 00h et 05h)
     let weekReductionContrat = 0;
     let weekBrute = 0, weekPanierJour = 0, weekPanierNuit = 0, weekPrimes = 0, weekDecouchage = 0;
     const badgeBg = { ok: 'rgba(46,204,113,.12)', under: 'rgba(245,166,35,.12)', over: 'rgba(255,77,106,.12)', empty: 'transparent' };
@@ -10866,12 +11017,15 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
       // Calcule les heures pointées depuis les événements Firebase (moteur partagé avec le
       // Compteur & modulation — voir calculerPointeMinJour)
-      const { pointeMin, pointeHorsPlanning, nuitReelMin } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
+      const { pointeMin, pointeHorsPlanning, nuitReelMin, nuitPenibleMin: nuitPenibleReelMin } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
       // Dès qu'un pointage réel existe, les heures de nuit se basent dessus (pas sur le planning) —
       // si une tâche prévue jusqu'à 3h00 est pointée jusqu'à 4h00, cette heure de plus compte en
       // nuit, et inversement si le pointage s'arrête plus tôt que prévu. Le planning ne sert de
       // repli que tant qu'aucun pointage n'existe encore (jour futur, ou anticipé en Clôture Paie).
       const nuitMin = pointeMin > 0 ? nuitReelMin : nuitPlanMin;
+      // Pénibilité : même règle que nuitMin (pointage réel dès qu'il existe, sinon planning).
+      const nuitPenibleMinJour = pointeMin > 0 ? nuitPenibleReelMin : nuitPenibleMinPlanning(insts, instsHierCross);
+      const nuitPenibleJour = nuitPenibleMinJour >= PENIBILITE_SEUIL_NUIT_MIN ? 1 : 0;
 
       const ecartMin = pointeMin > 0 ? pointeMin - planMin : null;
       const dayWeekKey = dateKey(getMonday(d));
@@ -10900,12 +11054,12 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         // planification, pas une donnée de paie fiable au jour près (voir Employés > Contrat).
         if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMinSemaine;
         if (weekCompleteFlush && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMinSemaine; empSemainesComptees++; }
-        lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, weekBrute, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush, weekHeuresSup: weekCompleteFlush && weekPtContrat > contratMinSemaine ? weekPtContrat - contratMinSemaine : null });
-        weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0;
+        lignes.push({ type: 'week', label: weekKey, weekNuitsPenibles: weekNuitsPen, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, weekBrute, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush, weekHeuresSup: weekCompleteFlush && weekPtContrat > contratMinSemaine ? weekPtContrat - contratMinSemaine : null });
+        weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0; weekNuitsPen = 0;
         weekBrute = 0; weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0; weekReductionContrat = 0;
       }
       weekKey = dayWeekKey;
-      weekPlan += planMin; weekPt += pointeMin; weekNuit += nuitMin; weekPause += pauseJourMin;
+      weekPlan += planMin; weekPt += pointeMin; weekNuit += nuitMin; weekPause += pauseJourMin; weekNuitsPen += nuitPenibleJour;
       weekBrute += pointeMin > 0 ? pointeMin + pauseJourMin : 0;
       weekPanierJour += panierJour; weekPanierNuit += panierNuit + panierNuitBordure; weekPrimes += primesJour; weekDecouchage += decouchageJour;
       // Cumule les heures de férié CHÔMÉ (pas travaillé) — sert à neutraliser "Écart planning" plus
@@ -10942,7 +11096,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         weekPtContrat += pointeMin;
         weekPtReel += pointeMin;
       }
-      empPlannifie += planMin; empPointe += pointeMin; empNuit += nuitMin;
+      empPlannifie += planMin; empPointe += pointeMin; empNuit += nuitMin; empNuitsPen += nuitPenibleJour;
       empPanier += panierJour; empPanierNuit += panierNuit + panierNuitBordure; empPrimes += primesJour; empDecouchage += decouchageJour;
 
       const hasWork = planMin > 0 || congeInsts.length > 0 || pointeHorsPlanning > 0;
@@ -10961,7 +11115,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const heuresMajorees = pctMajoration > 0 ? Math.round(pointeMin * pctMajoration / 100) : 0;
       if (ferieTravaille) { empFerieTravailleJours++; empHeuresMajorees += heuresMajorees; }
 
-      lignes.push({ type: 'jour', dk, d, dow, planMin, pointeMin, ecartMin, nuitMin, panierJour, panierNuit, panierNuitBordure, primesJour, decouchageJour, congeLabel, congeTaskId, congeFerieMin, hasWork, pointeHorsPlanning, embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin, nomFerie, ferieTravaille, pctMajoration, heuresMajorees });
+      lignes.push({ type: 'jour', dk, d, dow, planMin, pointeMin, ecartMin, nuitMin, nuitPenibleMin: nuitPenibleMinJour, nuitPenible: nuitPenibleJour, panierJour, panierNuit, panierNuitBordure, primesJour, decouchageJour, congeLabel, congeTaskId, congeFerieMin, hasWork, pointeHorsPlanning, embInfo, debInfo, ecartEmb, ecartDeb, pauseJourMin, nomFerie, ferieTravaille, pctMajoration, heuresMajorees });
     });
 
     // Dernier total semaine
@@ -10972,10 +11126,10 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const weekCompleteLast = weekMondayLast >= debut && addDays(weekMondayLast, 6) <= fin;
       if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMinSemaine;
       if (weekCompleteLast && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMinSemaine; empSemainesComptees++; }
-      lignes.push({ type: 'week', label: weekKey, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, weekBrute, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteLast, weekHeuresSup: weekCompleteLast && weekPtContrat > contratMinSemaine ? weekPtContrat - contratMinSemaine : null });
+      lignes.push({ type: 'week', label: weekKey, weekNuitsPenibles: weekNuitsPen, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, weekBrute, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteLast, weekHeuresSup: weekCompleteLast && weekPtContrat > contratMinSemaine ? weekPtContrat - contratMinSemaine : null });
     }
 
-    gtPlannifie += empPlannifie; gtPointe += empPointe; gtNuit += empNuit;
+    gtPlannifie += empPlannifie; gtPointe += empPointe; gtNuit += empNuit; gtNuitsPen += empNuitsPen;
     gtPanier += empPanier; gtPanierNuit += empPanierNuit; gtPrimes += empPrimes; gtDecouchage += empDecouchage;
     gtFerieChomeMin += empFerieChomeMin;
     gtPanierJourMensualise += empPanierJourMensualise; gtPanierNuitMensualise += empPanierNuitMensualise;
@@ -11027,6 +11181,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         case 'ecartTotal': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:${ecartColor(l.ecartMin)};">${ecartFmt(l.ecartMin)}</td>`;
         case 'ecartContrat': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:var(--text-dim);" title="Uniquement calculable sur un total semaine">—</td>`;
         case 'nuit': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:#9d8fff;${l.nuitMin > 0 ? 'background:rgba(157,143,255,.08);' : ''}" title="${l.nuitMin > 0 ? 'Heures majorées (nuit)' : ''}">${l.nuitMin > 0 ? minToHM(l.nuitMin) : '—'}</td>`;
+        case 'penibilite': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:#c58bff;${l.nuitPenible ? 'background:rgba(197,139,255,.10);font-weight:700;' : ''}" title="${l.nuitPenible ? 'Nuit pénible : ' + minToHM(l.nuitPenibleMin) + ' travaillées entre 00h et 05h (seuil 1h)' : (l.nuitPenibleMin > 0 ? 'Seulement ' + minToHM(l.nuitPenibleMin) + ' entre 00h et 05h — moins d\'1h, nuit non comptée' : '')}">${l.nuitPenible ? '🌛 1' : (l.nuitPenibleMin > 0 ? '<span style="opacity:.5;">' + l.nuitPenibleMin + 'min</span>' : '—')}</td>`;
         case 'panier': return emp.panierMensualiseJour
           ? `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:#9d8fff;background:rgba(157,143,255,.10);" title="Panier jour mensualisé — forfait fixe, indépendant du travail réel ce jour-là (voir badge en haut)">Mens.</td>`
           : `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.panierJour > 0 ? '🍱' : '—'}</td>`;
@@ -11082,6 +11237,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
             return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:${ecartColor(ecartC)};" title="Par rapport au contrat de ${minToHM(l.contratMin)}/sem${l.weekFerieChomeMin ? ` — férié neutralisé (+${minToHM(l.weekFerieChomeMin)})` : ''}${titreIncomplet}">${ecartFmt(ecartC)}</td>`;
           }
           if (c.id === 'nuit') return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:#9d8fff;">${l.weekNuit > 0 ? minToHM(l.weekNuit) : '—'}</td>`;
+          if (c.id === 'penibilite') return `<td style="padding:7px 8px;font-family:var(--mono);text-align:center;color:#c58bff;">${l.weekNuitsPenibles > 0 ? '🌛 ' + l.weekNuitsPenibles : '—'}</td>`;
           return '<td></td>';
         }).join('');
         return `<tr style="background:${l.badgeBg[l.cls]};border-top:2px solid var(--border);border-bottom:2px solid var(--border);font-weight:800;">
@@ -11152,7 +11308,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
     donneesExport.push({
       emp, lignes, contratMin: contratMinActuel,
-      empPlannifie, empPointe, empNuit, empPanier, empPanierNuit, empPrimes, empDecouchage,
+      empPlannifie, empPointe, empNuit, empNuitsPen, empPanier, empPanierNuit, empPrimes, empDecouchage,
       empPanierJourMensualise, empPanierNuitMensualise,
       empEcartContrat, empSemainesComptees, ecartTotal,
       reglementRecap, congesParType, empFerieTravailleJours, empHeuresMajorees, empFerieChomeMin,
@@ -11170,6 +11326,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
           ${badgeHS}
           ${badgeFerie}
           ${empNuit > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">Nuit ${minToHM(empNuit)}</span>` : ''}
+          ${colPrefs.penibilite && empNuitsPen > 0 ? `<span style="background:rgba(197,139,255,.14);color:#c58bff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Nuits avec au moins 1h travaillée entre 00h et 05h, sur la période affichée">🌛 Nuits pénibles ${empNuitsPen}</span>` : ''}
           ${empPanier > 0 ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">🍱 Panier jour ${empPanier}</span>` : ''}
           ${empPanierNuit > 0 ? `<span style="background:rgba(245,166,35,.12);color:var(--warning);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;">🌙 Panier nuit ${empPanierNuit}</span>` : ''}
           ${empPanierJourMensualise > 0 ? `<span style="background:rgba(157,143,255,.12);color:#9d8fff;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;" title="Forfait fixe, indépendant du travail réel">🍱 Panier jour mensualisé ${empPanierJourMensualise.toFixed(2)}</span>` : ''}
@@ -11193,7 +11350,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
   // Rend les données capturées disponibles pour l'export Excel/CSV (voir exportRecapPaie()) —
   // toujours en phase avec ce qui vient d'être affiché, y compris les congés par type et le
   // détail global (heures sup validées/non validées calculées juste après).
-  _dernierRecapExport = { donneesExport, debut, fin, colonnesActives, gtPlannifie, gtPointe, gtNuit, gtPanier, gtPanierNuit, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin, gtPanierJourMensualise, gtPanierNuitMensualise, gtAbsenceCompteParType, gtAbsenceNonCompteParType };
+  _dernierRecapExport = { donneesExport, debut, fin, colonnesActives, gtPlannifie, gtPointe, gtNuit, gtNuitsPen, gtPanier, gtPanierNuit, gtPrimes, gtDecouchage, gtHSValidees, gtHSNonValidees, gtFerieTravailleJours, gtHeuresMajorees, gtFerieChomeMin, gtPanierJourMensualise, gtPanierNuitMensualise, gtAbsenceCompteParType, gtAbsenceNonCompteParType };
 
   // Résumé global
   document.getElementById('rp-summary').innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px;">
@@ -11218,6 +11375,9 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     </div>` : ''}
     ${gtNuit > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
       <div class="meta">Heures de nuit</div><div style="font-size:18px;font-weight:800;color:#9d8fff;">${minToHM(gtNuit)}</div>
+    </div>` : ''}
+    ${colPrefs.penibilite && gtNuitsPen > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
+      <div class="meta">🌛 Nuits pénibles</div><div style="font-size:18px;font-weight:800;color:#c58bff;">${gtNuitsPen}</div>
     </div>` : ''}
     ${gtPanier > 0 ? `<div class="task-card" style="cursor:default;text-align:center;flex:1;min-width:120px;padding:12px;">
       <div class="meta">🍱 Panier jour</div><div style="font-size:18px;font-weight:800;color:var(--warning);">${gtPanier}</div>
@@ -13613,7 +13773,7 @@ function construireHTMLRecapFragmentEmploye(d, debut, fin) {
     if (l.type === 'jour') {
       const fond = i % 2 === 1 ? style.alt : '';
       const ecartCouleur = l.ecartMin === null ? '#888' : (l.ecartMin >= 0 ? style.vert : style.rouge);
-      lignesHtml += `<tr>${td(DOW[l.dow] + ' ' + String(l.d.getDate()).padStart(2,'0') + '/' + String(l.d.getMonth()+1).padStart(2,'0'), fond)}${td(l.planMin ? minToHM(l.planMin) : '—', fond)}${td(l.pointeMin ? minToHM(l.pointeMin) : '—', fond)}${td(l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '—', fond + `color:${ecartCouleur};font-weight:600;`)}${td(l.nuitMin ? minToHM(l.nuitMin) : '—', fond)}${td(libelleCongeJour(l) || '—', fond)}</tr>`;
+      lignesHtml += `<tr>${td(DOW[l.dow] + ' ' + String(l.d.getDate()).padStart(2,'0') + '/' + String(l.d.getMonth()+1).padStart(2,'0'), fond)}${td(l.planMin ? minToHM(l.planMin) : '—', fond)}${td(l.pointeMin ? minToHM(l.pointeMin) : '—', fond)}${td(l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '—', fond + `color:${ecartCouleur};font-weight:600;`)}${td((l.nuitMin ? minToHM(l.nuitMin) : '—') + (l.nuitPenible ? ' 🌛' : ''), fond)}${td(libelleCongeJour(l) || '—', fond)}</tr>`;
       i++;
     } else if (l.type === 'week') {
       const wd = isoToDate(l.label), wf = addDays(wd, 6);
@@ -13631,6 +13791,7 @@ function construireHTMLRecapFragmentEmploye(d, debut, fin) {
     [d.reglementRecap ? '🔒 Heures sup validées' : '⚠️ Heures sup non validées', hsValidees !== null ? '+' + minToHM(hsValidees) : (hsNonValidees !== null ? '+' + minToHM(hsNonValidees) : '—')],
     ['🔶 Fériés travaillés', d.empFerieTravailleJours ? `${d.empFerieTravailleJours} j.${d.empHeuresMajorees ? ' (majoration +' + minToHM(d.empHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
     ['Heures de nuit', d.empNuit ? minToHM(d.empNuit) : '—'],
+        ['🌛 Nuits pénibles (≥ 1h entre 00h et 05h)', d.empNuitsPen || '—'],
     ['Primes', d.empPrimes ? d.empPrimes.toFixed(2) + ' €' : '—'],
     ['Découchages', d.empDecouchage || '—'],
     ['🍱 Panier jour', d.empPanier || '—'],
@@ -13672,6 +13833,7 @@ function construireHTMLRecapGroupe(donnees, debut, fin, g) {
     ['Heures pointées (nettes)', g.gtPointe ? minToHM(g.gtPointe) : '—'],
     ['Écart vs planning', g.gtPointe ? (g.gtPointe >= (g.gtPlannifie - (g.gtFerieChomeMin||0)) ? '+' : '-') + minToHM(Math.abs(g.gtPointe - (g.gtPlannifie - (g.gtFerieChomeMin||0)))) + (g.gtFerieChomeMin ? ' (férié neutralisé)' : '') : '—'],
     ['Heures de nuit', minToHM(g.gtNuit)],
+    ['🌛 Nuits pénibles (≥ 1h entre 00h et 05h)', g.gtNuitsPen || '—'],
     ['🔒 Heures sup validées (réglées)', g.gtHSValidees ? '+' + minToHM(g.gtHSValidees) : '—'],
     ['⚠️ Heures sup non validées', g.gtHSNonValidees ? '+' + minToHM(g.gtHSNonValidees) : '—'],
     ['🔶 Fériés travaillés', g.gtFerieTravailleJours ? `${g.gtFerieTravailleJours} j.${g.gtHeuresMajorees ? ' (majoration +' + minToHM(g.gtHeuresMajorees) + ')' : ' (aucune majoration paramétrée)'}` : '—'],
