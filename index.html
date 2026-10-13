@@ -2196,7 +2196,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.6.2';
+const APP_VERSION = '2.7.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2227,6 +2227,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.7.0', items: [
+    'Pause entre deux tâches : quand une coupure de 10 à 40 min sépare deux tâches d\'un service de 6h ou plus (au placement, au déplacement ou à la modification d\'une tâche), l\'appli demande si cette coupure est la pause obligatoire à décompter. Si oui, elle devient une pause incluse dans la tâche (⏸️) et est déduite partout (récap paie, exports, clôture, alerte ⚠️). Si non, rien ne change et la question n\'est plus reposée tant que l\'écart reste le même. Cliquer sur la zone « PAUSE » de la frise permet de poser la question sur un planning existant. Rien ne change pour les plannings existants tant qu\'on ne répond pas oui.',
+  ] },
+  { v: '2.6.4', items: [
+    'Annulation du changement de la 2.6.3 : une coupure laissée entre deux tâches (30 min, sous le seuil de séparation des services) n\'est PAS une pause décomptée — le temps est payé comme du travail. L\'alerte ⚠️ "6h sans pause" est donc rétablie ; pour une vraie pause, la configurer sur la tâche (⏸️).',
+  ] },
   { v: '2.6.2', items: [
     'Le nom de la société (Paramètres > Général) s\'affiche désormais sous "Planning Nova" dans le menu latéral et dans le titre de l\'onglet du navigateur, pour distinguer facilement plusieurs entités ouvertes en parallèle.',
   ] },
@@ -4764,6 +4770,7 @@ function onChipDoubleClick(taskId) {
   saveDB();
   renderTrack();
   renderPlanning();
+  setTimeout(proposerPausesEntreTaches, 50);
 }
 
 function initDjTrackEvents() {
@@ -5005,7 +5012,8 @@ function renderTrack() {
     const label = deuxServices
       ? `ÉCART · ${minToHM(gapDur)} <span title="Écart supérieur au seuil de regroupement (${minToHM(seuilDeuxServices)}) — la pointeuse traite ces deux tâches comme deux services distincts, avec chacun sa propre embauche/débauche">🔀 2 pointages</span>`
       : `PAUSE · ${minToHM(gapDur)}${suffisant ? '' : ' ⚠'}`;
-    html += `<div class="dj-pause-zone ${suffisant ? 'ok' : 'insuff'}${deuxServices ? ' dj-pause-deuxservices' : ''}" style="top:${top}px;height:${h}px;">
+    const cliquable = !deuxServices && gapDur >= COUPURE_MIN_PROPOSEE;
+    html += `<div class="dj-pause-zone ${suffisant ? 'ok' : 'insuff'}${deuxServices ? ' dj-pause-deuxservices' : ''}" style="top:${top}px;height:${h}px;${cliquable ? 'cursor:pointer;pointer-events:auto;' : ''}" ${cliquable ? `onclick="proposerPauseDepuisEcart(${g.start})" title="Clique pour décompter cette coupure comme pause obligatoire"` : ''}>
       ${h >= 16 ? `<span>${label}</span>` : ''}
     </div>`;
   });
@@ -5013,6 +5021,105 @@ function renderTrack() {
   document.getElementById('dj-track').innerHTML = html;
   updateDjBadge();
   updatePauseAlert();
+}
+
+
+// ===================================================
+// Coupure entre deux tâches → pause obligatoire décomptée (v2.7.0)
+// ===================================================
+// Une simple coupure laissée entre deux tâches d'un même service n'est PAS décomptée (le temps est
+// payé). Ce bloc propose de la transformer en vraie pause (pauseDuree/pauseDebut sur une des deux
+// tâches) — le mécanisme existant que le récap paie, les exports et la clôture déduisent déjà.
+const COUPURE_MIN_PROPOSEE = 10; // en dessous : simple changement de poste, on ne propose rien
+
+function dureeInstanceMin(i) { return i.crosseMinuit ? (1440 - i.debut) + i.fin : i.fin - i.debut; }
+
+// Coupures du jour affiché (employé djCurrentEmp) entre deux tâches du même service (écart ≤ seuil
+// de séparation des services), avec la durée de travail cumulée du service.
+function collecterCoupuresPausables(dk) {
+  const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
+  const insts = (db.planning[djCurrentEmp]?.[dk] || [])
+    .filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge)
+    .slice().sort((a, b) => a.debut - b.debut);
+  const services = [];
+  insts.forEach((i, k) => {
+    const prev = insts[k - 1];
+    if (prev && !prev.crosseMinuit && (i.debut - prev.fin) <= splitSeuil) services[services.length - 1].push(i);
+    else services.push([i]);
+  });
+  const res = [];
+  services.forEach(srv => {
+    const travail = srv.reduce((t, i) => t + dureeInstanceMin(i) - (i.pauseDuree || 0), 0);
+    for (let k = 1; k < srv.length; k++) {
+      const A = srv[k - 1], B = srv[k];
+      if (A.crosseMinuit) continue;
+      const gap = B.debut - A.fin;
+      if (gap >= COUPURE_MIN_PROPOSEE && gap <= splitSeuil) res.push({ A, B, gap, travail });
+    }
+  });
+  return res;
+}
+
+function nomTacheInst(i) { return db.tasks.find(t => t.id === i.taskId)?.nom || 'Tâche'; }
+
+// Transforme la coupure en pause incluse : sur la tâche précédente (sa fin recule jusqu'à la tâche
+// suivante) ou, si elle a déjà une pause, sur la tâche suivante (son début avance vers la précédente).
+function convertirCoupureEnPause(c) {
+  const { A, B, gap } = c;
+  if (!(A.pauseDuree > 0)) {
+    const dureeAvant = dureeInstanceMin(A);
+    A.fin = B.debut;
+    A.pauseDebut = dureeAvant;
+    A.pauseDuree = gap;
+  } else if (!(B.pauseDuree > 0)) {
+    B.debut = A.fin;
+    B.pauseDebut = 0;
+    B.pauseDuree = gap;
+  } else {
+    return false;
+  }
+  delete A.coupureRefusee; delete B.coupureRefusee;
+  return true;
+}
+
+function demanderPauseCoupure(c, manuel) {
+  const dureeMin = getPauseDureeMin();
+  const trop = c.gap < dureeMin
+    ? `\n\n⚠️ Cette pause (${minToHM(c.gap)}) est inférieure à la pause obligatoire paramétrée (${minToHM(dureeMin)}).` : '';
+  const msg = `Coupure de ${minToHM(c.gap)} entre « ${nomTacheInst(c.A)} » (fin ${minToTime(c.A.fin)}) et « ${nomTacheInst(c.B)} » (début ${minToTime(c.B.debut)}).\n`
+    + `Travail cumulé du service : ${minToHM(c.travail)}.${trop}\n\n`
+    + `Cette coupure est-elle la PAUSE OBLIGATOIRE, à déduire du temps de travail (récap paie, clôture…) ?\n\n`
+    + `OK = oui, la décompter\nAnnuler = non, la laisser comme simple écart (payé)`;
+  if (confirm(msg)) {
+    if (!convertirCoupureEnPause(c)) { notify('Les deux tâches ont déjà une pause — modifie-les à la main (double-clic sur la tâche)', 'warning'); return false; }
+    const emp = getEmpById(djCurrentEmp);
+    logAudit('Pause décomptée', `${emp ? emp.prenom + ' ' + emp.nom : djCurrentEmp} — ${djCurrentDate} — ${minToHM(c.gap)} entre ${nomTacheInst(c.A)} et ${nomTacheInst(c.B)}`);
+    saveDB(); renderTrack(); renderPlanning();
+    notify(`Pause de ${minToHM(c.gap)} décomptée`);
+    return true;
+  }
+  if (!manuel) c.B.coupureRefusee = c.gap; // ne plus redemander tant que l'écart ne change pas
+  else delete c.B.coupureRefusee;
+  saveDB();
+  return false;
+}
+
+// Appelée après toute création / déplacement / redimensionnement dans la fiche du jour.
+function proposerPausesEntreTaches() {
+  if (!djCurrentEmp || !djCurrentDate) return;
+  const cands = collecterCoupuresPausables(djCurrentDate)
+    .filter(c => c.travail >= SEUIL_PAUSE_OBLIGATOIRE_MIN && c.B.coupureRefusee !== c.gap);
+  if (!cands.length) return;
+  // Une seule proposition à la fois (la conversion modifie les horaires) ; on rappelle ensuite.
+  demanderPauseCoupure(cands[0], false);
+}
+
+// Clic sur la zone « PAUSE » de la frise : même question, à la demande (plannings déjà existants).
+function proposerPauseDepuisEcart(debutEcart) {
+  if (!verifierSemaineModifiable(djCurrentDate)) return;
+  const c = collecterCoupuresPausables(djCurrentDate).find(x => x.A.fin === debutEcart);
+  if (!c) { notify('Cette coupure est trop courte ou trop longue pour être convertie en pause', 'warning'); return; }
+  demanderPauseCoupure(c, true);
 }
 
 function updateDjBadge() {
@@ -5148,6 +5255,7 @@ function onDragEnd() {
     } else if (dragCtx.moved) {
       saveDB();
       renderPlanning();
+      setTimeout(proposerPausesEntreTaches, 50);
     }
   }
   dragCtx = null;
@@ -5219,6 +5327,7 @@ function saveInstancePrecise() {
   const task = db.tasks.find(t => t.id === inst.taskId);
   logAudit('Horaire modifié', `${emp ? emp.prenom + ' ' + emp.nom : djCurrentEmp} — ${djCurrentDate} — ${task?.nom || 'Tâche'} — ${minToTime(dMin)}${crosse ? ' → ' + minToTime(fMin) + ' (lend.)' : ' → ' + minToTime(fMin)}`);
   notify('Horaire mis à jour');
+  setTimeout(proposerPausesEntreTaches, 50);
 }
 
 function deleteInstanceFromModal() {
