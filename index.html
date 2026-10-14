@@ -2196,7 +2196,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.7.0';
+const APP_VERSION = '2.7.1';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2227,6 +2227,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.7.1', items: [
+    'Fiche du jour : quand l\'heure de début + la durée d\'une tâche de la bibliothèque dépasse minuit, l\'ajout au planning (double-clic sur la tâche ou glisser-déposer) coche automatiquement "Se termine le lendemain" et déduit l\'heure de fin du lendemain matin (ex: 22h00 + 7h → 22:00 – 05:00) — avant, la tâche était tronquée à minuit. Plus besoin d\'ouvrir l\'horaire précis pour la corriger.',
+  ] },
   { v: '2.7.0', items: [
     'Pause entre deux tâches : quand une coupure de 10 à 40 min sépare deux tâches d\'un service de 6h ou plus (au placement, au déplacement ou à la modification d\'une tâche), l\'appli demande si cette coupure est la pause obligatoire à décompter. Si oui, elle devient une pause incluse dans la tâche (⏸️) et est déduite partout (récap paie, exports, clôture, alerte ⚠️). Si non, rien ne change et la question n\'est plus reposée tant que l\'écart reste le même. Cliquer sur la zone « PAUSE » de la frise permet de poser la question sur un planning existant. Rien ne change pour les plannings existants tant qu\'on ne répond pas oui.',
   ] },
@@ -4751,6 +4754,20 @@ function appliquerExclusionCongeTravail(empId, dk, task) {
   }
 }
 
+// Construit l'instance planifiée d'une tâche de la bibliothèque à partir de son heure de début et de sa
+// durée : si début + durée dépasse minuit, la tâche est automatiquement marquée "se termine le
+// lendemain" (crosseMinuit) avec l'heure de fin du lendemain matin déduite — plus besoin d'ouvrir
+// l'horaire précis pour cocher la case et corriger la fin (v2.7.1).
+function construireInstanceDepuisTache(task, debut) {
+  const durMin = ((task.dureeH || 0) * 60 + (task.dureeM || 0)) || 60;
+  const total = debut + durMin;
+  if (total > 1440) {
+    const finLendemain = Math.min(total - 1440, 1439);
+    return { id: uid(), taskId: task.id, debut, fin: finLendemain, crosseMinuit: true };
+  }
+  return { id: uid(), taskId: task.id, debut, fin: total, crosseMinuit: false };
+}
+
 function onChipDoubleClick(taskId) {
   const task = db.tasks.find(t => t.id === taskId);
   if (!task) return;
@@ -4764,9 +4781,8 @@ function onChipDoubleClick(taskId) {
     debut = Math.min(1440 - 15, dernier);
     notify('Aucune heure de début définie pour cette tâche — ajoutée à la suite', 'warning');
   }
-  const fin = Math.min(1440, debut + durMin);
   appliquerExclusionCongeTravail(djCurrentEmp, djCurrentDate, task);
-  getDayInsts().push({ id: uid(), taskId, debut, fin, crosseMinuit: false });
+  getDayInsts().push(construireInstanceDepuisTache(task, debut));
   saveDB();
   renderTrack();
   renderPlanning();
@@ -4790,9 +4806,8 @@ function onTrackDrop(e) {
   let debut = Math.round((y / PX_PER_MIN) / 15) * 15;
   debut = Math.max(0, Math.min(1440 - 15, debut));
   const durMin = ((task.dureeH || 0) * 60 + (task.dureeM || 0)) || 60;
-  const fin = Math.min(1440, debut + durMin);
   appliquerExclusionCongeTravail(djCurrentEmp, djCurrentDate, task);
-  getDayInsts().push({ id: uid(), taskId, debut, fin, crosseMinuit: false });
+  getDayInsts().push(construireInstanceDepuisTache(task, debut));
   saveDB();
   renderTrack();
   renderPlanning();
