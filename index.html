@@ -341,6 +341,24 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 .cal-day.vac-sco::before { content: ''; position: absolute; inset: 0; border-radius: 4px;
   border: 1px solid rgba(79,124,255,.2); pointer-events: none; }
 
+/* Options > bandeau des jours fixe : le cadre devient son propre conteneur de défilement vertical,
+   l'en-tête (LUN MAR MER…) reste collé en haut pendant qu'on fait défiler les employés. */
+.grw-wrap.grw-sticky { overflow: auto; max-height: calc(100vh - 250px); min-height: 280px; }
+.grw-wrap.grw-sticky .grw-head-cell { position: sticky; top: -10px; z-index: 6; box-shadow: 0 5px 0 0 var(--bg); }
+.grw-wrap.grw-sticky .grw-head-cell.grw-name-col { left: 0; z-index: 8; }
+/* Options > matin à gauche / après-midi-soir à droite */
+.grw-grid-cote .grw-alerte-pause { top: auto !important; bottom: 2px; }
+.grw-cote-row { display: flex; flex: 1; min-width: 0; }
+.grw-cote-row .grw-half-section { flex: 1 1 50%; min-width: 0; }
+.grw-cote-row .grw-half-section + .grw-half-section { border-top: none; border-left: 1px solid var(--border); }
+.grw-grid.grw-grid-cote { grid-template-columns: 150px repeat(7, minmax(230px, 1fr)) 100px; }
+/* Texte qui ne tient pas : passe à la ligne plutôt que d'être coupé par "…" */
+.grw-bar-name.grw-bar-name-wrap { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; line-height: 1.05;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.grw-repos-hebdo { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 80px; padding: 6px;
+  font-size: 11px; font-weight: 700; letter-spacing: .5px; color: var(--text-muted); text-align: center;
+  background: repeating-linear-gradient(45deg, rgba(157,143,255,.08) 0, rgba(157,143,255,.08) 6px, transparent 6px, transparent 12px);
+  border: 1px dashed rgba(157,143,255,.45); border-radius: 6px; margin: 4px; }
 .grw-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; }
 .grw-grid { display: grid; grid-template-columns: 150px repeat(7, minmax(140px, 1fr)) 100px; column-gap: 6px; row-gap: 6px; }
 .grw-week-total { display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--surface3); border-radius: var(--radius-sm); }
@@ -407,7 +425,8 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
   .week-nav { margin-bottom: 10px; }
   .week-nav .label { font-size: 16px; font-weight: 700; }
 
-  .grw-wrap { overflow: visible !important; }
+  .grw-wrap { overflow: visible !important; max-height: none !important; }
+  .grw-wrap.grw-sticky .grw-head-cell { position: static !important; box-shadow: none !important; }
   .grw-name-col, .lec-emp-card, .pg-day-cell, .task-card { break-inside: avoid; }
   .grw-grid { grid-template-columns: 130px repeat(7, 1fr) 90px !important; }
   .grw-name-col { position: static !important; }
@@ -949,6 +968,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <div id="pa-sub-conges" onclick="setParamSub('conges')">Congés</div>
           <div id="pa-sub-admins" onclick="setParamSub('admins')">Admins</div>
           <div id="pa-sub-distribution" onclick="setParamSub('distribution')">Distribution</div>
+          <div id="pa-sub-options" onclick="setParamSub('options')">Options</div>
           <div id="pa-sub-nouveautes" onclick="setParamSub('nouveautes')">Nouveautés</div>
         </div>
 
@@ -972,6 +992,20 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <div class="hint" style="margin-bottom:10px;">S'affiche une fois à chaque admin (à la connexion) tant qu'il ne l'a pas fermée — pratique pour signaler une nouveauté ou un rappel ponctuel. Laisse vide pour ne rien afficher.</div>
           <textarea id="pa-note-info" rows="4" style="width:100%;font-family:inherit;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);padding:9px 12px;" placeholder="Ex : Pensez à valider les congés en attente avant vendredi."></textarea>
           <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="saveNoteInfo()">💾 Enregistrer et notifier les admins</button>
+        </div>
+
+        <div id="pa-options" class="task-card" style="cursor:default;max-width:640px;display:none;">
+          <div class="hint" style="margin-bottom:14px;">Réglages d'affichage et de confort. Chaque option est indépendante, désactivée par défaut, et ne modifie jamais les données ni les calculs de paie.</div>
+
+          <div class="section-label" style="margin-top:0;">🗓️ Planning — Graphique / Semaine</div>
+          <label class="checkbox-row"><input type="checkbox" id="pa-opt-header-sticky" onchange="saveParamOptions()"><span>Garder le bandeau des jours (LUN MAR MER…) visible quand on fait défiler vers le bas</span></label>
+          <div class="hint" style="margin:4px 0 12px 26px;">Le tableau défile dans son propre cadre, bandeau des jours toujours en haut.</div>
+          <label class="checkbox-row"><input type="checkbox" id="pa-opt-cote" onchange="saveParamOptions()"><span>Afficher Matin à gauche et Après-midi / soir à droite (au lieu de l'un au-dessus de l'autre)</span></label>
+          <div class="hint" style="margin:4px 0 12px 26px;">Mêmes clics et mêmes fonctions qu'aujourd'hui ; les colonnes des jours sont un peu plus larges. Quand plusieurs tâches se partagent une plage, c'est leur abréviation (fiche de la tâche) qui s'affiche.</div>
+
+          <div class="section-label">🛌 Repos hebdomadaire</div>
+          <label class="checkbox-row"><input type="checkbox" id="pa-opt-repos-auto" onchange="saveParamOptions()"><span>Afficher « REPOS HEBDO » sur le jour de repos habituel de chaque employé (fiche employé)</span></label>
+          <div class="hint" style="margin:4px 0 0 26px;">Simple affichage dans le planning, les impressions et les e-mails : rien n'est écrit dans le planning, donc aucune incidence sur les pointages, les heures, les heures sup ni les congés. Dès qu'une tâche ou un congé est posé ce jour-là, il remplace automatiquement l'affichage « REPOS HEBDO ».</div>
         </div>
 
         <div id="pa-connexions" class="task-card" style="cursor:default;max-width:640px;display:none;">
@@ -2196,7 +2230,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.7.1';
+const APP_VERSION = '2.8.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2227,6 +2261,13 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.8.0', items: [
+    'Nouvel onglet Paramètres > Options (toutes les options sont désactivées par défaut et ne touchent ni aux données ni aux calculs de paie).',
+    'Option "Bandeau des jours fixe" : dans Planning > Graphique > Semaine, le bandeau LUN MAR MER… reste visible en haut pendant qu\'on fait défiler les employés (le tableau défile dans son propre cadre).',
+    'Option "Matin à gauche / Après-midi-soir à droite" : alternative à la disposition l\'un au-dessus de l\'autre, même fonctionnement (clic sur la journée, alertes…), colonnes des jours un peu plus larges. Valable aussi dans le mode Individuel.',
+    'Plage partagée entre plusieurs tâches (Graphique > Semaine, impression) : l\'abréviation de la fiche tâche est utilisée dès qu\'il y a plus d\'une tâche sur la même plage ; une tâche seule garde son nom complet. Un texte qui ne tient quand même pas passe à la ligne (3 lignes max) au lieu d\'être coupé par « … ». Même chose dans les e-mails de planning pour les tâches sans abréviation.',
+    'Option "Repos hebdo" : affiche « REPOS HEBDO » sur le jour de repos habituel de chaque employé (fiche employé), dans le planning (Édition, Graphique, Individuel), à l\'impression et dans les e-mails de planning. Simple affichage : rien n\'est écrit dans le planning, donc aucune incidence sur les pointages, heures, heures sup, congés ou clôtures ; il disparaît dès qu\'une tâche ou un congé est posé ce jour-là.',
+  ] },
   { v: '2.7.1', items: [
     'Fiche du jour : quand l\'heure de début + la durée d\'une tâche de la bibliothèque dépasse minuit, l\'ajout au planning (double-clic sur la tâche ou glisser-déposer) coche automatiquement "Se termine le lendemain" et déduit l\'heure de fin du lendemain matin (ex: 22h00 + 7h → 22:00 – 05:00) — avant, la tâche était tronquée à minuit. Plus besoin d\'ouvrir l\'horaire précis pour la corriger.',
   ] },
@@ -2845,6 +2886,7 @@ function loadDB() {
   if (db.params.autoNettoyagePlanningsJours === undefined) db.params.autoNettoyagePlanningsJours = 30;
   if (db.params.nuitFin === undefined) db.params.nuitFin = '06:00';
   if (db.params.societeNom === undefined) db.params.societeNom = '';
+  if (!db.params.options) db.params.options = { headerSticky: false, cote: false, reposAuto: false };
   if (db.params.emailSignature === undefined) db.params.emailSignature = '';
   if (!db.params.firebase) db.params.firebase = { apiKey:'', authDomain:'', databaseURL:'', projectId:'', storageBucket:'', appId:'' };
   if (!db.params.github) db.params.github = { owner:'', repo:'', path:'', token:'' };
@@ -3951,7 +3993,7 @@ function detecterAlertesPauseJour(empId, dk) {
 function badgeAlertePauseJour(empId, dk) {
   const { oubliee, superflue } = detecterAlertesPauseJour(empId, dk);
   if (!oubliee && !superflue) return '';
-  let html = '<div style="position:absolute;top:2px;left:50%;transform:translateX(-50%);display:flex;gap:2px;z-index:2;">';
+  let html = '<div class="grw-alerte-pause" style="position:absolute;top:2px;left:50%;transform:translateX(-50%);display:flex;gap:2px;z-index:2;">';
   if (oubliee) html += `<span title="Service de 6h ou plus sans aucune pause configurée — pause légale probablement oubliée" style="font-size:12px;filter:drop-shadow(0 0 2px rgba(0,0,0,.6));">⚠️</span>`;
   if (superflue) html += `<span title="Pause configurée sur un service de moins de 6h — probablement une erreur de saisie" style="font-size:11px;color:var(--accent);filter:drop-shadow(0 0 2px rgba(0,0,0,.6));">🔹</span>`;
   html += '</div>';
@@ -4169,7 +4211,10 @@ function renderPlanningEdition() {
       const congeJour = total === 0 ? getCongeDuJour(emp.id, dk) : null;
       const badge = congeJour
         ? `<div class="pg-badge" style="background:${congeJour.color}30;color:${congeJour.color};border:1px solid ${congeJour.color};" title="${congeJour.nom}">${congeJour.abrev || congeJour.nom}</div>`
-        : (total > 0 ? `<div class="pg-badge ${cls}">${minToHM(total)}</div>` : `<div class="pg-badge empty">—</div>`);
+        : (total > 0 ? `<div class="pg-badge ${cls}">${minToHM(total)}</div>`
+          : (estJourReposAffiche(emp.id, dk)
+            ? `<div class="pg-badge" style="background:rgba(157,143,255,.15);color:#9d8fff;border:1px dashed rgba(157,143,255,.5);" title="Repos hebdomadaire — jour de repos habituel (aucune incidence sur les heures)">${REPOS_HEBDO_LABEL}</div>`
+            : `<div class="pg-badge empty">—</div>`));
       const insts = (db.planning[emp.id]?.[dk] || []).slice().sort((a, b) => a.debut - b.debut);
       const prevDk2 = dateKey(addDays(d, -1));
       const prevCross = (db.planning[emp.id]?.[prevDk2] || []).filter(i => i.crosseMinuit);
@@ -4453,10 +4498,14 @@ function renderShiftGroup(group, usedTaskIds, columnPx) {
     const pxWidth = (w / 100) * (columnPx || 280);
     const nomComplet = b.task?.nom || 'Tâche';
     const abrev = b.task?.abrev || nomComplet;
-    // Le nom complet passe en priorité ; l'abréviation ne prend le relais que si la place manque
-    // vraiment, en estimant la largeur nécessaire au texte plutôt qu'un seuil fixe arbitraire.
+    // Plusieurs tâches se partagent cette plage (matin / après-midi-soir) → c'est l'abréviation de la
+    // fiche tâche qui s'affiche, pour garder la lisibilité. Une tâche seule garde son nom complet, et
+    // l'abréviation ne prend le relais que si la place manque vraiment.
     const largeurEstimee = (txt) => txt.length * 6.4 + 14;
-    const nom = pxWidth >= largeurEstimee(nomComplet) ? nomComplet : abrev;
+    const plusieurs = n > 1;
+    const nom = (plusieurs && b.task?.abrev) ? b.task.abrev
+      : (pxWidth >= largeurEstimee(nomComplet) ? nomComplet : abrev);
+    const nePasTient = pxWidth < largeurEstimee(nom);
     const finLabel = b.end >= 1440 ? '24:00' : minToTime(b.end);
     const debutLabel = minToTime(b.start);
     const plageLabel = `${debutLabel}–${finLabel}`;
@@ -4465,7 +4514,7 @@ function renderShiftGroup(group, usedTaskIds, columnPx) {
     const fontSize = vert ? 10 : Math.max(8.5, Math.min(11, pxWidth / 6));
     const content = showDur
       ? `<span class="grw-bar-name" style="font-size:${fontSize}px;">${nom}</span><span class="grw-bar-dur" style="font-size:${Math.max(8,fontSize-1)}px;">${plageLabel}</span>`
-      : `<span class="grw-bar-name" style="font-size:${fontSize}px;">${nom}</span>`;
+      : `<span class="grw-bar-name${nePasTient && !vert ? ' grw-bar-name-wrap' : ''}" style="font-size:${fontSize}px;">${nom}</span>`;
     const title = `${minToTime(b.start)} – ${finLabel} ${nomComplet}`;
     html += `<div class="grw-bar${vert ? ' grw-vert' : ''}" title="${title}" style="left:${x}%;width:${w}%;background:${b.task?.color||'#888'};color:${getTextColor(b.task)};">${content}</div>`;
   });
@@ -4481,7 +4530,33 @@ function renderHalfSection(empId, dk, lo, hi, usedTaskIds, columnPx, halfClass) 
   return `<div class="grw-half-section ${halfClass}">${inner}</div>`;
 }
 
+// Jour de repos habituel d'un employé (fiche employé) sans AUCUNE tâche ni congé ce jour-là, ni suite
+// d'une tâche de la veille à cheval sur minuit : affichage seul « REPOS HEBDO » (option Paramètres >
+// Options). Rien n'est stocké dans le planning — un jour vide reste un jour vide pour tous les calculs.
+const REPOS_HEBDO_LABEL = 'REPOS HEBDO';
+function estJourReposAffiche(empId, dk) {
+  if (!getOpt('reposAuto')) return false;
+  const emp = getEmpById(empId);
+  if (!emp) return false;
+  const d = isoToDate(dk);
+  if (d.getDay() !== getReposHebdo(empId)) return false;
+  if (emp.dateDebutContrat && dk < emp.dateDebutContrat) return false;
+  if ((db.planning[empId]?.[dk] || []).length) return false;
+  const dkHier = dateKey(addDays(d, -1));
+  if ((db.planning[empId]?.[dkHier] || []).some(i => i.crosseMinuit)) return false;
+  return true;
+}
+
 function renderProportionalCell(empId, dk, usedTaskIds, columnPx) {
+  if (estJourReposAffiche(empId, dk)) {
+    return `<div class="grw-repos-hebdo" title="Repos hebdomadaire — jour de repos habituel (aucune incidence sur les heures)">🛌 ${REPOS_HEBDO_LABEL}</div>`;
+  }
+  if (getOpt('cote')) {
+    const demi = (columnPx || 280) / 2;
+    return `<div class="grw-cote-row">` +
+      renderHalfSection(empId, dk, 0, 720, usedTaskIds, demi, 'grw-half-matin') +
+      renderHalfSection(empId, dk, 720, 1440, usedTaskIds, demi, 'grw-half-pm') + `</div>`;
+  }
   return renderHalfSection(empId, dk, 0, 720, usedTaskIds, columnPx, 'grw-half-matin') +
          renderHalfSection(empId, dk, 720, 1440, usedTaskIds, columnPx, 'grw-half-pm');
 }
@@ -4548,7 +4623,7 @@ function renderGraphiqueSemaine() {
 
   const totalDataRows = row - 1; // nombre de lignes après l'en-tête (titres de groupe + employés)
   const gridRows = `auto repeat(${totalDataRows}, auto)`;
-  const html = `<div class="grw-wrap"><div class="grw-grid" style="grid-template-rows:${gridRows};">${cells}</div></div>`;
+  const html = `<div class="grw-wrap${getOpt('headerSticky') ? ' grw-sticky' : ''}"><div class="grw-grid${getOpt('cote') ? ' grw-grid-cote' : ''}" style="grid-template-rows:${gridRows};">${cells}</div></div>`;
   content.innerHTML = html + graphiqueLegend(usedTaskIds);
 }
 
@@ -11756,7 +11831,7 @@ function renderGraphiqueSemaineIndividuel(emp, weekMonday) {
   });
 
   return `<div style="font-size:12px;font-weight:700;color:var(--text-muted);margin:14px 0 6px;">${formatWeekLabel(weekMonday)}</div>
-    <div class="grw-wrap"><div class="grw-grid" style="grid-template-rows:auto auto;">${cells}</div></div>` +
+    <div class="grw-wrap"><div class="grw-grid${getOpt('cote') ? ' grw-grid-cote' : ''}" style="grid-template-rows:auto auto;">${cells}</div></div>` +
     graphiqueLegend(usedTaskIds);
 }
 
@@ -11859,7 +11934,7 @@ function renderDashboard() {
 let paSub = 'general';
 function setParamSub(sub) {
   paSub = sub;
-  ['general','connexions','horaires','conges','admins','distribution','nouveautes'].forEach(s => {
+  ['general','connexions','horaires','conges','admins','distribution','options','nouveautes'].forEach(s => {
     document.getElementById('pa-sub-' + s).classList.toggle('active', s === sub);
     document.getElementById('pa-' + s).style.display = s === sub ? 'block' : 'none';
   });
@@ -11869,7 +11944,22 @@ function setParamSub(sub) {
   if (sub === 'nouveautes') renderNouveautes();
 }
 
+// Options d'affichage (Paramètres > Options) — toutes désactivées par défaut.
+function getOpt(nom) { return !!(db.params.options && db.params.options[nom]); }
+function saveParamOptions() {
+  if (!db.params.options) db.params.options = {};
+  db.params.options.headerSticky = document.getElementById('pa-opt-header-sticky').checked;
+  db.params.options.cote = document.getElementById('pa-opt-cote').checked;
+  db.params.options.reposAuto = document.getElementById('pa-opt-repos-auto').checked;
+  saveDB();
+  renderPlanning();
+  notify('Options enregistrées');
+}
+
 function initParametres() {
+  document.getElementById('pa-opt-header-sticky').checked = getOpt('headerSticky');
+  document.getElementById('pa-opt-cote').checked = getOpt('cote');
+  document.getElementById('pa-opt-repos-auto').checked = getOpt('reposAuto');
   document.getElementById('pa-societe').value = db.params.societeNom || '';
   document.getElementById('pa-signature').value = db.params.emailSignature || '';
   document.getElementById('pa-note-info').value = db.params.appNoteText || '';
@@ -13541,6 +13631,12 @@ function genererPlanningGraphiqueHtml(days) {
   .grw-bar-name { font-size: 11px; font-weight: 700; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .grw-bar-dur { font-size: 10.5px; font-weight: 700; opacity: .95; line-height: 1.1; margin-top: 3px; }
   .grw-bar.grw-vert { writing-mode: vertical-rl; text-orientation: mixed; }
+  .grw-bar-name.grw-bar-name-wrap { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; line-height: 1.05; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  .grw-cote-row { display: flex; flex: 1; min-width: 0; }
+  .grw-cote-row .grw-half-section { flex: 1 1 50%; min-width: 0; }
+  .grw-cote-row .grw-half-section + .grw-half-section { border-top: none; border-left: 1px solid var(--border); }
+  .grw-grid.grw-grid-cote { grid-template-columns: 150px repeat(7, 300px) 100px; }
+  .grw-repos-hebdo { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 60px; padding: 6px; font-size: 11px; font-weight: 700; letter-spacing: .5px; color: #6a5fb0; text-align: center; border: 1px dashed #9d8fff; border-radius: 6px; margin: 4px; background: rgba(157,143,255,.10); }
   .grw-row-group-title { padding: 6px 8px; background: var(--surface2); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
   @media print { @page { size: landscape; margin: 10mm; } body { padding: 0; } }
   @media (max-width: 900px) { .grw-grid { grid-template-columns: 110px repeat(7, 160px) 80px; } }
@@ -13549,7 +13645,7 @@ function genererPlanningGraphiqueHtml(days) {
 <body>
   <h1>${societe}</h1>
   <div class="sub">Planning complet — semaine du ${days[0].getDate()}/${days[0].getMonth()+1} au ${days[6].getDate()}/${days[6].getMonth()+1}/${days[6].getFullYear()}</div>
-  <div class="grw-wrap"><div class="grw-grid" style="grid-template-rows:${gridRows};">${cells}</div></div>
+  <div class="grw-wrap"><div class="grw-grid${getOpt('cote') ? ' grw-grid-cote' : ''}" style="grid-template-rows:${gridRows};">${cells}</div></div>
   <div style="margin-top:16px;font-size:12px;color:var(--text-muted);">${legend}</div>
 </body></html>`;
 }
@@ -13602,6 +13698,11 @@ function emailPlanningCompletHtml(days) {
       </td>`;
     }
     if (!travail.length && !continuationHier.length) {
+      if (estJourReposAffiche(empId, dk)) {
+        return `<td style="padding:3px;vertical-align:top;background:${isWE ? '#1a1620' : ''};">
+        <div style="border:1px dashed #6a5fb0;border-radius:6px;padding:8px 4px;text-align:center;color:#9d8fff;font-size:10px;font-weight:700;">${REPOS_HEBDO_LABEL}</div>
+      </td>`;
+      }
       return `<td style="padding:3px;vertical-align:top;background:${isWE ? '#1a1620' : ''};">
         <div style="border:1px dashed ${BORDER};border-radius:6px;padding:8px 4px;text-align:center;color:${TEXT_DIM};font-size:10px;font-style:italic;">—</div>
       </td>`;
@@ -13614,7 +13715,7 @@ function emailPlanningCompletHtml(days) {
       const fin = minToTime(i.fin);
       const debut = minToTime(i.debut);
       return `<div style="background:${color};border-radius:6px;padding:4px 6px;margin-bottom:2px;opacity:.85;">
-        <div style="font-size:10px;font-weight:700;color:${textCol};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${nom}</div>
+        <div style="font-size:10px;font-weight:700;color:${textCol};${task?.abrev ? 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' : 'word-break:break-word;line-height:1.15;'}">${nom}</div>
         <div style="font-size:9px;color:${textCol};opacity:.85;margin-top:1px;">${debut}→${fin}</div>
       </div>`;
     }).join('');
@@ -13626,7 +13727,7 @@ function emailPlanningCompletHtml(days) {
       const debut = minToTime(i.debut);
       const fin = i.crosseMinuit ? '24:00' : minToTime(i.fin);
       return `<div style="background:${color};border-radius:6px;padding:4px 6px;margin-bottom:2px;">
-        <div style="font-size:10px;font-weight:700;color:${textCol};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${nom}</div>
+        <div style="font-size:10px;font-weight:700;color:${textCol};${task?.abrev ? 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' : 'word-break:break-word;line-height:1.15;'}">${nom}</div>
         <div style="font-size:9px;color:${textCol};opacity:.85;margin-top:1px;">${debut}–${fin}</div>
       </div>`;
     }).join('');
