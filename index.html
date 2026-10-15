@@ -2230,7 +2230,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.8.0';
+const APP_VERSION = '2.8.3';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2261,6 +2261,15 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.8.3', items: [
+    'Historique : chaque connexion d\'un admin (identifiant + mot de passe saisis) est désormais tracée avec son nom et l\'heure (environ 200 octets par ligne). Un simple rechargement de page dans un onglet déjà connecté n\'ajoute rien.',
+  ] },
+  { v: '2.8.2', items: [
+    'Paramètres > Connexions > Tester la connexion : le test ne reste plus muet quand Firebase est injoignable — au bout de 8 secondes, un message explique les causes probables (Database URL / région erronée, base non créée, blocage réseau ou extension).',
+  ] },
+  { v: '2.8.1', items: [
+    'Paramètres > Connexions : le bouton Enregistrer ne peut plus rester "sans effet" — si le navigateur refuse l\'enregistrement (stockage plein ou bloqué) ou si Firebase rejette les identifiants, un message d\'erreur explicite s\'affiche, et le message de succès indique l\'état de la connexion Firebase.',
+  ] },
   { v: '2.8.0', items: [
     'Nouvel onglet Paramètres > Options (toutes les options sont désactivées par défaut et ne touchent ni aux données ni aux calculs de paie).',
     'Option "Bandeau des jours fixe" : dans Planning > Graphique > Semaine, le bandeau LUN MAR MER… reste visible en haut pendant qu\'on fait défiler les employés (le tableau défile dans son propre cadre).',
@@ -12202,12 +12211,25 @@ function saveParamConnexions() {
   // Sauvegarde directe dans localStorage sans passer par saveDB() : saveDB() déclenche une chaîne
   // qui finit par rappeler initParametres() et vider les champs avant que Firebase n'ait eu le
   // temps de recevoir les nouvelles valeurs, ce qui donnait l'impression que rien n'était sauvegardé.
-  localStorage.setItem(DB_KEY, JSON.stringify(db));
+  // Chaque étape est protégée : une erreur (stockage du navigateur plein ou bloqué, identifiants
+  // illisibles…) doit s'afficher, jamais laisser le bouton "sans effet" (v2.8.1).
+  try {
+    localStorage.setItem(DB_KEY, JSON.stringify(db));
+  } catch (e) {
+    console.error('Enregistrement connexions:', e);
+    notify('❌ Enregistrement impossible dans ce navigateur : ' + (e.name || '') + ' ' + (e.message || '') + ' — libère de la place ou autorise le stockage du site', 'danger');
+    return;
+  }
   // Reconnexion Firebase avec les nouveaux identifiants (si changés)
-  initFirebaseConnection();
+  try { initFirebaseConnection(); } catch (e) {
+    console.error('Reconnexion Firebase:', e);
+    updateFirebaseStatus(false, 'Erreur de configuration');
+    notify('Connexions enregistrées, mais Firebase refuse ces identifiants : ' + (e.message || e), 'warning');
+    return;
+  }
   // Badge de statut GitHub mis à jour si configuré
-  if (typeof updateGithubStatus === 'function') updateGithubStatus();
-  notify('Connexions enregistrées ✅');
+  try { if (typeof updateGithubStatus === 'function') updateGithubStatus(); } catch (e) { console.warn(e); }
+  notify('Connexions enregistrées ✅ — statut Firebase : ' + (fbConnected ? 'connecté' : 'connexion en cours… (clique sur « Tester la connexion »)'));
 }
 
 function saveParamHoraires() {
@@ -12308,7 +12330,8 @@ function initFirebaseConnection() {
       listenConnectionState();
     };
     if (fbApp) {
-      fbApp.delete().then(() => { fbApp = firebase.initializeApp(config); start(); });
+      fbApp.delete().then(() => { fbApp = firebase.initializeApp(config); start(); })
+        .catch(e => { console.error('Firebase re-init error:', e); updateFirebaseStatus(false, 'Erreur de configuration'); });
     } else {
       fbApp = firebase.initializeApp(config);
       start();
@@ -12322,12 +12345,21 @@ function initFirebaseConnection() {
 function testFirebaseConnection() {
   if (!firebaseConfigured()) { notify('Renseigne au moins l\'API Key, la Database URL et le Project ID', 'warning'); return; }
   if (!fbDb) initFirebaseConnection();
-  if (!fbDb) { notify('Impossible d\'initialiser Firebase — vérifie les identifiants', 'danger'); return; }
+  if (!fbDb) {
+    // La (ré)initialisation est asynchrone quand une connexion existait déjà : on réessaie juste après.
+    notify('Initialisation de Firebase… nouvel essai dans 2 secondes', 'warning');
+    setTimeout(() => { if (fbDb) testFirebaseConnection(); else notify('Impossible d\'initialiser Firebase — vérifie les identifiants (Database URL surtout)', 'danger'); }, 2000);
+    return;
+  }
 
+  notify('Test de connexion en cours…', 'warning');
   const testRef = fbDb.ref('_test/ping');
   const now = Date.now();
-  testRef.set({ ts: now })
-    .then(() => testRef.once('value'))
+  // Firebase ne renvoie AUCUNE erreur quand il ne parvient pas à joindre le serveur (URL de base
+  // erronée, base non créée, réseau/extension qui bloque) : l'écriture reste simplement en attente.
+  // D'où ce délai maximal, sinon le test semble "ne rien faire" (v2.8.2).
+  const delai = new Promise((_, reject) => setTimeout(() => reject({ code: 'timeout' }), 8000));
+  Promise.race([testRef.set({ ts: now }).then(() => testRef.once('value')), delai])
     .then(snap => {
       const val = snap.val();
       if (val && val.ts === now) {
@@ -12339,7 +12371,11 @@ function testFirebaseConnection() {
     })
     .catch(err => {
       console.error('Firebase test error:', err);
-      notify('Échec : ' + (err.message || err.code || 'erreur inconnue'), 'danger');
+      if (err && err.code === 'timeout') {
+        notify('❌ Firebase ne répond pas (8 s). Vérifie la Database URL (copiée telle quelle depuis la console Firebase > Realtime Database, avec la bonne région), que la Realtime Database est bien créée, et qu\'aucune extension/réseau ne bloque firebaseio.com', 'danger');
+      } else {
+        notify('Échec : ' + (err.message || err.code || 'erreur inconnue'), 'danger');
+      }
       updateFirebaseStatus(false, 'Erreur');
     });
 }
@@ -15294,6 +15330,9 @@ async function tenterLogin() {
 
   currentAdminSession = { id: admin.id, nom: admin.nom };
   sessionStorage.setItem('pn_admin_session', JSON.stringify(currentAdminSession));
+  // Trace de la connexion dans l'Historique (qui, quand) — uniquement une vraie saisie
+  // identifiant/mot de passe, pas un simple rechargement de page dans un onglet déjà connecté.
+  logAudit('Connexion', 'Connexion à l\'application');
   document.getElementById('admin-login-gate').style.display = 'none';
   showView('dashboard');
   setupPresence();
