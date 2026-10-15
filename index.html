@@ -124,6 +124,21 @@ label { display: block; font-size: 11px; font-weight: 700; text-transform: upper
 .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 100;
   align-items: center; justify-content: center; }
 .modal-overlay.open { display: flex; }
+.repos-jour-chk { display: inline-flex; align-items: center; gap: 4px; padding: 6px 9px; margin: 0; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface2); cursor: pointer; font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--text); }
+.repos-jour-chk input { width: 15px; height: 15px; margin: 0; }
+.repos-jour-chk:has(input:checked) { border-color: #9d8fff; background: rgba(157,143,255,.18); }
+/* Fenêtre « jour » : déplaçable par son bandeau, fond allégé, et mode « voir derrière » */
+#modal-day, #modal-instance { background: rgba(0,0,0,.35); }
+#modal-day .dj-header, #modal-instance .mi-header { cursor: move; user-select: none; touch-action: none; }
+#modal-instance .mi-header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; padding-right: 26px; }
+#modal-instance .mi-header h2 { margin: 0; }
+.modal-overlay.dj-transparent { background: transparent !important; pointer-events: none; }
+#modal-day .modal, #modal-instance .modal { resize: both; overflow: auto; max-width: 98vw; max-height: 98vh; min-width: 340px; min-height: 220px; }
+#modal-day .dj-header { flex-wrap: wrap; }
+.dj-opacite { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-muted); cursor: default; }
+.dj-opacite input { width: 80px; accent-color: var(--accent2); }
+.modal-overlay.dj-transparent .modal { pointer-events: auto; box-shadow: 0 10px 50px rgba(0,0,0,.55); }
 .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 26px;
   width: 560px; max-width: 92vw; max-height: 88vh; overflow-y: auto; position: relative; }
 .modal h2 { font-size: 16px; font-weight: 700; margin-bottom: 18px; }
@@ -1309,8 +1324,10 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
   <div class="modal" style="width:1020px;">
     <button class="modal-close" onclick="closeModal('modal-day')">✕</button>
     <div class="dj-header">
-      <h2 id="dj-title" style="margin:0;"></h2>
+      <h2 id="dj-title" style="margin:0;" title="Glisse ce bandeau pour déplacer la fenêtre"></h2>
       <button class="btn btn-secondary btn-sm" id="dj-pause-seuil-btn" onclick="openPauseSettings()"></button>
+      <button class="btn btn-secondary btn-sm" id="dj-voir-derriere" onclick="toggleVoirDerriere('modal-day','dj-voir-derriere')" title="Rend la fenêtre translucide et le fond cliquable : tu vois le planning à travers la fenêtre et tu peux le faire défiler">👁 Voir derrière</button>
+      <label class="dj-opacite" title="Rend la fenêtre translucide pour voir le planning à travers">Opacité <input type="range" id="dj-opacite" min="30" max="100" value="100" oninput="setOpaciteFenetre('modal-day', this.value)"></label>
       <div class="dj-total-badge" id="dj-week-badge" title="Total de la semaine par rapport au contrat de l'employé"></div>
       <div class="dj-total-badge" id="dj-total-badge"></div>
     </div>
@@ -1507,7 +1524,10 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 <div class="modal-overlay" id="modal-instance">
   <div class="modal" style="width:380px;">
     <button class="modal-close" onclick="closeModal('modal-instance')">✕</button>
-    <h2>⏱️ Horaire précis</h2>
+    <div class="mi-header">
+      <h2 title="Glisse ce bandeau pour déplacer la fenêtre">⏱️ Horaire précis</h2>
+      <button class="btn btn-secondary btn-sm" id="mi-voir-derriere" onclick="toggleVoirDerriere('modal-instance','mi-voir-derriere')" title="Rend la fenêtre translucide et le fond cliquable : tu vois le planning à travers la fenêtre et tu peux le faire défiler">👁 Voir derrière</button>
+    </div>
     <input type="hidden" id="mi-id">
     <div class="form-row">
       <div class="form-group">
@@ -2080,17 +2100,17 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
     <div class="form-row">
       <div class="form-group"><label>Email</label><input type="email" id="em-email" placeholder="prenom.nom@entreprise.fr"></div>
       <div class="form-group">
-        <label>Jour de repos habituel</label>
-        <select id="em-repos-hebdo">
-          <option value="0">Dimanche</option>
-          <option value="1">Lundi</option>
-          <option value="2">Mardi</option>
-          <option value="3">Mercredi</option>
-          <option value="4">Jeudi</option>
-          <option value="5">Vendredi</option>
-          <option value="6">Samedi</option>
-        </select>
-        <div class="hint">Sert au calcul du décompte des congés (ex: employé qui travaille le dimanche).</div>
+        <label>Jours de repos habituels</label>
+        <div id="em-repos-jours" style="display:flex;gap:4px;flex-wrap:wrap;">
+          <label class="repos-jour-chk"><input type="checkbox" value="1"><span>Lun</span></label>
+          <label class="repos-jour-chk"><input type="checkbox" value="2"><span>Mar</span></label>
+          <label class="repos-jour-chk"><input type="checkbox" value="3"><span>Mer</span></label>
+          <label class="repos-jour-chk"><input type="checkbox" value="4"><span>Jeu</span></label>
+          <label class="repos-jour-chk"><input type="checkbox" value="5"><span>Ven</span></label>
+          <label class="repos-jour-chk"><input type="checkbox" value="6"><span>Sam</span></label>
+          <label class="repos-jour-chk"><input type="checkbox" value="0"><span>Dim</span></label>
+        </div>
+        <div class="hint">Coche un ou plusieurs jours. Sert au décompte des congés et à l'affichage « REPOS HEBDO » (Paramètres &gt; Options).</div>
       </div>
     </div>
 
@@ -2230,7 +2250,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.8.3';
+const APP_VERSION = '2.9.3';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2261,6 +2281,19 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.9.3', items: [
+    'Bouton « 👁 Voir derrière » : il rend désormais aussi la fenêtre elle-même translucide (≈ 45 %) pour voir le planning à travers elle, en plus du fond cliquable. Second clic : retour à la normale.',
+  ] },
+  { v: '2.9.2', items: [
+    'Fenêtres « Édition d\'une journée » et « Horaire précis » : elles se redimensionnent maintenant en tirant leur coin bas-droit (utile quand elles occupent tout l\'écran), et la fenêtre de la journée a un curseur « Opacité » pour la rendre translucide et voir le planning à travers.',
+  ] },
+  { v: '2.9.1', items: [
+    'Republication de la 2.9.0 (jours de repos multiples, fenêtres « Édition d\'une journée » et « Horaire précis » déplaçables avec « 👁 Voir derrière ») — aucun changement de fonctionnement.',
+  ] },
+  { v: '2.9.0', items: [
+    'Fiche employé : « Jours de repos habituels » — on peut maintenant cocher plusieurs jours (au lieu d\'un seul). Ils servent au décompte des congés et s\'affichent « REPOS HEBDO » dans le planning si l\'option est activée (Paramètres > Options). Les fiches existantes gardent leur jour unique, rien n\'est modifié.',
+    'Fenêtres « Édition d\'une journée » et « ⏱️ Horaire précis » (réglage d\'une tâche) : elles se déplacent en glissant leur bandeau du haut, le fond est moins sombre, et le bouton « 👁 Voir derrière » rend le fond transparent et cliquable pour consulter/faire défiler le planning pendant le réglage.',
+  ] },
   { v: '2.8.3', items: [
     'Historique : chaque connexion d\'un admin (identifiant + mot de passe saisis) est désormais tracée avec son nom et l\'heure (environ 200 octets par ligne). Un simple rechargement de page dans un onglet déjà connecté n\'ajoute rien.',
   ] },
@@ -4548,7 +4581,7 @@ function estJourReposAffiche(empId, dk) {
   const emp = getEmpById(empId);
   if (!emp) return false;
   const d = isoToDate(dk);
-  if (d.getDay() !== getReposHebdo(empId)) return false;
+  if (!estJourReposHabituel(empId, d.getDay())) return false;
   if (emp.dateDebutContrat && dk < emp.dateDebutContrat) return false;
   if ((db.planning[empId]?.[dk] || []).length) return false;
   const dkHier = dateKey(addDays(d, -1));
@@ -4666,8 +4699,70 @@ function openDayDetail(empId, dk) {
   renderPauseSeuilBtn();
   renderPalette();
   renderTrack();
+  resetDjPosition();
   openModal('modal-day');
+  figerFenetre('modal-day');
 }
+
+// ----- Fenêtres « jour » et « Horaire précis » : déplaçables (glisser le bandeau), redimensionnables
+// (coin bas-droit), translucides (curseur « Opacité ») et mode « voir derrière » -----
+let _djDrag = null;
+const _FENETRES_MOBILES = { 'modal-day': 'dj-voir-derriere', 'modal-instance': 'mi-voir-derriere' };
+function resetFenetrePosition(id) {
+  const ov = document.getElementById(id);
+  if (!ov) return;
+  const m = ov.querySelector('.modal');
+  if (m) {
+    if (m.dataset.w0 === undefined) m.dataset.w0 = m.style.width; // largeur d'origine (ex. 1020px) définie dans le HTML
+    ['position', 'left', 'top', 'height', 'margin', 'transform', 'opacity'].forEach(k => { m.style[k] = ''; });
+    m.style.width = m.dataset.w0;
+  }
+  ov.classList.remove('dj-transparent');
+  const b = document.getElementById(_FENETRES_MOBILES[id]);
+  if (b) b.textContent = '👁 Voir derrière';
+  const sl = document.getElementById('dj-opacite');
+  if (id === 'modal-day' && sl) sl.value = 100;
+}
+function resetDjPosition() { resetFenetrePosition('modal-day'); }
+// Passe la fenêtre en position fixe à son emplacement actuel (centré) pour pouvoir la déplacer/agrandir librement.
+function figerFenetre(id) {
+  const m = document.querySelector('#' + id + ' .modal');
+  if (!m || m.style.position === 'fixed') return;
+  const r = m.getBoundingClientRect();
+  m.style.position = 'fixed'; m.style.margin = '0'; m.style.transform = '';
+  m.style.left = r.left + 'px'; m.style.top = r.top + 'px';
+  m.style.width = r.width + 'px'; m.style.height = r.height + 'px';
+}
+function setOpaciteFenetre(id, pct) {
+  const m = document.querySelector('#' + id + ' .modal');
+  if (m) m.style.opacity = String(Math.max(0.3, Math.min(1, pct / 100)));
+}
+function toggleVoirDerriere(id, btnId) {
+  const on = document.getElementById(id).classList.toggle('dj-transparent');
+  document.getElementById(btnId).textContent = on ? '👁 Fenêtre normale' : '👁 Voir derrière';
+  // Fenêtre translucide (≈ 45 %) pour voir le planning À TRAVERS elle, fond cliquable ; retour à 100 % au second clic.
+  const pct = on ? 45 : 100;
+  setOpaciteFenetre(id, pct);
+  const sl = document.getElementById('dj-opacite');
+  if (id === 'modal-day' && sl) sl.value = pct;
+}
+document.addEventListener('pointerdown', ev => {
+  const head = ev.target.closest && ev.target.closest('#modal-day .dj-header, #modal-instance .mi-header');
+  if (!head || ev.target.closest('button, input, select, a, label')) return;
+  const ov = head.closest('.modal-overlay');
+  figerFenetre(ov.id);
+  const m = head.closest('.modal');
+  _djDrag = { m, x: ev.clientX, y: ev.clientY, l: parseFloat(m.style.left) || 0, t: parseFloat(m.style.top) || 0, w: m.offsetWidth };
+  ev.preventDefault();
+});
+document.addEventListener('pointermove', ev => {
+  if (!_djDrag) return;
+  const d = _djDrag, W = window.innerWidth, H = window.innerHeight;
+  // garde le bandeau accessible : au moins 80 px de large et le haut de la fenêtre restent dans l'écran
+  d.m.style.left = Math.max(-(d.w - 80), Math.min(W - 80, d.l + ev.clientX - d.x)) + 'px';
+  d.m.style.top = Math.max(0, Math.min(H - 40, d.t + ev.clientY - d.y)) + 'px';
+});
+['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, () => { _djDrag = null; }));
 
 // Compte combien de fois chaque tâche a été affectée à cet employé dans tout son historique de
 // planning — sert à trier ses compétences de la plus utilisée à la moins utilisée.
@@ -5381,7 +5476,9 @@ function editInstancePrecise(instId) {
   const positionDefaut = Math.floor((dureeTotale - (hasPause ? inst.pauseDuree : 30)) / 2);
   document.getElementById('mi-pause-heure').value = minToTime(inst.debut + (hasPause ? inst.pauseDebut : positionDefaut));
   onMiPauseChange();
+  resetFenetrePosition('modal-instance');
   openModal('modal-instance');
+  figerFenetre('modal-instance');
 }
 
 function saveInstancePrecise() {
@@ -5851,7 +5948,7 @@ function openEmployeModal() {
   document.getElementById('em-equipe').value = '';
   document.getElementById('em-email').value = '';
   document.getElementById('em-telephone').value = '';
-  document.getElementById('em-repos-hebdo').value = '0';
+  setReposJoursForm([0]);
   renderObjectifsJoursInputs([7,7,7,7,7,7,7]);
   renderPanierExceptionnelInputs(null, null);
   document.getElementById('em-panier-mensualise-jour').checked = false;
@@ -5962,7 +6059,7 @@ function editEmploye(id) {
   document.getElementById('em-equipe').value = e.equipeId || '';
   document.getElementById('em-email').value = e.email || '';
   document.getElementById('em-telephone').value = e.telephone || '';
-  document.getElementById('em-repos-hebdo').value = String(e.reposHebdo ?? 0);
+  setReposJoursForm(getReposJours(e.id));
   renderObjectifsJoursInputs(e.objectifsJours || [7,7,7,7,7,7,7]);
   renderPanierExceptionnelInputs(e.panierExceptionnelJours, e.panierExceptionnelNuits);
   document.getElementById('em-panier-mensualise-jour').checked = !!e.panierMensualiseJour;
@@ -6097,7 +6194,8 @@ function saveEmploye() {
     equipeId: document.getElementById('em-equipe').value || null,
     email: document.getElementById('em-email').value.trim(),
     telephone: document.getElementById('em-telephone').value.trim(),
-    reposHebdo: parseInt(document.getElementById('em-repos-hebdo').value) || 0,
+    reposJours: getReposJoursFromForm(),
+    reposHebdo: getReposJoursFromForm()[0] ?? 0, // compat anciennes versions (premier jour coché)
     objectifsJours: getObjectifsJoursFromForm(),
     panierExceptionnelJours: getPanierExceptionnelFromForm('jour'),
     panierExceptionnelNuits: getPanierExceptionnelFromForm('nuit'),
@@ -6876,9 +6974,21 @@ function methodeLabel(methode) {
 
 // Un jour est décompté du solde selon la méthode du type d'absence — jamais un dimanche,
 // jamais un jour férié chômé (sauf méthode calendaires), et le samedi seulement en jours ouvrables.
-function getReposHebdo(empId) {
+// Jours de repos habituels (0=dimanche..6=samedi, convention Date.getDay()). Plusieurs jours possibles ;
+// une fiche ancienne (champ unique reposHebdo) se lit comme [reposHebdo], dimanche par défaut.
+function getReposJours(empId) {
   const emp = getEmpById(empId);
-  return emp?.reposHebdo ?? 0; // 0=dimanche par défaut (convention Date.getDay())
+  if (!emp) return [0];
+  if (Array.isArray(emp.reposJours)) return emp.reposJours;
+  return [emp.reposHebdo ?? 0];
+}
+function estJourReposHabituel(empId, dow) { return getReposJours(empId).includes(dow); }
+function setReposJoursForm(arr) {
+  const set = new Set((arr || []).map(Number));
+  document.querySelectorAll('#em-repos-jours input').forEach(c => { c.checked = set.has(parseInt(c.value)); });
+}
+function getReposJoursFromForm() {
+  return [...document.querySelectorAll('#em-repos-jours input:checked')].map(c => parseInt(c.value)).sort((a, b) => a - b);
 }
 
 function estJourDecompte(date, methode, feriesMap, empId) {
@@ -6886,8 +6996,7 @@ function estJourDecompte(date, methode, feriesMap, empId) {
   if (methode !== 'calendaires' && feriesMap[dk]) return false;
   if (methode === 'calendaires') return true;
   const dow = date.getDay(); // 0=dimanche..6=samedi
-  const reposHebdo = getReposHebdo(empId);
-  if (dow === reposHebdo) return false;
+  if (estJourReposHabituel(empId, dow)) return false;
   // Méthode "ouvrés" : limitation connue, exclut samedi+dimanche au sens classique — les horaires
   // vraiment atypiques (semaine de 4 jours, etc.) ne sont pas couverts avec certitude, voir avec ta convention collective.
   if (methode === 'ouvres' && (dow === 0 || dow === 6)) return false;
@@ -6911,8 +7020,7 @@ function employeATacheTravail(empId, dk) {
 function estJourCreux(date, methode, feriesMap, empId) {
   const dk = dateKey(date);
   const dow = date.getDay();
-  const reposHebdo = getReposHebdo(empId);
-  if (dow === reposHebdo) return true; // le jour de repos habituel est toujours creux
+  if (estJourReposHabituel(empId, dow)) return true; // un jour de repos habituel est toujours creux
   // Seuls le samedi et le dimanche calendaires peuvent être "creux" sans avoir été posés
   // explicitement (le week-end civil) — jamais un jour de semaine classique (lundi à vendredi), qui
   // doit toujours être posé pour compter comme absence. C'est ce qui empêchait un congé isolé un
@@ -7150,7 +7258,7 @@ function renderCongesVueAnnuelle() {
   const vacSet = getVacScoSet(cgVueYear, cgVueZone);
   const todayKey = dateKey(new Date());
   const empPlanning = db.planning[cgVueEmp] || {};
-  const reposHebdo = getReposHebdo(cgVueEmp);
+  const reposJoursEmp = getReposJours(cgVueEmp);
   const JOURS_NOMS = ['Dimanche','Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'];
 
   const MOIS = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
@@ -7183,7 +7291,7 @@ function renderCongesVueAnnuelle() {
         <label>Repos hebdo</label>
         <div style="display:flex;align-items:center;gap:6px;height:38px;">
           <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgba(157,143,255,.35);border:1px solid rgba(157,143,255,.6);"></span>
-          <span style="font-size:13px;font-weight:700;">${JOURS_NOMS[reposHebdo]}</span>
+          <span style="font-size:13px;font-weight:700;">${reposJoursEmp.length ? [1,2,3,4,5,6,0].filter(j => reposJoursEmp.includes(j)).map(j => JOURS_NOMS[j]).join(', ') : 'Aucun'}</span>
         </div>
       </div>
     </div>
@@ -7216,7 +7324,7 @@ function renderCongesVueAnnuelle() {
 
       let cls = 'cal-day';
       if (isWE) cls += ' weekend';
-      if (dow === reposHebdo) cls += ' repos-hebdo';
+      if (reposJoursEmp.includes(dow)) cls += ' repos-hebdo';
       if (isFerie) cls += ' ferie';
       if (isToday) cls += ' today';
       if (isVac && !congeTask) cls += ' vac-sco';
