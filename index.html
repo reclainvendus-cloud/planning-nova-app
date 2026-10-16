@@ -2270,7 +2270,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.11.1';
+const APP_VERSION = '2.11.2';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2301,6 +2301,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.11.2', items: [
+    'Envoi du planning par mail : la liste des destinataires (individuel, équipe, complet) et le contenu des plannings d\'équipe/complet reprennent maintenant les employés actifs pendant la SEMAINE affichée, et non seulement ceux actifs aujourd\'hui — un employé qui vient d\'être ajouté avec une date de début dans la semaine apparaît désormais.',
+  ] },
   { v: '2.11.1', items: [
     'Couleur de la pointeuse : choisir une couleur coche maintenant automatiquement la case, l\'envoi est confirmé (ou une erreur explicite s\'affiche), le nom et la couleur partent aussi dans les paramètres déjà synchronisés avec la pointeuse, et la pointeuse affiche un liseret plus épais et un voile coloré sur tout l\'écran.',
   ] },
@@ -3780,6 +3783,9 @@ function buildChaineHierCross(empId, dkJour, splitSeuil) {
   return dernierGroupe[dernierGroupe.length - 1].crosseMinuit ? dernierGroupe : [];
 }
 function isoToDate(s) { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); }
+// Plage de dates (début, fin) d'une semaine affichée — pour filtrer les employés « actifs pendant la semaine »
+// et non « actifs aujourd'hui » (un employé qui démarre en cours de semaine doit apparaître).
+function plageSemaine(days) { return [dateKey(days[0]), dateKey(days[days.length - 1])]; }
 function getWeekDays(monday) { return Array.from({length:7}, (_,i) => addDays(monday, i)); }
 function formatWeekLabel(monday) { const sun = addDays(monday, 6); return `${monday.getDate()}/${monday.getMonth()+1} – ${sun.getDate()}/${sun.getMonth()+1}/${sun.getFullYear()}`; }
 
@@ -13859,7 +13865,7 @@ function genererPlanningGraphiqueHtml(days) {
   });
   cells += `<div class="grw-cell grw-head-cell" style="grid-row:1;grid-column:9;">Semaine</div>`;
 
-  const groupes = getEmployesGroupesParEquipe(true);
+  const groupes = getEmployesGroupesParEquipe(true, ...plageSemaine(days));
   let row = 2;
   groupes.forEach(groupe => {
     cells += `<div class="grw-row-group-title" style="grid-row:${row};grid-column:1 / -1;">
@@ -13961,7 +13967,7 @@ function emailPlanningCompletHtml(days) {
   const ACCENT    = '#5c6bc0';
   const GRP_BG    = '#161929';
 
-  const groupes = getEmployesGroupesParEquipe(true);
+  const groupes = getEmployesGroupesParEquipe(true, ...plageSemaine(days));
 
   // Construit la cellule d'un jour pour un employé
   function dayCell(empId, d) {
@@ -14100,9 +14106,10 @@ function renderEmailPlanningDestinataires() {
   document.getElementById('ep-equipe-section').style.display = showEquipe ? '' : 'none';
   document.getElementById('ep-complet-section').style.display = showComplet ? '' : 'none';
 
+  const [semDebut, semFin] = plageSemaine(getWeekDays(pgWeekMonday));
   if (showIndividuel) {
     const wrap = document.getElementById('ep-destinataires-list');
-    const groupes = getEmployesGroupesParEquipe();
+    const groupes = getEmployesGroupesParEquipe(false, semDebut, semFin);
     wrap.innerHTML = groupes.map(g => {
       const sansPointage = !!g.equipe?.sansPointage;
       return `<div style="margin-bottom:10px;">
@@ -14123,7 +14130,7 @@ function renderEmailPlanningDestinataires() {
 
   if (showComplet) {
     const wrap = document.getElementById('ep-complet-list');
-    const groupes = getEmployesGroupesParEquipe();
+    const groupes = getEmployesGroupesParEquipe(false, semDebut, semFin);
     wrap.innerHTML = groupes.map(g => g.employes.map(e => {
       const hasEmail = !!e.email;
       return `<label class="checkbox-row" style="${!hasEmail ? 'opacity:.4;cursor:not-allowed;' : ''}">
@@ -14136,7 +14143,8 @@ function renderEmailPlanningDestinataires() {
 
 function renderEmailEquipesList(days) {
   const wrap = document.getElementById('ep-equipes-list');
-  wrap.innerHTML = getEmployesGroupesParEquipe().map(g => `
+  const [semDebut, semFin] = plageSemaine(days);
+  wrap.innerHTML = getEmployesGroupesParEquipe(false, semDebut, semFin).map(g => `
     <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;">
       <label class="checkbox-row" style="margin:0;flex-shrink:0;">
         <input type="checkbox" class="ep-eq-cb" data-equipe="${g.equipe?.id||'__none__'}">
@@ -14174,7 +14182,7 @@ async function envoyerPlanning() {
       const emailInp = document.querySelector(`.ep-eq-email[data-equipe="${cb.dataset.equipe}"]`);
       const email = emailInp?.value?.trim();
       if (email) {
-        const groupe = getEmployesGroupesParEquipe().find(g => (g.equipe?.id||'__none__') === cb.dataset.equipe);
+        const groupe = getEmployesGroupesParEquipe(false, ...plageSemaine(days)).find(g => (g.equipe?.id||'__none__') === cb.dataset.equipe);
         if (groupe) envois.push({ type: 'equipe', groupe, email });
       }
     });
@@ -14182,7 +14190,8 @@ async function envoyerPlanning() {
 
   // Complet : planning de tous les employés envoyé à chaque destinataire coché
   if (document.getElementById('ep-type-complet')?.checked) {
-    const tousEmps = db.employes.filter(e => !db.equipes.find(eq => eq.id === e.equipeId)?.sansPointage);
+    const [semDebut, semFin] = plageSemaine(days);
+    const tousEmps = db.employes.filter(e => estActifPendant(e, semDebut, semFin) && !db.equipes.find(eq => eq.id === e.equipeId)?.sansPointage);
     document.querySelectorAll('.ep-complet-cb:checked').forEach(cb => {
       const emp = getEmpById(cb.dataset.emp);
       if (emp?.email) envois.push({ type: 'complet', emp, tousEmps });
