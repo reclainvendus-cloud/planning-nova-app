@@ -990,6 +990,17 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
         <div id="pa-general" class="task-card" style="cursor:default;max-width:560px;">
           <div class="section-label" style="margin-top:0;">Identité</div>
           <div class="form-group"><label>Nom de la société</label><input type="text" id="pa-societe" style="width:100%;"></div>
+          <div class="form-group">
+            <label>Identité sur la pointeuse <span style="font-weight:400;text-transform:none;">(pour distinguer les dépôts)</span></label>
+            <label class="checkbox-row" style="margin-bottom:6px;"><input type="checkbox" id="pa-societe-couleur-on"><span>Colorer l'écran de la pointeuse :</span>
+              <input type="color" id="pa-societe-couleur" value="#2f6df6" style="width:44px;height:28px;padding:0;border:none;background:none;cursor:pointer;"></label>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <img id="pa-logo-prev" alt="" style="display:none;max-height:44px;max-width:140px;border-radius:6px;background:#fff;padding:2px;">
+              <label class="btn btn-secondary btn-sm" style="margin:0;cursor:pointer;">🖼️ Choisir un logo<input type="file" id="pa-logo-file" accept="image/*" style="display:none;" onchange="choisirLogoSociete(this)"></label>
+              <button class="btn btn-secondary btn-sm" id="pa-logo-retirer" style="display:none;" onclick="retirerLogoSociete()">Retirer le logo</button>
+            </div>
+            <div class="hint">Le nom ci-dessus s'affiche en gros sur la pointeuse, avec la couleur et le logo si définis. Le logo est réduit automatiquement (quelques Ko) et enregistré tout de suite. Cliquer « Enregistrer » envoie le nom et la couleur.</div>
+          </div>
           <div class="form-group"><label>Texte de signature email <span style="font-weight:400;text-transform:none;">(pour plus tard)</span></label>
             <textarea id="pa-signature" rows="3" style="width:100%;font-family:inherit;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);padding:9px 12px;"></textarea>
           </div>
@@ -1053,7 +1064,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 
           <div style="background:var(--surface2);border-radius:var(--radius-sm);padding:14px;margin:14px 0;">
             <div class="section-label" style="margin-top:0;">🔒 Autorisation de la pointeuse</div>
-            <div class="hint" style="margin-bottom:10px;">Une seule machine peut pointer à la fois. Le token ci-dessous est celui de la machine actuellement autorisée. Pour changer de machine, colle son token (affiché dans sa config) et clique Autoriser.</div>
+            <div class="hint" style="margin-bottom:10px;"><b>Pointeuse principale</b> — le token ci-dessous est celui de la machine historique. Pour la changer, colle le token d'une autre machine (affiché dans sa config) et clique Autoriser. Pour en ajouter d'autres <b>sans remplacer celle-ci</b>, utilise « Pointeuses supplémentaires » plus bas.</div>
             <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
               <div class="form-group" style="margin:0;flex:1;min-width:200px;">
                 <label>Token de la machine autorisée</label>
@@ -1063,6 +1074,15 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
               <button class="btn btn-danger btn-sm" onclick="revoquerPointeuse()" style="margin-bottom:14px;">🚫 Révoquer</button>
             </div>
             <div id="pa-pointeuse-status" style="font-size:12px;color:var(--text-dim);margin-top:4px;"></div>
+
+            <div class="section-label" style="margin-top:16px;">➕ Pointeuses supplémentaires</div>
+            <div class="hint" style="margin-bottom:10px;">Autorise d'autres machines en plus de la principale (ex : une pointeuse installée sur un autre site, reliée à cette base). Chaque machine a son propre token, affiché dans sa configuration. On peut en révoquer une sans toucher aux autres.</div>
+            <div id="pa-machines-liste" style="margin-bottom:10px;"></div>
+            <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+              <div class="form-group" style="margin:0;min-width:160px;flex:1;"><label>Nom de la machine</label><input type="text" id="pa-machine-nom" placeholder="ex : Pointeuse Limoges" maxlength="40"></div>
+              <div class="form-group" style="margin:0;min-width:200px;flex:2;"><label>Token</label><input type="text" id="pa-machine-token" placeholder="pt_xxxxxxxxxxxx" style="font-family:var(--mono);font-size:12px;"></div>
+              <button class="btn btn-primary btn-sm" onclick="ajouterMachinePointeuse()" style="margin-bottom:2px;">➕ Autoriser</button>
+            </div>
           </div>
 
           <div style="background:var(--surface2);border-radius:var(--radius-sm);padding:14px;margin:14px 0;">
@@ -2250,7 +2270,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.9.3';
+const APP_VERSION = '2.11.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2281,6 +2301,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.11.0', items: [
+    'Pointeuses multiples : en plus de la pointeuse principale (inchangée), Paramètres > Connexions > « Pointeuses supplémentaires » permet d\'autoriser plusieurs autres machines (nom + token), de les révoquer une à une, sans toucher aux autres. Nécessite le nouveau Pointeuse.html. Les pointages gardent le nom de la machine d\'origine.',
+  ] },
+  { v: '2.10.0', items: [
+    'Paramètres > Général > Identité : le nom de la société, une couleur et un logo (optionnel) sont envoyés à la pointeuse, qui les affiche en gros sur l\'écran de sélection du nom (+ liseret coloré en haut de tous les écrans). Sert à distinguer les pointeuses de plusieurs dépôts. Purement visuel : aucun pointage, planning ni calcul n\'est touché ; sans réglage, la pointeuse reste identique à avant.',
+  ] },
   { v: '2.9.3', items: [
     'Bouton « 👁 Voir derrière » : il rend désormais aussi la fenêtre elle-même translucide (≈ 45 %) pour voir le planning à travers elle, en plus du fond cliquable. Second clic : retour à la normale.',
   ] },
@@ -3069,6 +3095,7 @@ function syncToFirebase() {
       fbDb.ref('sync/tasks').set(db.tasks || []).catch(e => console.error('Sync tasks:', e));
       fbDb.ref('sync/equipes').set(db.equipes || []).catch(e => console.error('Sync equipes:', e));
       fbDb.ref('sync/params').set({ tolerance: db.params.tolerance ?? 10, pointagePauseSeuilMin: db.params.pointagePauseSeuilMin ?? 40 }).catch(e => console.error('Sync params:', e));
+      syncIdentitePointeuse();
       const planningLeger = {};
       const today = new Date();
       for (let i = -1; i <= 14; i++) {
@@ -12078,6 +12105,9 @@ function initParametres() {
   document.getElementById('pa-opt-cote').checked = getOpt('cote');
   document.getElementById('pa-opt-repos-auto').checked = getOpt('reposAuto');
   document.getElementById('pa-societe').value = db.params.societeNom || '';
+  document.getElementById('pa-societe-couleur-on').checked = !!db.params.societeCouleur;
+  document.getElementById('pa-societe-couleur').value = db.params.societeCouleur || '#2f6df6';
+  chargerLogoSocieteApercu();
   document.getElementById('pa-signature').value = db.params.emailSignature || '';
   document.getElementById('pa-note-info').value = db.params.appNoteText || '';
   document.getElementById('pa-planning-semaine-fixe').checked = !!db.params.planningSemaineFixe;
@@ -12135,8 +12165,9 @@ function initParametres() {
       const el = document.getElementById('pa-pointeuse-token');
       const st = document.getElementById('pa-pointeuse-status');
       if (el) el.value = snap.val() || '';
-      if (st) st.textContent = snap.val() ? '✅ Une pointeuse est actuellement autorisée.' : 'Aucune pointeuse autorisée pour le moment.';
+      if (st) st.textContent = snap.val() ? '✅ La pointeuse principale est autorisée.' : 'Aucune pointeuse principale définie.';
     }).catch(() => {});
+    chargerMachinesPointeuse();
   }
 }
 
@@ -12147,6 +12178,59 @@ function autoriserPointeuse() {
   fbDb.ref('pointeuse/tokenAutorise').set(token).then(() => {
     document.getElementById('pa-pointeuse-status').textContent = '✅ Pointeuse autorisée.';
     notify('Pointeuse autorisée — seul ce poste pourra pointer');
+  }).catch(e => notify('Erreur : ' + e.message, 'danger'));
+}
+
+// ----- Pointeuses supplémentaires (pointeuse/machines/{clé} = {token, nom, date}) -----
+function chargerMachinesPointeuse() {
+  const box = document.getElementById('pa-machines-liste');
+  if (!box || !fbDb) return Promise.resolve();
+  return fbDb.ref('pointeuse/machines').once('value').then(snap => {
+    const v = snap.val() || {};
+    const cles = Object.keys(v).sort((a, b) => (v[a].date || 0) - (v[b].date || 0));
+    box.textContent = '';
+    if (!cles.length) {
+      const d = document.createElement('div'); d.className = 'hint'; d.textContent = 'Aucune pointeuse supplémentaire.'; box.appendChild(d); return;
+    }
+    cles.forEach(k => {
+      const m = v[k] || {};
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;';
+      const nom = document.createElement('b'); nom.textContent = m.nom || 'Pointeuse';
+      const tok = document.createElement('span'); tok.style.cssText = 'font-family:var(--mono);font-size:11px;color:var(--text-muted);flex:1;word-break:break-all;'; tok.textContent = m.token || '';
+      const del = document.createElement('button'); del.className = 'btn btn-danger btn-sm'; del.textContent = '🚫 Révoquer'; del.onclick = () => revoquerMachinePointeuse(k, m.nom || 'Pointeuse');
+      row.append(nom, tok, del); box.appendChild(row);
+    });
+  }).catch(() => {});
+}
+function ajouterMachinePointeuse() {
+  if (!fbDb) { notify('Firebase non connecté', 'warning'); return; }
+  const nom = document.getElementById('pa-machine-nom').value.trim() || 'Pointeuse';
+  const token = document.getElementById('pa-machine-token').value.trim();
+  if (!token) { notify('Colle d\'abord le token affiché dans la config de la pointeuse', 'warning'); return; }
+  if (!/^pt_[A-Za-z0-9_]+$/.test(token)) { notify('Token invalide : il doit ressembler à pt_1234567890_abcdefgh', 'warning'); return; }
+  Promise.all([fbDb.ref('pointeuse/tokenAutorise').once('value'), fbDb.ref('pointeuse/machines').once('value')]).then(([sp, sm]) => {
+    const principal = sp.val() || '';
+    const liste = sm.val() || {};
+    if (token === principal || Object.values(liste).some(m => m && m.token === token)) { notify('Cette machine est déjà autorisée', 'warning'); return; }
+    if (!principal && !Object.keys(liste).length) {
+      if (!confirm('Aucune restriction n\'est active pour le moment : toutes les machines peuvent pointer.\n\nEn autorisant celle-ci, SEULES les machines autorisées pourront pointer — la pointeuse actuelle sera bloquée si tu ne l\'autorises pas aussi (principale ou supplémentaire).\n\nContinuer ?')) return;
+    }
+    return fbDb.ref('pointeuse/machines').push({ token, nom, date: Date.now() }).then(() => {
+      document.getElementById('pa-machine-nom').value = ''; document.getElementById('pa-machine-token').value = '';
+      logAudit('Pointeuse autorisée', nom);
+      notify('Pointeuse « ' + nom + ' » autorisée');
+      return chargerMachinesPointeuse();
+    });
+  }).catch(e => notify('Erreur : ' + e.message, 'danger'));
+}
+function revoquerMachinePointeuse(cle, nom) {
+  if (!fbDb) return;
+  if (!confirm('Révoquer « ' + nom + ' » ? Cette machine sera bloquée immédiatement (les autres ne sont pas touchées).')) return;
+  fbDb.ref('pointeuse/machines/' + cle).remove().then(() => {
+    logAudit('Pointeuse révoquée', nom);
+    notify('Pointeuse « ' + nom + ' » révoquée');
+    return chargerMachinesPointeuse();
   }).catch(e => notify('Erreur : ' + e.message, 'danger'));
 }
 
@@ -12286,9 +12370,65 @@ function majNomSociete() {
 setInterval(majNomSociete, 2000);
 setTimeout(majNomSociete, 300);
 
+// ----- Identité affichée sur la pointeuse (nœud sync/identite : nom, couleur, logo) — purement visuel -----
+function syncIdentitePointeuse() {
+  try {
+    if (typeof fbDb === 'undefined' || !fbDb) return;
+    fbDb.ref('sync/identite').update({
+      nom: (db.params.societeNom || '').trim().slice(0, 60),
+      couleur: /^#[0-9a-fA-F]{6}$/.test(db.params.societeCouleur || '') ? db.params.societeCouleur : '',
+    }).catch(e => console.error('Sync identité:', e));
+  } catch (e) { console.error('Sync identité:', e); }
+}
+function majApercuLogoSociete(dataUrl) {
+  const img = document.getElementById('pa-logo-prev'), btn = document.getElementById('pa-logo-retirer');
+  if (!img || !btn) return;
+  if (dataUrl) { img.src = dataUrl; img.style.display = ''; btn.style.display = ''; }
+  else { img.removeAttribute('src'); img.style.display = 'none'; btn.style.display = 'none'; }
+}
+function chargerLogoSocieteApercu() {
+  majApercuLogoSociete('');
+  try {
+    if (typeof fbDb === 'undefined' || !fbDb) return;
+    fbDb.ref('sync/identite/logo').once('value').then(snap => majApercuLogoSociete(snap.val() || '')).catch(() => {});
+  } catch (e) {}
+}
+function choisirLogoSociete(input) {
+  const f = input.files && input.files[0];
+  input.value = '';
+  if (!f) return;
+  if (typeof fbDb === 'undefined' || !fbDb) { notify('Connecte d\'abord Firebase (Paramètres > Connexions)', 'danger'); return; }
+  const rd = new FileReader();
+  rd.onerror = () => notify('Lecture du fichier impossible', 'danger');
+  rd.onload = () => {
+    const img = new Image();
+    img.onerror = () => notify('Image illisible', 'danger');
+    img.onload = () => {
+      const k = Math.min(1, 320 / img.width, 120 / img.height);
+      const w = Math.max(1, Math.round(img.width * k)), h = Math.max(1, Math.round(img.height * k));
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      let data = c.toDataURL('image/png');
+      if (data.length > 90000) data = c.toDataURL('image/jpeg', 0.85); // photo : JPEG plus léger
+      if (data.length > 150000) { notify('Logo trop lourd même réduit — choisis une image plus simple', 'danger'); return; }
+      fbDb.ref('sync/identite/logo').set(data)
+        .then(() => { majApercuLogoSociete(data); notify('Logo enregistré (' + Math.round(data.length / 1024) + ' Ko)'); })
+        .catch(e => notify('Erreur d\'enregistrement du logo : ' + (e.message || e), 'danger'));
+    };
+    img.src = rd.result;
+  };
+  rd.readAsDataURL(f);
+}
+function retirerLogoSociete() {
+  if (typeof fbDb === 'undefined' || !fbDb) return;
+  fbDb.ref('sync/identite/logo').remove().then(() => { majApercuLogoSociete(''); notify('Logo retiré'); }).catch(() => {});
+}
+
 function saveParamGeneral() {
   db.params.societeNom = document.getElementById('pa-societe').value.trim();
+  db.params.societeCouleur = document.getElementById('pa-societe-couleur-on').checked ? document.getElementById('pa-societe-couleur').value : '';
   majNomSociete();
+  syncIdentitePointeuse();
   db.params.emailSignature = document.getElementById('pa-signature').value;
   db.params.planningSemaineFixe = document.getElementById('pa-planning-semaine-fixe').checked;
   saveDB();
