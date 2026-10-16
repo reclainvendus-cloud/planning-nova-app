@@ -40,7 +40,8 @@ body::before {
 
 /* ---------- Écran sélection employé ---------- */
 /* ---------- Identité du dépôt (nom, logo, couleur) — purement visuel ---------- */
-#identite-liseret { position: fixed; top: 0; left: 0; right: 0; height: 8px; z-index: 6; display: none; }
+#identite-liseret { position: fixed; top: 0; left: 0; right: 0; height: 16px; z-index: 6; display: none; }
+#identite-voile { position: fixed; inset: 0; z-index: 0; pointer-events: none; display: none; opacity: .22; }
 #identite-bandeau { display: none; align-items: center; justify-content: center; gap: 14px; margin: -8px 0 14px; padding: 12px 18px;
   border-radius: 14px; background: var(--surface); border: 1px solid var(--border); text-align: center; }
 #identite-logo { display: none; max-height: 56px; max-width: 160px; object-fit: contain; border-radius: 6px; }
@@ -167,6 +168,7 @@ body::before {
 </head>
 <body>
 
+<div id="identite-voile"></div>
 <div id="identite-liseret"></div>
 <div class="offline-badge" id="offline-badge">📡 Hors ligne — en attente</div>
 <div class="gear-btn" id="gear-btn" onclick="openConfigGate()">⚙️</div>
@@ -331,13 +333,22 @@ function initFirebase() {
 // donnée absente ou invalide = écran identique à avant.
 // ===================================================
 const IDENTITE_CACHE_KEY = 'pointeusenova_identite';
+// Deux sources : sync/params (nom + couleur, envoyés à chaque synchro de l'admin) et sync/identite
+// (nom + couleur + logo). On les fusionne : sync/params d'abord, sync/identite en complément.
+let _idParams = null, _idNode = null;
+function fusionnerIdentite() {
+  const a = _idParams || {}, b = _idNode || {};
+  const pick = k => (typeof a[k] === 'string' && a[k] !== '') ? a[k] : (typeof b[k] === 'string' ? b[k] : '');
+  appliquerIdentite({ nom: pick('nom'), couleur: pick('couleur'), logo: typeof b.logo === 'string' ? b.logo : '' });
+}
 function appliquerIdentite(id) {
   try {
     const bandeau = document.getElementById('identite-bandeau');
     const liseret = document.getElementById('identite-liseret');
+    const voile = document.getElementById('identite-voile');
     const nomEl = document.getElementById('identite-nom');
     const logoEl = document.getElementById('identite-logo');
-    if (!bandeau || !liseret || !nomEl || !logoEl) return;
+    if (!bandeau || !liseret || !voile || !nomEl || !logoEl) return;
     const nom = (id && typeof id.nom === 'string') ? id.nom.trim().slice(0, 60) : '';
     const couleur = (id && typeof id.couleur === 'string' && /^#[0-9a-fA-F]{6}$/.test(id.couleur)) ? id.couleur : '';
     const logo = (id && typeof id.logo === 'string' && /^data:image\/(png|jpeg|jpg|webp|gif|svg\+xml);base64,/.test(id.logo) && id.logo.length < 200000) ? id.logo : '';
@@ -348,9 +359,10 @@ function appliquerIdentite(id) {
       const clair = (0.299 * r + 0.587 * g + 0.114 * b) > 160;
       bandeau.style.background = couleur; bandeau.style.borderColor = couleur; bandeau.style.color = clair ? '#111' : '#fff';
       liseret.style.background = couleur; liseret.style.display = 'block';
+      voile.style.background = couleur; voile.style.display = 'block';
     } else {
       bandeau.style.background = ''; bandeau.style.borderColor = ''; bandeau.style.color = '';
-      liseret.style.display = 'none';
+      liseret.style.display = 'none'; voile.style.display = 'none';
     }
     bandeau.style.display = (nom || logo) ? 'flex' : 'none';
     document.title = nom ? ('Pointeuse Nova — ' + nom) : 'Pointeuse Nova';
@@ -361,7 +373,7 @@ function appliquerIdentite(id) {
 try { const c = JSON.parse(localStorage.getItem(IDENTITE_CACHE_KEY) || 'null'); if (c) appliquerIdentite(c); } catch (e) {}
 
 function listenSyncData() {
-  try { fbDb.ref('sync/identite').on('value', snap => appliquerIdentite(snap.val())); } catch (e) { console.error('Identité listener:', e); }
+  try { fbDb.ref('sync/identite').on('value', snap => { _idNode = snap.val(); fusionnerIdentite(); }); } catch (e) { console.error('Identité listener:', e); }
   fbDb.ref('sync/employes').on('value', snap => { employes = snap.val() || []; if (document.getElementById('screen-select').classList.contains('active')) renderEmpGrid(); });
   fbDb.ref('sync/tasks').on('value', snap => { tasks = snap.val() || []; });
   // Une fois le planning reçu, rafraîchit l'écran d'action si un employé est déjà affiché
@@ -375,6 +387,7 @@ function listenSyncData() {
   fbDb.ref('sync/params').on('value', snap => {
     toleranceMin = snap.val()?.tolerance ?? 10;
     pointagePauseSeuilMin = snap.val()?.pointagePauseSeuilMin ?? 40;
+    try { const v = snap.val() || {}; _idParams = { nom: v.societeNom, couleur: v.societeCouleur }; fusionnerIdentite(); } catch (e) {}
   });
   fbDb.ref('pointeuse/tokenAutorise').on('value', snap => { verifierTokenMachine(snap.val()); });
   // Pointeuses supplémentaires autorisées (liste). Si la lecture échoue, on retombe sur le comportement

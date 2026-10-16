@@ -993,7 +993,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <div class="form-group">
             <label>Identité sur la pointeuse <span style="font-weight:400;text-transform:none;">(pour distinguer les dépôts)</span></label>
             <label class="checkbox-row" style="margin-bottom:6px;"><input type="checkbox" id="pa-societe-couleur-on"><span>Colorer l'écran de la pointeuse :</span>
-              <input type="color" id="pa-societe-couleur" value="#2f6df6" style="width:44px;height:28px;padding:0;border:none;background:none;cursor:pointer;"></label>
+              <input type="color" id="pa-societe-couleur" value="#2f6df6" oninput="document.getElementById('pa-societe-couleur-on').checked = true" style="width:44px;height:28px;padding:0;border:none;background:none;cursor:pointer;"></label>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
               <img id="pa-logo-prev" alt="" style="display:none;max-height:44px;max-width:140px;border-radius:6px;background:#fff;padding:2px;">
               <label class="btn btn-secondary btn-sm" style="margin:0;cursor:pointer;">🖼️ Choisir un logo<input type="file" id="pa-logo-file" accept="image/*" style="display:none;" onchange="choisirLogoSociete(this)"></label>
@@ -2270,7 +2270,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.11.0';
+const APP_VERSION = '2.11.1';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2301,6 +2301,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.11.1', items: [
+    'Couleur de la pointeuse : choisir une couleur coche maintenant automatiquement la case, l\'envoi est confirmé (ou une erreur explicite s\'affiche), le nom et la couleur partent aussi dans les paramètres déjà synchronisés avec la pointeuse, et la pointeuse affiche un liseret plus épais et un voile coloré sur tout l\'écran.',
+  ] },
   { v: '2.11.0', items: [
     'Pointeuses multiples : en plus de la pointeuse principale (inchangée), Paramètres > Connexions > « Pointeuses supplémentaires » permet d\'autoriser plusieurs autres machines (nom + token), de les révoquer une à une, sans toucher aux autres. Nécessite le nouveau Pointeuse.html. Les pointages gardent le nom de la machine d\'origine.',
   ] },
@@ -3094,7 +3097,7 @@ function syncToFirebase() {
       fbDb.ref('sync/employes').set(db.employes || []).catch(e => console.error('Sync employes:', e));
       fbDb.ref('sync/tasks').set(db.tasks || []).catch(e => console.error('Sync tasks:', e));
       fbDb.ref('sync/equipes').set(db.equipes || []).catch(e => console.error('Sync equipes:', e));
-      fbDb.ref('sync/params').set({ tolerance: db.params.tolerance ?? 10, pointagePauseSeuilMin: db.params.pointagePauseSeuilMin ?? 40 }).catch(e => console.error('Sync params:', e));
+      fbDb.ref('sync/params').set({ tolerance: db.params.tolerance ?? 10, pointagePauseSeuilMin: db.params.pointagePauseSeuilMin ?? 40, societeNom: (db.params.societeNom || '').trim().slice(0, 60), societeCouleur: /^#[0-9a-fA-F]{6}$/.test(db.params.societeCouleur || '') ? db.params.societeCouleur : '' }).catch(e => console.error('Sync params:', e));
       syncIdentitePointeuse();
       const planningLeger = {};
       const today = new Date();
@@ -12371,13 +12374,14 @@ setInterval(majNomSociete, 2000);
 setTimeout(majNomSociete, 300);
 
 // ----- Identité affichée sur la pointeuse (nœud sync/identite : nom, couleur, logo) — purement visuel -----
-function syncIdentitePointeuse() {
+function syncIdentitePointeuse(avecRetour) {
   try {
-    if (typeof fbDb === 'undefined' || !fbDb) return;
+    if (typeof fbDb === 'undefined' || !fbDb) { if (avecRetour) notify('Firebase non connecté : l\'identité n\'a pas été envoyée à la pointeuse', 'warning'); return; }
     fbDb.ref('sync/identite').update({
       nom: (db.params.societeNom || '').trim().slice(0, 60),
       couleur: /^#[0-9a-fA-F]{6}$/.test(db.params.societeCouleur || '') ? db.params.societeCouleur : '',
-    }).catch(e => console.error('Sync identité:', e));
+    }).then(() => { if (avecRetour) notify('Identité envoyée à la pointeuse'); })
+      .catch(e => { console.error('Sync identité:', e); if (avecRetour) notify('Identité non envoyée à la pointeuse : ' + (e.message || e), 'danger'); });
   } catch (e) { console.error('Sync identité:', e); }
 }
 function majApercuLogoSociete(dataUrl) {
@@ -12428,7 +12432,7 @@ function saveParamGeneral() {
   db.params.societeNom = document.getElementById('pa-societe').value.trim();
   db.params.societeCouleur = document.getElementById('pa-societe-couleur-on').checked ? document.getElementById('pa-societe-couleur').value : '';
   majNomSociete();
-  syncIdentitePointeuse();
+  syncIdentitePointeuse(true);
   db.params.emailSignature = document.getElementById('pa-signature').value;
   db.params.planningSemaineFixe = document.getElementById('pa-planning-semaine-fixe').checked;
   saveDB();
