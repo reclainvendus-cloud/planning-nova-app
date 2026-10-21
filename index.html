@@ -2270,7 +2270,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.11.2';
+const APP_VERSION = '2.11.3';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2301,6 +2301,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.11.3', items: [
+    'Planning : après un glisser-déposer (ou toute modification) dans la fenêtre de planification horaire, la vue Planning derrière ne remonte plus en haut sur le premier employé — la position de défilement est conservée (page et tableau). Changer de semaine ou de mode garde le comportement habituel.',
+  ] },
   { v: '2.11.2', items: [
     'Envoi du planning par mail : la liste des destinataires (individuel, équipe, complet) et le contenu des plannings d\'équipe/complet reprennent maintenant les employés actifs pendant la SEMAINE affichée, et non seulement ceux actifs aujourd\'hui — un employé qui vient d\'être ajouté avec une date de début dans la semaine apparaît désormais.',
   ] },
@@ -4117,7 +4120,35 @@ function applyPlanningWeekBarFixe() {
   wrap.classList.toggle('week-nav-fixe', !!db.params.planningSemaineFixe);
 }
 
+// Conserve la position de défilement du Planning à chaque redessin (ex : après un glisser-déposer dans la
+// fenêtre « jour » le planning derrière ne remonte plus tout en haut). Le redessin remplace le contenu, ce qui
+// remettait le défilement à zéro. Pas de restauration quand la semaine ou le mode change : comportement d'origine.
+let _planningScrollKey = null;
+function capturerScrollPlanning() {
+  const content = document.getElementById('content');
+  return {
+    key: pgMode + '|' + dateKey(pgWeekMonday),
+    contentTop: content ? content.scrollTop : 0, contentLeft: content ? content.scrollLeft : 0,
+    winX: window.scrollX, winY: window.scrollY,
+    wraps: [...document.querySelectorAll('#view-planning .grw-wrap')].map(w => [w.scrollTop, w.scrollLeft]),
+  };
+}
+function restaurerScrollPlanning(sv) {
+  const content = document.getElementById('content');
+  if (content) { content.scrollTop = sv.contentTop; content.scrollLeft = sv.contentLeft; }
+  if (window.scrollX !== sv.winX || window.scrollY !== sv.winY) window.scrollTo(sv.winX, sv.winY);
+  document.querySelectorAll('#view-planning .grw-wrap').forEach((w, i) => { if (sv.wraps[i]) { w.scrollTop = sv.wraps[i][0]; w.scrollLeft = sv.wraps[i][1]; } });
+}
 function renderPlanning() {
+  const sv = capturerScrollPlanning();
+  const memeVue = _planningScrollKey === sv.key;
+  _planningScrollKey = sv.key;
+  try { renderPlanningInterne(); }
+  finally {
+    if (memeVue) { restaurerScrollPlanning(sv); requestAnimationFrame(() => restaurerScrollPlanning(sv)); }
+  }
+}
+function renderPlanningInterne() {
   applyPlanningWeekBarFixe();
   chargerCompteurPourPlanning();
   renderPlanningQualiteAlertWidget('planning-qualite-alert-banner', pgWeekMonday);
