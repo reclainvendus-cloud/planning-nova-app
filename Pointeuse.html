@@ -226,10 +226,10 @@ body::before {
     <div style="font-size:40px;margin-bottom:10px;">⚠️</div>
     <div style="font-size:18px;font-weight:800;margin-bottom:4px;" id="motif-titre"></div>
     <div style="font-size:13px;color:var(--text-muted);margin-bottom:22px;" id="motif-sous-titre"></div>
-    <textarea id="motif-input" maxlength="30" placeholder="Motif obligatoire..." rows="2"
+    <textarea id="motif-input" maxlength="100" placeholder="Motif obligatoire..." rows="3"
       style="width:100%;max-width:320px;padding:14px 16px;border-radius:16px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--sans);font-size:14px;resize:none;backdrop-filter:blur(10px);"
       oninput="updateMotifCounter()"></textarea>
-    <div style="font-size:11px;color:var(--text-dim);margin-top:6px;" id="motif-counter">0 / 30</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-top:6px;" id="motif-counter">0 / 100</div>
     <button class="big-btn btn-arrivee" style="margin-top:22px;max-width:320px;width:100%;" onclick="confirmerMotif()">✅ Valider le pointage</button>
     <button class="big-btn btn-retour" onclick="goToSelect()">Annuler</button>
   </div>
@@ -306,7 +306,7 @@ function isConfigured() { return !!(cfg.firebase && cfg.firebase.apiKey && cfg.f
 // ===================================================
 // DONNÉES SYNCHRONISÉES (lecture seule, alimentées par l'appli admin)
 // ===================================================
-let employes = [], tasks = [], planningSync = {}, toleranceMin = 10, pointagePauseSeuilMin = 40;
+let employes = [], tasks = [], planningSync = {}, toleranceMin = 10, pointagePauseSeuilMin = 40, motifMaxCar = 100;
 let currentEmp = null, pinBuffer = '';
 
 function initFirebase() {
@@ -387,6 +387,7 @@ function listenSyncData() {
   fbDb.ref('sync/params').on('value', snap => {
     toleranceMin = snap.val()?.tolerance ?? 10;
     pointagePauseSeuilMin = snap.val()?.pointagePauseSeuilMin ?? 40;
+    try { appliquerMotifMax((snap.val() || {}).motifMaxCar); } catch (e) {}
     try { const v = snap.val() || {}; _idParams = { nom: v.societeNom, couleur: v.societeCouleur }; fusionnerIdentite(); } catch (e) {}
   });
   fbDb.ref('pointeuse/tokenAutorise').on('value', snap => { verifierTokenMachine(snap.val()); });
@@ -1136,11 +1137,21 @@ function pointerSegment(idx) {
 }
 
 function updateMotifCounter() {
-  document.getElementById('motif-counter').textContent = `${document.getElementById('motif-input').value.length} / 30`;
+  document.getElementById('motif-counter').textContent = `${document.getElementById('motif-input').value.length} / ${motifMaxCar}`;
+}
+// Longueur maximale du motif : paramétrable depuis l'admin (Paramètres > Règles horaires), bornée 10–300.
+function appliquerMotifMax(v) {
+  try {
+    const n = parseInt(v);
+    motifMaxCar = (Number.isFinite(n) && n >= 10 && n <= 300) ? n : 100;
+    const ta = document.getElementById('motif-input');
+    if (ta) { ta.maxLength = motifMaxCar; ta.rows = motifMaxCar > 60 ? 4 : 2; }
+    updateMotifCounter();
+  } catch (e) {}
 }
 
 function confirmerMotif() {
-  const motif = document.getElementById('motif-input').value.trim();
+  const motif = document.getElementById('motif-input').value.trim().slice(0, motifMaxCar);
   if (!motif) { document.getElementById('motif-input').focus(); return; }
   finaliserPointageService(pendingPointage.b, pendingPointage.ecart, true, motif);
   pendingPointage = null;

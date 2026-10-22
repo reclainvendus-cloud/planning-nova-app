@@ -1171,6 +1171,15 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
             </div>
           </div>
 
+          <div style="background:var(--surface2);border-radius:var(--radius-sm);padding:14px;margin:14px 0;">
+            <div class="section-label" style="margin-top:0;">Pointage — motif hors tolérance</div>
+            <div class="hint" style="margin-bottom:10px;">Quand un employé pointe en dehors de la tolérance, la pointeuse lui demande un motif. Nombre maximum de caractères autorisés pour ce motif (entre 10 et 300).</div>
+            <div class="form-group" style="max-width:220px;margin:0;">
+              <label>Longueur maximale du motif (caractères)</label>
+              <input type="number" id="pa-motif-max" min="10" max="300" step="10" value="100">
+            </div>
+          </div>
+
           <button class="btn btn-primary btn-sm" onclick="saveParamHoraires()">💾 Enregistrer</button>
         </div>
 
@@ -2270,7 +2279,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.11.3';
+const APP_VERSION = '2.12.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2301,6 +2310,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.12.0', items: [
+    'Pointage hors tolérance : la longueur maximale du motif passe de 30 à 100 caractères par défaut et devient paramétrable (Paramètres > Règles horaires > « Longueur maximale du motif », 10 à 300). La pointeuse applique la valeur reçue de l\'admin (nouveau Pointeuse.html requis ; sans lui, elle reste à 30).',
+  ] },
   { v: '2.11.3', items: [
     'Planning : après un glisser-déposer (ou toute modification) dans la fenêtre de planification horaire, la vue Planning derrière ne remonte plus en haut sur le premier employé — la position de défilement est conservée (page et tableau). Changer de semaine ou de mode garde le comportement habituel.',
   ] },
@@ -3103,7 +3115,7 @@ function syncToFirebase() {
       fbDb.ref('sync/employes').set(db.employes || []).catch(e => console.error('Sync employes:', e));
       fbDb.ref('sync/tasks').set(db.tasks || []).catch(e => console.error('Sync tasks:', e));
       fbDb.ref('sync/equipes').set(db.equipes || []).catch(e => console.error('Sync equipes:', e));
-      fbDb.ref('sync/params').set({ tolerance: db.params.tolerance ?? 10, pointagePauseSeuilMin: db.params.pointagePauseSeuilMin ?? 40, societeNom: (db.params.societeNom || '').trim().slice(0, 60), societeCouleur: /^#[0-9a-fA-F]{6}$/.test(db.params.societeCouleur || '') ? db.params.societeCouleur : '' }).catch(e => console.error('Sync params:', e));
+      fbDb.ref('sync/params').set({ tolerance: db.params.tolerance ?? 10, pointagePauseSeuilMin: db.params.pointagePauseSeuilMin ?? 40, motifMaxCar: db.params.motifMaxCar ?? 100, societeNom: (db.params.societeNom || '').trim().slice(0, 60), societeCouleur: /^#[0-9a-fA-F]{6}$/.test(db.params.societeCouleur || '') ? db.params.societeCouleur : '' }).catch(e => console.error('Sync params:', e));
       syncIdentitePointeuse();
       const planningLeger = {};
       const today = new Date();
@@ -12196,6 +12208,7 @@ function initParametres() {
   document.getElementById('pa-pause-mask').checked = db.params.pauseMaskLongues !== false;
   document.getElementById('pa-pause-mask-seuil').value = db.params.pauseMaskSeuilH;
   document.getElementById('pa-pointage-seuil').value = db.params.pointagePauseSeuilMin ?? 40;
+  document.getElementById('pa-motif-max').value = db.params.motifMaxCar ?? 100;
 
   if (paSub === 'conges') renderParamConges();
 
@@ -12529,6 +12542,8 @@ function saveParamHoraires() {
   db.params.pauseMaskLongues = document.getElementById('pa-pause-mask').checked;
   db.params.pauseMaskSeuilH = parseFloat(document.getElementById('pa-pause-mask-seuil').value) || 6;
   db.params.pointagePauseSeuilMin = parseInt(document.getElementById('pa-pointage-seuil').value) || 40;
+  db.params.motifMaxCar = Math.min(300, Math.max(10, parseInt(document.getElementById('pa-motif-max').value) || 100));
+  document.getElementById('pa-motif-max').value = db.params.motifMaxCar;
   saveDB();
   notify('Règles horaires enregistrées');
 }
