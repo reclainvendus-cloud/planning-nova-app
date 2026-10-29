@@ -124,6 +124,14 @@ label { display: block; font-size: 11px; font-weight: 700; text-transform: upper
 .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 100;
   align-items: center; justify-content: center; }
 .modal-overlay.open { display: flex; }
+.pt-motif-ligne { font-size: 12px; line-height: 1.35; margin-bottom: 4px; word-break: break-word; }
+.pt-motif-ligne b { display: inline-block; min-width: 14px; font-family: var(--mono); color: var(--text-muted); }
+.pt-motif-emp { color: var(--text); }
+.pt-motif-admin { color: #9d8fff; font-style: italic; }
+/* Écran Validation : motif de l'employé bien lisible */
+.val-motif { margin-top: 8px; padding: 9px 12px; border-radius: 8px; background: rgba(245,166,35,.10); border-left: 4px solid var(--warning);
+  font-size: 14px; line-height: 1.45; color: var(--text); font-style: normal; word-break: break-word; }
+.val-motif .val-motif-label { display: block; font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: var(--warning); margin-bottom: 2px; }
 .repos-jour-chk { display: inline-flex; align-items: center; gap: 4px; padding: 6px 9px; margin: 0; border: 1px solid var(--border);
   border-radius: 8px; background: var(--surface2); cursor: pointer; font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--text); }
 .repos-jour-chk input { width: 15px; height: 15px; margin: 0; }
@@ -2149,6 +2157,14 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <div id="em-objectifs-jours" style="display:flex;gap:6px;"></div>
       <div class="hint">7h00 par défaut chaque jour — ajuste au cas par cas (ex: journées plus courtes le samedi).</div>
     </div>
+    <div class="form-group" style="margin-bottom:10px;">
+      <label>Nombre de jours travaillés par semaine <span style="font-weight:400;color:var(--text-dim);">(valeur d'un jour de CP)</span></label>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="number" id="em-jours-travailles" min="1" max="7" step="1" placeholder="auto" style="width:90px;">
+        <span class="hint" id="em-jours-travailles-hint" style="margin:0;">Vide = ancien calcul (objectif du jour).</span>
+      </div>
+      <div class="hint" style="margin-top:4px;">Un jour de CP (ou absence assimilée) compte <b>contrat ÷ jours travaillés</b> pour les heures sup (ex. 35h ÷ 5 = 7h). Un CP posé sur un jour de repos hebdomadaire ne compte rien, et le cumul des CP d'une semaine civile ne dépasse jamais le contrat.</div>
+    </div>
     <div class="form-row-3">
       <div class="form-group">
         <label>Contrat / semaine</label>
@@ -2279,7 +2295,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.12.0';
+const APP_VERSION = '2.13.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2310,6 +2326,13 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.13.0', items: [
+    'Pointages : le motif saisi par l\'employé (et le commentaire admin) reste visible dans le menu Pointages (colonne « Motif ») après validation.',
+    'Validation : la ligne « Motif de l\'employé » est mise en évidence (encadré, texte plus grand).',
+    'Récap paie : pour un jour pas encore pointé, embauche/débauche prévues, retenues, durée brute, pause et pointée net sont affichées en valeurs anticipées (couleur ambre, mention « ant. »).',
+    'Employés : nouveau champ « Nombre de jours travaillés par semaine ». Un jour de CP vaut contrat ÷ jours (35h ÷ 5 = 7h), ne compte rien sur un jour de repos hebdomadaire, et le cumul des CP d\'une semaine civile est plafonné au contrat. Champ vide = ancien calcul.',
+    'Clôture paie : le solde anticipé inclut désormais la semaine à cheval sur la fin du mois (il restait à 0).',
+  ] },
   { v: '2.12.0', items: [
     'Pointage hors tolérance : la longueur maximale du motif passe de 30 à 100 caractères par défaut et devient paramétrable (Paramètres > Règles horaires > « Longueur maximale du motif », 10 à 300). La pointeuse applique la valeur reçue de l\'admin (nouveau Pointeuse.html requis ; sans lui, elle reste à 30).',
   ] },
@@ -3844,6 +3867,24 @@ function getEmployesTries() {
 function getObjectifJourMin(emp, dayIndex) {
   const v = emp?.objectifsJours?.[dayIndex];
   return (v !== undefined && v !== null ? v : 7) * 60;
+}
+// Valeur (en minutes) d'UN jour de congé payé / absence assimilée pour le calcul des heures sup.
+// - jour de repos hebdomadaire habituel de l'employé : 0 (un CP posé sur un jour de repos ne
+//   crédite rien — le repos n'est pas un jour travaillé) ;
+// - si "Nombre de jours travaillés par semaine" est renseigné dans la fiche employé :
+//   contrat hebdomadaire / nombre de jours (ex. 35h / 5 = 7h) ;
+// - sinon (champ vide) : ancien comportement, objectif du jour (Employés > Contrat).
+function getCreditCongeJourMin(emp, d) {
+  if (!emp) return 0;
+  if (estJourReposHabituel(emp.id, d.getDay())) return 0;
+  const n = parseInt(emp.joursTravailles);
+  if (n >= 1 && n <= 7) return Math.round(getContratMinPourDate(emp, dateKey(getMonday(d))) / n);
+  return getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
+}
+// Plafond hebdomadaire : le cumul des CP (hors fériés) crédités sur la semaine civile ne peut
+// jamais dépasser le contrat de la semaine. Renvoie l'excédent à retirer du crédit.
+function excedentCreditCongeSemaine(creditCumule, contratMinSemaine) {
+  return Math.max(0, creditCumule - Math.max(0, contratMinSemaine));
 }
 function jsDayToIndex(jsDay) { return jsDay === 0 ? 6 : jsDay - 1; } // Date.getDay(): 0=dimanche → notre index 6
 function minToTime(m) { m = ((m % 1440) + 1440) % 1440; return String(Math.floor(m/60)).padStart(2,'0') + ':' + String(m%60).padStart(2,'0'); }
@@ -6034,6 +6075,7 @@ function openEmployeModal() {
   document.getElementById('em-panier-mensualise-nuit').checked = false;
   document.getElementById('em-contrat-h').value = 35;
   document.getElementById('em-contrat-m').value = 0;
+  document.getElementById('em-jours-travailles').value = '';
   document.getElementById('em-mode-hs').value = 'hebdo';
   document.getElementById('em-seuil-hs-h').value = 35;
   document.getElementById('em-seuil-hs-m').value = 0;
@@ -6147,6 +6189,7 @@ function editEmploye(id) {
   document.getElementById('em-contrat-h').value = Math.floor(contratVal);
   document.getElementById('em-contrat-m').value = Math.round((contratVal - Math.floor(contratVal)) * 60);
   document.getElementById('em-mode-hs').value = e.modeHS || 'hebdo';
+  document.getElementById('em-jours-travailles').value = e.joursTravailles || '';
   const seuilVal = e.seuilHS || 35;
   document.getElementById('em-seuil-hs-h').value = Math.floor(seuilVal);
   document.getElementById('em-seuil-hs-m').value = Math.round((seuilVal - Math.floor(seuilVal)) * 60);
@@ -6276,6 +6319,7 @@ function saveEmploye() {
     reposJours: getReposJoursFromForm(),
     reposHebdo: getReposJoursFromForm()[0] ?? 0, // compat anciennes versions (premier jour coché)
     objectifsJours: getObjectifsJoursFromForm(),
+    joursTravailles: (() => { const n = parseInt(document.getElementById('em-jours-travailles').value); return n >= 1 && n <= 7 ? n : null; })(),
     panierExceptionnelJours: getPanierExceptionnelFromForm('jour'),
     panierExceptionnelNuits: getPanierExceptionnelFromForm('nuit'),
     panierMensualiseJour: document.getElementById('em-panier-mensualise-jour').checked,
@@ -9046,12 +9090,12 @@ function calculerHeuresSupSemaineReelle(empId, weekMondayStr, pointagesParAnnee,
   const emp = getEmpById(empId);
   if (!emp) return 0;
   const monday = isoToDate(weekMondayStr);
-  let weekPtContrat = 0, weekAUnJourAbsence = false, weekReductionContrat = 0;
+  let weekPtContrat = 0, weekAUnJourAbsence = false, weekReductionContrat = 0, weekCreditCP = 0;
   for (let i = 0; i < 7; i++) {
     const d = addDays(monday, i);
     const reel = calculerReelPourRegularisation(empId, dateKey(d), splitSeuil, pointagesParAnnee);
     if (reel.pointeMin === 0 && reel.estConge) {
-      const creditMin = getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
+      const creditMin = getCreditCongeJourMin(emp, d);
       // Un congé qui compte crédite normalement la semaine ; un congé qui ne compte pas (ex:
       // accident du travail, maladie) ne doit JAMAIS créer de déficit artificiel — le seuil de
       // comparaison de cette semaine est réduit d'autant, plutôt que de laisser le jour "manquer"
@@ -9059,6 +9103,7 @@ function calculerHeuresSupSemaineReelle(empId, weekMondayStr, pointagesParAnnee,
       if (congeCompteVersHS(reel.congeTaskId)) {
         weekAUnJourAbsence = true;
         weekPtContrat += creditMin;
+        if (!getJoursFeries(d.getFullYear())[dateKey(d)]) weekCreditCP += creditMin;
       } else {
         weekReductionContrat += creditMin;
       }
@@ -9067,6 +9112,7 @@ function calculerHeuresSupSemaineReelle(empId, weekMondayStr, pointagesParAnnee,
     }
   }
   const contratMin = Math.max(0, getContratMinPourDate(emp, weekMondayStr) - weekReductionContrat);
+  weekPtContrat -= excedentCreditCongeSemaine(weekCreditCP, contratMin);
   if (weekPtContrat === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
   return weekPtContrat > contratMin ? weekPtContrat - contratMin : 0;
 }
@@ -9509,7 +9555,7 @@ async function rendreReglementAnticipation(mois, joursAAnticiper, emps, parEmplo
     const semainesAnticipeesParEmploye = {};
     donnees.forEach(d => {
       const semaines = d.lignes
-        .filter(l => l.type === 'week' && l.label >= lundiAnticipation && l.weekComplete)
+        .filter(l => l.type === 'week' && l.label >= lundiAnticipation && (l.weekComplete || l.weekAnticipeEtendue))
         .map(l => ({ semaine: l.label, contratMin: l.contratMin, heuresSup: l.weekHeuresSup || 0 }));
       semainesAnticipeesParEmploye[d.emp.id] = semaines;
       soldeAnticipeParEmploye[d.emp.id] = semaines.reduce((s, sem) => s + sem.heuresSup, 0);
@@ -9660,7 +9706,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
   const gtAbsenceCompteParType = {}, gtAbsenceNonCompteParType = {};
 
   const donnees = emps.map(emp => {
-    let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0;
+    let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0, weekCreditCP = 0;
     let weekNuitsPen = 0, empNuitsPen = 0; // pénibilité (nuits ≥ 1h entre 00h et 05h)
     // Réduction du seuil hebdomadaire de comparaison — chaque jour d'absence qui NE compte pas
     // pour les HS (ex: accident du travail, maladie) réduit d'autant le contrat de la semaine,
@@ -9712,10 +9758,11 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
           // ni au crédit ni au réel, conformément à la distinction demandée.
           if (ligneRetour.nomFerie || congeCompteVersHS(ligneRetour.congeTaskId)) {
             weekAUnJourAbsence = true;
-            const creditMin = ligneRetour.congeFerieMin > 0 ? ligneRetour.congeFerieMin : getObjectifJourMin(emp, jsDayToIndex(dRetour.getDay()));
+            const creditMin = ligneRetour.congeFerieMin > 0 ? ligneRetour.congeFerieMin : getCreditCongeJourMin(emp, dRetour);
             weekPtContrat += creditMin;
+            if (!ligneRetour.nomFerie && !(ligneRetour.congeFerieMin > 0)) weekCreditCP += creditMin;
           } else {
-            const creditMinNonCompte = ligneRetour.congeFerieMin > 0 ? ligneRetour.congeFerieMin : getObjectifJourMin(emp, jsDayToIndex(dRetour.getDay()));
+            const creditMinNonCompte = ligneRetour.congeFerieMin > 0 ? ligneRetour.congeFerieMin : getCreditCongeJourMin(emp, dRetour);
             weekReductionContrat += creditMinNonCompte;
           }
         } else {
@@ -9744,9 +9791,34 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       // est avant le début officiel du mois.
       const weekMonday = isoToDate(weekKey);
       const weekComplete = (weekMonday >= premierJour || weekKey === semaineInitialeEtendue) && addDays(weekMonday, 6) <= dernierJour;
+      weekPtContrat -= excedentCreditCongeSemaine(weekCreditCP, contratMin);
       if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMin;
       if (weekComplete && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMin; empSemainesComptees++; }
-      lignes.push({ type: 'week', label: weekKey, weekNuitsPenibles: weekNuitsPen, weekPlan, weekPt, weekPtContrat, weekNuit, weekBrute, weekPause, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, contratMin, weekComplete, weekHeuresSup: weekComplete && weekPtContrat > contratMin ? weekPtContrat - contratMin : null });
+      let weekHeuresSup = weekComplete && weekPtContrat > contratMin ? weekPtContrat - contratMin : null;
+      // Semaine à cheval sur la FIN du mois (ex. mois qui finit un jeudi) : elle n'est jamais
+      // "complète" dans ce mois, donc son solde anticipé restait toujours à 0. On la projette ici
+      // jusqu'au dimanche avec le planning (jours du mois suivant), UNIQUEMENT pour le solde
+      // anticipé ; elle sera régularisée le mois suivant comme toute semaine anticipée.
+      let weekAnticipeEtendue = false;
+      const dimancheSemaine = addDays(weekMonday, 6);
+      if (!weekComplete && !periodeExplicite && (weekMonday >= premierJour || weekKey === semaineInitialeEtendue) && dimancheSemaine > dernierJour && dimancheSemaine >= isoToDate(dateClotureKey)) {
+        let ptC = weekPtContrat, red = 0, credCP = 0, absence = weekAUnJourAbsence, reel = weekPtReel;
+        for (let dd = addDays(dernierJour, 1); dd <= dimancheSemaine; dd = addDays(dd, 1)) {
+          const dkk = dateKey(dd);
+          const v = calculerAnticipationJour(emp.id, dkk, splitSeuil, false);
+          if (v.estConge) {
+            const fer = !!getJoursFeries(dd.getFullYear())[dkk];
+            const cred = getCreditCongeJourMin(emp, dd);
+            if (fer || congeCompteVersHS(v.congeTaskId)) { ptC += cred; absence = true; if (!fer) credCP += cred; } else red += cred;
+          } else { ptC += v.planMin; reel += v.planMin; }
+        }
+        const cm = Math.max(0, getContratMinPourDate(emp, weekKey) - weekReductionContrat - red);
+        ptC -= excedentCreditCongeSemaine(credCP + weekCreditCP, cm);
+        if (reel === 0 && absence) ptC = cm;
+        weekHeuresSup = ptC > cm ? ptC - cm : null;
+        weekAnticipeEtendue = true;
+      }
+      lignes.push({ type: 'week', label: weekKey, weekNuitsPenibles: weekNuitsPen, weekPlan, weekPt, weekPtContrat, weekNuit, weekBrute, weekPause, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, contratMin, weekComplete, weekAnticipeEtendue, weekHeuresSup });
     }
 
     let d = new Date(premierJour);
@@ -9757,7 +9829,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
         flushSemaine();
         weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0; weekNuitsPen = 0;
         weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0;
-        weekBrute = 0; weekPause = 0; weekReductionContrat = 0;
+        weekBrute = 0; weekPause = 0; weekReductionContrat = 0; weekCreditCP = 0;
       }
       weekKey = dayWeekKey;
 
@@ -9781,7 +9853,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       empFerieChomeMin += ferieChomeJour;
 
       if (ligne.pointeMin === 0 && (ligne.nomFerie || ligne.congeLabel)) {
-        const creditMin = ligne.congeFerieMin > 0 ? ligne.congeFerieMin : getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
+        const creditMin = ligne.congeFerieMin > 0 ? ligne.congeFerieMin : getCreditCongeJourMin(emp, d);
         const labelType = ligne.nomFerie || ligne.congeLabel;
         // Un férié compte toujours ; un congé ne compte que si son type le permet (voir
         // congeCompteVersHS) — sinon (ex: arrêt maladie) le jour ne contribue à rien du tout, ni
@@ -9790,6 +9862,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
         if (ligne.nomFerie || congeCompteVersHS(ligne.congeTaskId)) {
           weekAUnJourAbsence = true;
           weekPtContrat += creditMin;
+          if (!ligne.nomFerie && !(ligne.congeFerieMin > 0)) weekCreditCP += creditMin;
           empAbsenceCompteParType[labelType] = (empAbsenceCompteParType[labelType] || 0) + creditMin;
         } else {
           weekReductionContrat += creditMin;
@@ -10490,7 +10563,7 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre, jusquauStr) 
   emps.sort((a, b) => `${a.nom} ${a.prenom}`.localeCompare(`${b.nom} ${b.prenom}`, 'fr'));
 
   const cartes = emps.map(emp => {
-    let weekKey = null, weekPtReel = 0, weekCredit = 0, weekAUnJourAbsence = false;
+    let weekKey = null, weekPtReel = 0, weekCredit = 0, weekAUnJourAbsence = false, weekCreditCP = 0;
     let weekReductionContrat = 0;
     let totalBrut = Math.round((emp.soldeInitial || 0) * 60);
     // Calcul en parallèle SANS le correctif de proratisation (ligne suivante), pour permettre au
@@ -10514,6 +10587,7 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre, jusquauStr) 
       // resté entier (voir la découverte du 27/08 avec Noé LACHENY).
       const contratMinBrut = getContratMinPourDate(emp, weekKey);
       const contratMin = Math.max(0, contratMinBrut - weekReductionContrat);
+      weekCredit -= excedentCreditCongeSemaine(weekCreditCP, contratMin);
       if (weekPtReel === 0 && weekAUnJourAbsence) {
         semainesComptees++;
       } else if (weekPtReel + weekCredit > 0) {
@@ -10529,7 +10603,7 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre, jusquauStr) 
       const dayWeekKey = dateKey(getMonday(d));
       if (weekKey !== null && dayWeekKey !== weekKey) {
         flushSemaine();
-        weekPtReel = 0; weekCredit = 0; weekAUnJourAbsence = false; weekReductionContrat = 0;
+        weekPtReel = 0; weekCredit = 0; weekAUnJourAbsence = false; weekReductionContrat = 0; weekCreditCP = 0;
       }
       weekKey = dayWeekKey;
       const { pointeMin } = calculerPointeMinJour(emp.id, dk, pointagesParAnnee, splitSeuil);
@@ -10543,10 +10617,10 @@ async function calculerCartesCompteurPures(depuisStr, equipeFiltre, jusquauStr) 
         if (estFerie || congeCompte) {
           weekAUnJourAbsence = true;
           const ferieMinJour = calculerFerieMinJour(emp.id, dk);
-          const creditMin = ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
-          if (creditMin > 0) { weekCredit += creditMin; jourNeutralise++; }
+          const creditMin = ferieMinJour > 0 ? ferieMinJour : getCreditCongeJourMin(emp, d);
+          if (creditMin > 0) { weekCredit += creditMin; jourNeutralise++; if (!estFerie && !(ferieMinJour > 0)) weekCreditCP += creditMin; }
         } else if (estConge) {
-          const creditMinNonCompte = getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
+          const creditMinNonCompte = getCreditCongeJourMin(emp, d);
           weekReductionContrat += creditMinNonCompte;
         }
       } else {
@@ -11345,7 +11419,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
     let empPanierJourMensualise = emp.panierMensualiseJour ? nbMoisTouchesPeriode * PANIER_MENSUALISE_PAR_MOIS : 0;
     let empPanierNuitMensualise = emp.panierMensualiseNuit ? nbMoisTouchesPeriode * PANIER_MENSUALISE_PAR_MOIS : 0;
     let weekFerieChomeMin = 0;
-    let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0, weekPause = 0;
+    let weekKey = null, weekPlan = 0, weekPt = 0, weekPtContrat = 0, weekPtReel = 0, weekAUnJourAbsence = false, weekNuit = 0, weekPause = 0, weekCreditCP = 0;
     let weekNuitsPen = 0, empNuitsPen = 0; // pénibilité (nuits ≥ 1h entre 00h et 05h)
     let weekReductionContrat = 0;
     let weekBrute = 0, weekPanierJour = 0, weekPanierNuit = 0, weekPrimes = 0, weekDecouchage = 0;
@@ -11454,11 +11528,12 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         // congé/férié) : on crédite directement le contrat hebdomadaire EXACT (écart nul garanti)
         // plutôt que la somme des objectifs journaliers — ces derniers ne sont qu'un outil de
         // planification, pas une donnée de paie fiable au jour près (voir Employés > Contrat).
+        weekPtContrat -= excedentCreditCongeSemaine(weekCreditCP, contratMinSemaine);
         if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMinSemaine;
         if (weekCompleteFlush && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMinSemaine; empSemainesComptees++; }
         lignes.push({ type: 'week', label: weekKey, weekNuitsPenibles: weekNuitsPen, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, weekBrute, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteFlush, weekHeuresSup: weekCompleteFlush && weekPtContrat > contratMinSemaine ? weekPtContrat - contratMinSemaine : null });
         weekPlan = 0; weekPt = 0; weekPtContrat = 0; weekPtReel = 0; weekAUnJourAbsence = false; weekNuit = 0; weekPause = 0; weekFerieChomeMin = 0; weekNuitsPen = 0;
-        weekBrute = 0; weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0; weekReductionContrat = 0;
+        weekBrute = 0; weekPanierJour = 0; weekPanierNuit = 0; weekPrimes = 0; weekDecouchage = 0; weekReductionContrat = 0; weekCreditCP = 0;
       }
       weekKey = dayWeekKey;
       weekPlan += planMin; weekPt += pointeMin; weekNuit += nuitMin; weekPause += pauseJourMin; weekNuitsPen += nuitPenibleJour;
@@ -11481,7 +11556,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       if (pointeMin === 0 && (!!getJoursFeries(d.getFullYear())[dk] || congeInsts.length > 0)) {
         const estFerieJour = !!getJoursFeries(d.getFullYear())[dk];
         const ferieMinJour = calculerFerieMinJour(emp.id, dk);
-        const creditMinJour = ferieMinJour > 0 ? ferieMinJour : getObjectifJourMin(emp, jsDayToIndex(dow));
+        const creditMinJour = ferieMinJour > 0 ? ferieMinJour : getCreditCongeJourMin(emp, d);
         const labelType = estFerieJour ? getJoursFeries(d.getFullYear())[dk] : (db.tasks.find(t => t.id === congeInsts[0]?.taskId)?.nom || 'Congé');
         // Un férié compte toujours ; un congé ne compte que si son type le permet (voir
         // congeCompteVersHS) — sinon (ex: arrêt maladie) le jour ne contribue à rien du tout, ni
@@ -11489,6 +11564,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
         if (estFerieJour || congeCompteVersHS(congeInsts[0]?.taskId)) {
           weekAUnJourAbsence = true;
           weekPtContrat += creditMinJour;
+          if (!estFerieJour && !(ferieMinJour > 0)) weekCreditCP += creditMinJour;
           empAbsenceCompteParType[labelType] = (empAbsenceCompteParType[labelType] || 0) + creditMinJour;
         } else {
           weekReductionContrat += creditMinJour;
@@ -11526,6 +11602,7 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
       const cls = badgeClass(weekPlan, contratMinSemaine);
       const weekMondayLast = isoToDate(weekKey);
       const weekCompleteLast = weekMondayLast >= debut && addDays(weekMondayLast, 6) <= fin;
+      weekPtContrat -= excedentCreditCongeSemaine(weekCreditCP, contratMinSemaine);
       if (weekPtReel === 0 && weekAUnJourAbsence) weekPtContrat = contratMinSemaine;
       if (weekCompleteLast && weekPtContrat > 0) { empEcartContrat += weekPtContrat - contratMinSemaine; empSemainesComptees++; }
       lignes.push({ type: 'week', label: weekKey, weekNuitsPenibles: weekNuitsPen, weekPlan, weekPt, weekPtContrat, weekNuit, weekPause, weekBrute, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, cls, contratMin: contratMinSemaine, badgeBg, badgeCol, weekFerieChomeMin, weekComplete: weekCompleteLast, weekHeuresSup: weekCompleteLast && weekPtContrat > contratMinSemaine ? weekPtContrat - contratMinSemaine : null });
@@ -11567,7 +11644,21 @@ function renderRecapPaieEnrichi(emps, jours, pointagesParAnnee, afficherTous, de
 
     // Construit le contenu d'une cellule pour une colonne optionnelle donnée, à partir de la ligne
     // jour l — centralisé ici pour rester cohérent entre l'en-tête (ordre) et chaque ligne.
+    // Valeurs ANTICIPÉES : jour pas encore pointé (aujourd'hui ou à venir) avec un planning — on
+    // affiche "comme si pointé = planifié" dans une autre couleur, pour ne jamais les confondre
+    // avec de vraies valeurs pointées/validées.
+    const COUL_ANTIC = '#e0a84e';
+    const estAnticipe = l => l.dk >= todayKey && !(l.pointeMin > 0) && !l.embInfo?.pointe && !l.debInfo?.pointe && (l.planMin - (l.congeFerieMin || 0)) > 0 && !!(l.embInfo?.prevu);
+    const celAntic = (txt, titre) => `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;color:${COUL_ANTIC};font-style:italic;background:rgba(224,168,78,.07);" title="Valeur anticipée (basée sur le planning, pas encore pointée)${titre ? ' — ' + titre : ''}">${txt}<sup style="font-size:8px;"> ant.</sup></td>`;
     function celluleColonne(colId, l) {
+      if (estAnticipe(l)) {
+        const netAnt = l.planMin - (l.congeFerieMin || 0);
+        if (colId === 'embRetenue') return celAntic(l.embInfo.prevu, 'embauche retenue');
+        if (colId === 'debRetenue') return l.debInfo?.prevu ? celAntic(l.debInfo.prevu, 'débauche retenue') : '<td></td>';
+        if (colId === 'brute') return celAntic(minToHM(netAnt + (l.pauseJourMin || 0)), 'durée brute');
+        if (colId === 'pause') return celAntic(l.pauseJourMin > 0 ? '-' + l.pauseJourMin + 'min' : '—', 'pause');
+        if (colId === 'retenue') return celAntic(minToHM(netAnt), 'pointée net');
+      }
       switch (colId) {
         case 'embPrevue': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.embInfo?.prevu || '—'}${l.embInfo?.veille ? ' <span style="font-size:10px;color:var(--text-dim);">(veille)</span>' : ''}</td>`;
         case 'embPointee': return `<td style="padding:6px 8px;font-family:var(--mono);text-align:center;">${l.embInfo?.pointe || manquantLabel(l.embInfo, l.dk)}</td>`;
@@ -12797,6 +12888,23 @@ function calculerPointages() {
   _ptListener = { ref, fn: renderFn };
 }
 
+// Échappe un texte saisi par un employé (motif) avant de l'insérer dans du HTML.
+function escHtml(v) {
+  return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+// Cellule « Motif » du tableau Pointages : motif saisi par l'employé à la pointeuse (conservé après
+// validation) et commentaire éventuel de l'admin, pour l'embauche (E) et la débauche (D).
+function motifPointageCellule(r) {
+  const ligne = (lettre, evt) => {
+    if (!evt) return '';
+    const parts = [];
+    if (evt.motif) parts.push(`<span class="pt-motif-emp">💬 ${escHtml(evt.motif)}</span>`);
+    if (evt.commentaireAdmin) parts.push(`<span class="pt-motif-admin">🛠 ${escHtml(evt.commentaireAdmin)}</span>`);
+    return parts.length ? `<div class="pt-motif-ligne"><b>${lettre}</b> ${parts.join(' ')}</div>` : '';
+  };
+  const html = ligne('E', r.embEvt) + ligne('D', r.debEvt);
+  return html || '<span style="color:var(--text-dim);">—</span>';
+}
 function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, dataHier, dataDemain) {
     dataHier = dataHier || {};
     dataDemain = dataDemain || {};
@@ -13059,7 +13167,7 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
     };
 
     wrap.innerHTML = `<div style="overflow-x:auto;"><table class="pg" style="width:100%;border-collapse:collapse;font-size:13px;min-width:1000px;">
-      <tr><th style="text-align:left;">Employé</th><th style="text-align:left;">Service</th><th style="text-align:left;">Prévu</th><th style="text-align:left;">Nuit</th><th style="text-align:left;">Réel</th><th style="text-align:left;">Écart</th><th style="text-align:left;">Retenu</th><th style="text-align:left;">Mode</th><th>Statut</th><th>Actions</th></tr>
+      <tr><th style="text-align:left;">Employé</th><th style="text-align:left;">Service</th><th style="text-align:left;">Prévu</th><th style="text-align:left;">Nuit</th><th style="text-align:left;">Réel</th><th style="text-align:left;">Écart</th><th style="text-align:left;">Retenu</th><th style="text-align:left;">Mode</th><th style="text-align:left;">Motif</th><th>Statut</th><th>Actions</th></tr>
       ${rows.map((r, idx) => `<tr id="ptrow-${idx}" style="border-top:1px solid var(--border);">
         <td style="padding:8px;">${r.emp.prenom} ${r.emp.nom}</td>
         <td style="padding:8px;">${r.tachesLabel}</td>
@@ -13072,6 +13180,7 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
         </td>
         <td style="padding:8px;font-family:var(--mono);">${r.retenuEmbauche || '—'}<br>${r.retenuDebauche || '—'}${r.dureeReelle !== null ? `<br><span style="font-size:11px;color:${r.dureeReelle === r.dureePrevue ? 'var(--success)' : 'var(--warning)'};">${minToHM(r.dureeReelle)}</span>` : ''}</td>
         <td style="padding:8px;font-size:11px;color:var(--text-muted);">${r.modeEmbauche}<br>${r.modeDebauche}</td>
+        <td style="padding:8px;min-width:170px;max-width:300px;">${motifPointageCellule(r)}</td>
         <td style="padding:8px;text-align:center;">
           <span class="flag-badge" style="background:${statutBg[r.statutCls]};color:${statutCol[r.statutCls]};">${r.statutLabel}</span>
         </td>
@@ -13517,7 +13626,7 @@ function renderValidationList(anomalies) {
             <span style="font-size:14px;font-weight:700;font-family:var(--mono);">Pointé : ${a.evt.heure}</span>
             <span style="font-size:13px;font-weight:700;color:${ecartColor};">(${signe}${a.evt.ecart} min)</span>
           </div>
-          ${a.evt.motif ? `<div style="margin-top:6px;font-size:12px;color:var(--text-muted);font-style:italic;padding-left:4px;">💬 « ${a.evt.motif} »</div>` : ''}`;
+          ${a.evt.motif ? `<div class="val-motif"><span class="val-motif-label">💬 Motif de l'employé</span>${escHtml(a.evt.motif)}</div>` : ''}`;
       }
     }
     const clsStyle = { danger: 'background:rgba(255,77,106,.15);color:var(--danger);', warning: 'background:rgba(245,166,35,.15);color:var(--warning);' };
