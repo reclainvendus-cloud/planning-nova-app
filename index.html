@@ -2160,8 +2160,8 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
     <div class="form-group" style="margin-bottom:10px;">
       <label>Nombre de jours travaillés par semaine <span style="font-weight:400;color:var(--text-dim);">(valeur d'un jour de CP)</span></label>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <input type="number" id="em-jours-travailles" min="1" max="7" step="1" placeholder="auto" style="width:90px;">
-        <span class="hint" id="em-jours-travailles-hint" style="margin:0;">Vide = ancien calcul (objectif du jour).</span>
+        <input type="number" id="em-jours-travailles" min="1" max="7" step="1" placeholder="5" style="width:90px;">
+        <span class="hint" id="em-jours-travailles-hint" style="margin:0;">Par défaut : 5 jours.</span>
       </div>
       <div class="hint" style="margin-top:4px;">Un jour de CP (ou absence assimilée) compte <b>contrat ÷ jours travaillés</b> pour les heures sup (ex. 35h ÷ 5 = 7h). Un CP posé sur un jour de repos hebdomadaire ne compte rien, et le cumul des CP d'une semaine civile ne dépasse jamais le contrat.</div>
     </div>
@@ -2295,7 +2295,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.13.0';
+const APP_VERSION = '2.13.2';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2326,6 +2326,13 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.13.2', items: [
+    'Employés : « Nombre de jours travaillés par semaine » vaut 5 par défaut (nouveaux employés et employés existants sans valeur). Un jour de CP = contrat ÷ 5 (35h → 7h).',
+  ] },
+  { v: '2.13.1', items: [
+    'Export Clôture paie : les jours anticipés sont entièrement colorés (orange, italique) ; leurs horaires prévus/retenus, durée brute et pause sont renseignés.',
+    'Export Clôture paie : les totaux brute/pause de semaine incluent les jours de la semaine à cheval sur le mois précédent ; la semaine à cheval sur la fin de mois affiche les heures projetées après le mois (cohérence « Pointé net » / HS) et le détail des CP crédités (plafonnés au contrat).',
+  ] },
   { v: '2.13.0', items: [
     'Pointages : le motif saisi par l\'employé (et le commentaire admin) reste visible dans le menu Pointages (colonne « Motif ») après validation.',
     'Validation : la ligne « Motif de l\'employé » est mise en évidence (encadré, texte plus grand).',
@@ -3873,13 +3880,13 @@ function getObjectifJourMin(emp, dayIndex) {
 //   crédite rien — le repos n'est pas un jour travaillé) ;
 // - si "Nombre de jours travaillés par semaine" est renseigné dans la fiche employé :
 //   contrat hebdomadaire / nombre de jours (ex. 35h / 5 = 7h) ;
-// - sinon (champ vide) : ancien comportement, objectif du jour (Employés > Contrat).
+// - champ vide : 5 jours par défaut.
 function getCreditCongeJourMin(emp, d) {
   if (!emp) return 0;
   if (estJourReposHabituel(emp.id, d.getDay())) return 0;
-  const n = parseInt(emp.joursTravailles);
-  if (n >= 1 && n <= 7) return Math.round(getContratMinPourDate(emp, dateKey(getMonday(d))) / n);
-  return getObjectifJourMin(emp, jsDayToIndex(d.getDay()));
+  let n = parseInt(emp.joursTravailles);
+  if (!(n >= 1 && n <= 7)) n = 5; // défaut : 5 jours travaillés par semaine
+  return Math.round(getContratMinPourDate(emp, dateKey(getMonday(d))) / n);
 }
 // Plafond hebdomadaire : le cumul des CP (hors fériés) crédités sur la semaine civile ne peut
 // jamais dépasser le contrat de la semaine. Renvoie l'excédent à retirer du crédit.
@@ -6075,7 +6082,7 @@ function openEmployeModal() {
   document.getElementById('em-panier-mensualise-nuit').checked = false;
   document.getElementById('em-contrat-h').value = 35;
   document.getElementById('em-contrat-m').value = 0;
-  document.getElementById('em-jours-travailles').value = '';
+  document.getElementById('em-jours-travailles').value = 5;
   document.getElementById('em-mode-hs').value = 'hebdo';
   document.getElementById('em-seuil-hs-h').value = 35;
   document.getElementById('em-seuil-hs-m').value = 0;
@@ -6189,7 +6196,7 @@ function editEmploye(id) {
   document.getElementById('em-contrat-h').value = Math.floor(contratVal);
   document.getElementById('em-contrat-m').value = Math.round((contratVal - Math.floor(contratVal)) * 60);
   document.getElementById('em-mode-hs').value = e.modeHS || 'hebdo';
-  document.getElementById('em-jours-travailles').value = e.joursTravailles || '';
+  document.getElementById('em-jours-travailles').value = e.joursTravailles || 5;
   const seuilVal = e.seuilHS || 35;
   document.getElementById('em-seuil-hs-h').value = Math.floor(seuilVal);
   document.getElementById('em-seuil-hs-m').value = Math.round((seuilVal - Math.floor(seuilVal)) * 60);
@@ -6319,7 +6326,7 @@ function saveEmploye() {
     reposJours: getReposJoursFromForm(),
     reposHebdo: getReposJoursFromForm()[0] ?? 0, // compat anciennes versions (premier jour coché)
     objectifsJours: getObjectifsJoursFromForm(),
-    joursTravailles: (() => { const n = parseInt(document.getElementById('em-jours-travailles').value); return n >= 1 && n <= 7 ? n : null; })(),
+    joursTravailles: (() => { const n = parseInt(document.getElementById('em-jours-travailles').value); return n >= 1 && n <= 7 ? n : 5; })(),
     panierExceptionnelJours: getPanierExceptionnelFromForm('jour'),
     panierExceptionnelNuits: getPanierExceptionnelFromForm('nuit'),
     panierMensualiseJour: document.getElementById('em-panier-mensualise-jour').checked,
@@ -9660,7 +9667,13 @@ function construireLigneCloture(empId, dk, statutCloture, valeurs, pointagesParA
   // vrai pointage à montrer (voir construireEmbDebInfo, partagée avec le Récap paie). Un jour
   // ANTICIPÉ n'a par définition aucun pointage réel, ces colonnes restent donc vides (null),
   // affichées "—" côté export.
-  const embDeb = statutCloture !== 'Anticipé' ? construireEmbDebInfo(empId, dk, pointagesParAnnee, splitSeuil) : null;
+  let embDeb = construireEmbDebInfo(empId, dk, pointagesParAnnee, splitSeuil);
+  if (statutCloture === 'Anticipé') {
+    // Jour anticipé : horaires PRÉVUS (planning) seulement ; pas de pointage ni d'écart. Les
+    // heures « retenues » sont celles du planning, marquées anticipées (colonne Statut / couleur).
+    const ant = info => info ? { prevu: info.prevu, pointe: null, retenue: null, veille: info.veille, lendemain: info.lendemain, statut: null, mode: null, anticipe: true } : null;
+    embDeb = { embInfo: ant(embDeb.embInfo), debInfo: ant(embDeb.debInfo), ecartEmb: null, ecartDeb: null, pauseJourMin: embDeb.pauseJourMin };
+  }
   return {
     type: 'jour', dk, d, dow: d.getDay(),
     planMin: planMinAffiche, pointeMin: pointeMinAffiche, ecartMin: pointeMinAffiche > 0 ? pointeMinAffiche - planMinAffiche : null,
@@ -9752,6 +9765,7 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
         const valeursRetour = calculerReelPourRegularisation(emp.id, dkRetour, splitSeuil, pointagesParAnnee);
         const ligneRetour = construireLigneCloture(emp.id, dkRetour, 'Réel', valeursRetour, pointagesParAnnee, splitSeuil, false);
         weekPlan += ligneRetour.planMin; weekPt += ligneRetour.pointeMin; weekNuit += ligneRetour.nuitMin;
+        if (ligneRetour.pauseJourMin !== null && ligneRetour.pointeMin > 0) { weekBrute += ligneRetour.pointeMin + ligneRetour.pauseJourMin; weekPause += ligneRetour.pauseJourMin; }
         if (ligneRetour.pointeMin === 0 && (ligneRetour.nomFerie || ligneRetour.congeLabel)) {
           // Un férié compte toujours ; un congé ne compte que si son type le permet (voir
           // congeCompteVersHS) — sinon (ex: arrêt maladie) le jour ne contribue à rien du tout,
@@ -9799,10 +9813,10 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
       // "complète" dans ce mois, donc son solde anticipé restait toujours à 0. On la projette ici
       // jusqu'au dimanche avec le planning (jours du mois suivant), UNIQUEMENT pour le solde
       // anticipé ; elle sera régularisée le mois suivant comme toute semaine anticipée.
-      let weekAnticipeEtendue = false;
+      let weekAnticipeEtendue = false, weekExtensionMin = 0;
       const dimancheSemaine = addDays(weekMonday, 6);
       if (!weekComplete && !periodeExplicite && (weekMonday >= premierJour || weekKey === semaineInitialeEtendue) && dimancheSemaine > dernierJour && dimancheSemaine >= isoToDate(dateClotureKey)) {
-        let ptC = weekPtContrat, red = 0, credCP = 0, absence = weekAUnJourAbsence, reel = weekPtReel;
+        let ptC = weekPtContrat, red = 0, credCP = 0, absence = weekAUnJourAbsence, reel = weekPtReel, extMin = 0;
         for (let dd = addDays(dernierJour, 1); dd <= dimancheSemaine; dd = addDays(dd, 1)) {
           const dkk = dateKey(dd);
           const v = calculerAnticipationJour(emp.id, dkk, splitSeuil, false);
@@ -9810,15 +9824,18 @@ async function construireDonneesCloturePaie(mois, dateClotureKey, emps, joursAnt
             const fer = !!getJoursFeries(dd.getFullYear())[dkk];
             const cred = getCreditCongeJourMin(emp, dd);
             if (fer || congeCompteVersHS(v.congeTaskId)) { ptC += cred; absence = true; if (!fer) credCP += cred; } else red += cred;
-          } else { ptC += v.planMin; reel += v.planMin; }
+          } else { ptC += v.planMin; reel += v.planMin; extMin += v.planMin; }
         }
         const cm = Math.max(0, getContratMinPourDate(emp, weekKey) - weekReductionContrat - red);
         ptC -= excedentCreditCongeSemaine(credCP + weekCreditCP, cm);
         if (reel === 0 && absence) ptC = cm;
         weekHeuresSup = ptC > cm ? ptC - cm : null;
         weekAnticipeEtendue = true;
+        weekExtensionMin = extMin;
+        weekPt += extMin; // pour que « Pointé net » de la semaine reste cohérent avec les HS
       }
-      lignes.push({ type: 'week', label: weekKey, weekNuitsPenibles: weekNuitsPen, weekPlan, weekPt, weekPtContrat, weekNuit, weekBrute, weekPause, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, contratMin, weekComplete, weekAnticipeEtendue, weekHeuresSup });
+      const weekCongeCredite = Math.min(weekCreditCP, contratMin);
+      lignes.push({ type: 'week', label: weekKey, weekNuitsPenibles: weekNuitsPen, weekPlan, weekPt, weekPtContrat, weekNuit, weekBrute, weekPause, weekPanierJour, weekPanierNuit, weekPrimes, weekDecouchage, contratMin, weekComplete, weekAnticipeEtendue, weekExtensionMin, weekCongeCredite, weekCreditCPBrut: weekCreditCP, weekHeuresSup });
     }
 
     let d = new Date(premierJour);
@@ -10954,11 +10971,11 @@ function construireCSV(donnees, regul) {
           `${d.emp.nom} ${d.emp.prenom}`, (d.contratMin / 60).toFixed(2), getISOWeekNumber(l.d),
           DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}/${l.d.getFullYear()}`,
           ...(aStatut ? [l.statutCloture || ''] : []),
-          l.embInfo?.prevu || '', l.embInfo?.pointe || (l.embInfo ? 'manquant' : ''), l.embInfo?.retenue || '',
+          l.embInfo?.prevu || '', l.embInfo?.pointe || (l.embInfo && !l.embInfo.anticipe ? 'manquant' : ''), l.embInfo?.retenue || (l.embInfo?.anticipe ? l.embInfo.prevu : ''),
           l.ecartEmb !== undefined && l.ecartEmb !== null ? (l.ecartEmb >= 0 ? '+' : '') + l.ecartEmb + 'min' : '',
-          l.debInfo?.prevu || '', l.debInfo?.pointe || (l.debInfo ? 'manquant' : ''), l.debInfo?.retenue || '',
+          l.debInfo?.prevu || '', l.debInfo?.pointe || (l.debInfo && !l.debInfo.anticipe ? 'manquant' : ''), l.debInfo?.retenue || (l.debInfo?.anticipe ? l.debInfo.prevu : ''),
           l.ecartDeb !== undefined && l.ecartDeb !== null ? (l.ecartDeb >= 0 ? '+' : '') + l.ecartDeb + 'min' : '',
-          l.pointeMin > 0 && l.pauseJourMin !== undefined ? minToHM(l.pointeMin + l.pauseJourMin) : '',
+          l.pointeMin > 0 && l.pauseJourMin !== undefined && l.pauseJourMin !== null ? minToHM(l.pointeMin + l.pauseJourMin) : '',
           l.pauseJourMin ? '-' + minToHM(l.pauseJourMin) : '',
           l.pointeMin ? minToHM(l.pointeMin) : '',
           l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '',
@@ -11179,11 +11196,11 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
           const valeurs = [
             noSem, DOW[l.dow], `${String(l.d.getDate()).padStart(2,'0')}/${String(l.d.getMonth()+1).padStart(2,'0')}`,
             ...(aStatut ? [l.statutCloture] : []),
-            l.embInfo?.prevu || '—', l.embInfo?.pointe || (l.embInfo ? 'manquant' : '—'), l.embInfo?.retenue || '—',
+            l.embInfo?.prevu || '—', l.embInfo?.pointe || (l.embInfo ? (l.embInfo.anticipe ? '—' : 'manquant') : '—'), l.embInfo?.retenue || (l.embInfo?.anticipe ? l.embInfo.prevu : '—'),
             l.ecartEmb !== undefined && l.ecartEmb !== null ? (l.ecartEmb >= 0 ? '+' : '') + l.ecartEmb + 'min' : '—',
-            l.debInfo?.prevu || '—', l.debInfo?.pointe || (l.debInfo ? 'manquant' : '—'), l.debInfo?.retenue || '—',
+            l.debInfo?.prevu || '—', l.debInfo?.pointe || (l.debInfo ? (l.debInfo.anticipe ? '—' : 'manquant') : '—'), l.debInfo?.retenue || (l.debInfo?.anticipe ? l.debInfo.prevu : '—'),
             l.ecartDeb !== undefined && l.ecartDeb !== null ? (l.ecartDeb >= 0 ? '+' : '') + l.ecartDeb + 'min' : '—',
-            l.pointeMin > 0 && l.pauseJourMin !== undefined ? minToHM(l.pointeMin + l.pauseJourMin) : '—',
+            l.pointeMin > 0 && l.pauseJourMin !== undefined && l.pauseJourMin !== null ? minToHM(l.pointeMin + l.pauseJourMin) : '—',
             l.pauseJourMin ? '-' + minToHM(l.pauseJourMin) : '—',
             l.pointeMin ? minToHM(l.pointeMin) : '—',
             l.ecartMin !== null ? (l.ecartMin >= 0 ? '+' : '-') + minToHM(Math.abs(l.ecartMin)) : '—',
@@ -11199,9 +11216,14 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
           if (l.ecartMin !== null) row.getCell(idx.ecartPlanning).font = { color: { argb: l.ecartMin >= 0 ? XLS_COULEURS.vertTxt : XLS_COULEURS.rougeTxt } };
           if (l.ecartEmb !== undefined && l.ecartEmb !== null) row.getCell(idx.ecartEmb).font = { color: { argb: l.ecartEmb >= 0 ? XLS_COULEURS.vertTxt : XLS_COULEURS.rougeTxt } };
           if (l.ecartDeb !== undefined && l.ecartDeb !== null) row.getCell(idx.ecartDeb).font = { color: { argb: l.ecartDeb >= 0 ? XLS_COULEURS.vertTxt : XLS_COULEURS.rougeTxt } };
-          if (aStatut && l.statutCloture === 'Anticipé') row.getCell(idx.statut).font = { color: { argb: XLS_COULEURS.orangeTxt }, bold: true };
+          if (aStatut && l.statutCloture === 'Anticipé') {
+            // Jour ANTICIPÉ : toute la ligne teintée en orange clair + texte orange italique, pour
+            // le distinguer au premier coup d'œil d'un jour réel.
+            row.eachCell(cell => { cell.fill = xlsFill(XLS_COULEURS.orange); cell.font = { color: { argb: XLS_COULEURS.orangeTxt }, italic: true }; });
+            row.getCell(idx.statut).font = { color: { argb: XLS_COULEURS.orangeTxt }, bold: true, italic: true };
+          }
           // Colonnes importantes côté compta, en valeur bleue/gras pour ressortir visuellement.
-          [idx.pointeNet, idx.nuit, idx.nuitPenible, idx.panierJour, idx.panierNuit, idx.decouchage].forEach(ci => { row.getCell(ci).font = colBleuFont; });
+          [idx.pointeNet, idx.nuit, idx.nuitPenible, idx.panierJour, idx.panierNuit, idx.decouchage].forEach(ci => { row.getCell(ci).font = (aStatut && l.statutCloture === 'Anticipé') ? { color: { argb: XLS_COULEURS.orangeTxt }, bold: true, italic: true } : colBleuFont; });
           // Panier mensualisé : toute la colonne concernée teintée en violet pour cet employé, pour
           // signaler d'un coup d'œil que ces cases ne reflètent pas le travail réel de ce jour-là
           // (voir badge "Panier mensualisé" en résumé).
@@ -11212,7 +11234,9 @@ async function construireClasseurExcel(donnees, contenu, opts = {}) {
           const wd = isoToDate(l.label);
           const wf = addDays(wd, 6);
           const noSem = getISOWeekNumber(wd);
-          const labelSemaine = `Semaine ${noSem} — du ${String(wd.getDate()).padStart(2,'0')}/${String(wd.getMonth()+1).padStart(2,'0')} au ${String(wf.getDate()).padStart(2,'0')}/${String(wf.getMonth()+1).padStart(2,'0')}/${wf.getFullYear()}`;
+          let labelSemaine = `Semaine ${noSem} — du ${String(wd.getDate()).padStart(2,'0')}/${String(wd.getMonth()+1).padStart(2,'0')} au ${String(wf.getDate()).padStart(2,'0')}/${String(wf.getMonth()+1).padStart(2,'0')}/${wf.getFullYear()}`;
+          if (l.weekCongeCredite > 0) labelSemaine += ` · CP crédités ${minToHM(l.weekCongeCredite)}${l.weekCreditCPBrut > l.weekCongeCredite ? ' (plafonné au contrat)' : ''}`;
+          if (l.weekExtensionMin > 0) labelSemaine += ` · dont ${minToHM(l.weekExtensionMin)} projetées après la fin du mois`;
           const ecartPlanningSemaine = l.weekPt ? l.weekPt - l.weekPlan : null;
           const valeurs = [
             noSem, labelSemaine, '', ...(aStatut ? [''] : []),
