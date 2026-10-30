@@ -2295,7 +2295,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.13.2';
+const APP_VERSION = '2.13.4';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2326,6 +2326,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.13.4', items: [
+    'Congés : à la validation (ou au refus), l\'attestation est désormais unique par employé et regroupe tous les types de congé traités (ex. 4 RTT puis 3 CP) dans un même tableau, avec le total des jours, au lieu d\'une feuille par type.',
+  ] },
+  { v: '2.13.3', items: [
+    'Envoi de planning : le compteur d\'emails Brevo (plan gratuit) tient désormais compte des emails envoyés aujourd\'hui (il restait bloqué à 300, Brevo renvoyant la limite quotidienne sans la décompter) et se rafraîchit après chaque envoi.',
+  ] },
   { v: '2.13.2', items: [
     'Employés : « Nombre de jours travaillés par semaine » vaut 5 par défaut (nouveaux employés et employés existants sans valeur). Un jour de CP = contrat ÷ 5 (35h → 7h).',
   ] },
@@ -7033,7 +7039,7 @@ function confirmerRefusConges() {
 }
 
 // Génère et ouvre dans un nouvel onglet une attestation imprimable/signable pour chaque
-// période traitée — une page par attestation (saut de page automatique à l'impression).
+// employé traité (tous types de congé regroupés) — une page par attestation (saut de page automatique à l'impression).
 // statut: 'accepte' | 'refuse' — motif: commentaire optionnel (surtout utile en cas de refus).
 function imprimerAttestationConges(groups, statut, motif) {
   const societe = db.params.societeNom || 'Entreprise';
@@ -7045,12 +7051,33 @@ function imprimerAttestationConges(groups, statut, motif) {
   const statutLabel = estAccepte ? '✅ Accepté' : '❌ Refusé';
   const statutColor = estAccepte ? '#1e8a4c' : '#c62840';
 
-  const pages = groups.map(g => {
-    const periodeLabel = g.debut === g.fin ? fmtLong(g.debut) : `du ${fmtLong(g.debut)} au ${fmtLong(g.fin)}`;
-    // Jours réellement décomptés selon les règles du type de congé (ouvrables/ouvrés/calendaires,
-    // repos hebdo et fériés exclus) — figure sur l'attestation pour être directement exploitable.
-    const joursDecomptes = computeJoursDecomptes(g.emp.id, g.task.id, isoToDate(g.debut), isoToDate(g.fin));
-    const decompteDiffere = joursDecomptes !== g.items.length;
+  // Une seule attestation PAR EMPLOYÉ : toutes les périodes traitées (types de congé différents
+  // compris, ex. 4 RTT puis 3 CP à la suite) sont regroupées dans un même tableau.
+  const parEmp = [];
+  groups.forEach(g => {
+    let e = parEmp.find(x => x.emp.id === g.emp.id);
+    if (!e) { e = { emp: g.emp, periodes: [] }; parEmp.push(e); }
+    e.periodes.push(g);
+  });
+  const pages = parEmp.map(({ emp, periodes }) => {
+    periodes.sort((a, b) => a.debut.localeCompare(b.debut));
+    let totalCal = 0, totalDec = 0;
+    const lignes = periodes.map(g => {
+      const periodeLabel = g.debut === g.fin ? fmtLong(g.debut) : `du ${fmtLong(g.debut)} au ${fmtLong(g.fin)}`;
+      // Jours réellement décomptés selon les règles du type de congé (ouvrables/ouvrés/calendaires,
+      // repos hebdo et fériés exclus) — figure sur l'attestation pour être directement exploitable.
+      const dec = computeJoursDecomptes(g.emp.id, g.task.id, isoToDate(g.debut), isoToDate(g.fin));
+      totalCal += g.items.length; totalDec += dec;
+      return `<tr style="border-bottom:1px solid #e3e3e3;">
+        <td style="padding:8px 6px;font-weight:700;">${g.task.nom}</td>
+        <td style="padding:8px 6px;">${periodeLabel}</td>
+        <td style="padding:8px 6px;text-align:center;">${g.items.length}</td>
+        <td style="padding:8px 6px;text-align:center;font-weight:700;">${dec}</td>
+      </tr>`;
+    }).join('');
+    const totalLigne = periodes.length > 1
+      ? `<tr><td colspan="2" style="padding:8px 6px;text-align:right;color:#666;">Total</td><td style="padding:8px 6px;text-align:center;font-weight:700;">${totalCal}</td><td style="padding:8px 6px;text-align:center;font-weight:800;">${totalDec}</td></tr>`
+      : '';
     const motifLigne = motif
       ? `<tr><td style="color:#666;">Motif</td><td>${motif}</td></tr>`
       : '';
@@ -7061,15 +7088,19 @@ function imprimerAttestationConges(groups, statut, motif) {
       </div>
       <div style="border:1px solid #ccc;border-radius:10px;padding:30px;">
         <table width="100%" style="font-size:15px;line-height:2;">
-          <tr><td style="color:#666;width:180px;">Employé</td><td style="font-weight:700;">${g.emp.prenom} ${g.emp.nom}</td></tr>
-          <tr><td style="color:#666;">Type de congé</td><td style="font-weight:700;">${g.task.nom}</td></tr>
-          <tr><td style="color:#666;">Période</td><td style="font-weight:700;">${periodeLabel}</td></tr>
-          <tr><td style="color:#666;">Jours calendaires</td><td>${g.items.length} jour${g.items.length > 1 ? 's' : ''}</td></tr>
-          <tr><td style="color:#666;">Jours décomptés</td><td style="font-weight:700;">${joursDecomptes} jour${joursDecomptes > 1 ? 's' : ''}${decompteDiffere ? ' <span style="font-size:12px;color:#888;font-weight:400;">(samedis/fériés/repos hebdo exclus selon la règle du type)</span>' : ''}</td></tr>
+          <tr><td style="color:#666;width:180px;">Employé</td><td style="font-weight:700;">${emp.prenom} ${emp.nom}</td></tr>
           <tr><td style="color:#666;">Statut</td><td style="font-weight:700;color:${statutColor};">${statutLabel}</td></tr>
           ${motifLigne}
           <tr><td style="color:#666;">Date de traitement</td><td>${todayStr}</td></tr>
         </table>
+        <table width="100%" style="font-size:14px;margin-top:18px;border-collapse:collapse;">
+          <tr style="border-bottom:2px solid #333;color:#666;text-align:left;">
+            <th style="padding:6px;">Type de congé</th><th style="padding:6px;">Période</th>
+            <th style="padding:6px;text-align:center;">Jours calendaires</th><th style="padding:6px;text-align:center;">Jours décomptés</th>
+          </tr>
+          ${lignes}${totalLigne}
+        </table>
+        <div style="font-size:11px;color:#888;margin-top:8px;">Jours décomptés : selon les règles de chaque type de congé (samedis, repos hebdomadaire et fériés exclus selon la méthode).</div>
       </div>
       <div style="display:flex;justify-content:space-between;margin-top:70px;">
         <div style="width:45%;">
@@ -13798,7 +13829,23 @@ async function fetchBrevoCredits(forceRefresh) {
   const planEmail = (data.plan || []).find(p => p.creditsType === 'sendLimit' && p.type !== 'sms')
     || (data.plan || [])[0];
   if (!planEmail) return null;
-  _brevoCreditsCache = { credits: planEmail.credits, type: planEmail.type, ts: Date.now() };
+  let credits = planEmail.credits;
+  // Plan gratuit : Brevo renvoie ici la LIMITE quotidienne (300) sans jamais la décompter — d'où
+  // un compteur toujours à 300. On retranche donc les emails réellement envoyés aujourd'hui
+  // (statistiques Brevo du jour, tous appareils confondus). En cas d'échec : valeur brute.
+  if (/free|gratuit/i.test(String(planEmail.type || ''))) {
+    try {
+      const auj = dateKey(new Date());
+      const r2 = await fetch(`https://api.brevo.com/v3/smtp/statistics/aggregatedReport?startDate=${auj}&endDate=${auj}`, {
+        headers: { 'api-key': db.params.brevo.apiKey, 'Accept': 'application/json' },
+      });
+      if (r2.ok) {
+        const st = await r2.json();
+        if (typeof st.requests === 'number') credits = Math.max(0, planEmail.credits - st.requests);
+      }
+    } catch (e) { /* on garde la valeur brute */ }
+  }
+  _brevoCreditsCache = { credits, type: planEmail.type, ts: Date.now() };
   return _brevoCreditsCache;
 }
 
@@ -13817,6 +13864,7 @@ async function verifierCreditsBrevo() {
 }
 
 async function brevoSendEmail({ to, subject, html }) {
+  _brevoCreditsCache = null; // le compteur doit être relu après tout envoi
   if (!brevoConfigured()) throw new Error('Brevo non configuré (Paramètres > Connexions)');
   const res = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
