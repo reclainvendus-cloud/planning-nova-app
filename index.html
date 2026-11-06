@@ -859,6 +859,22 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           </div>
         </div>
         <div id="rap-wrap" style="margin-top:18px;"></div>
+
+        <div class="task-card" style="cursor:default;margin-top:24px;">
+          <div class="section-label" style="margin-top:0;">⏱ Heures par tâche et par employé (d'après le planning)</div>
+          <div class="hint" style="margin-bottom:10px;">Utilise la période choisie ci-dessus. Choisis une tâche et les employés à inclure.</div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
+            <div class="form-group" style="margin:0;min-width:220px;">
+              <label>Tâche</label>
+              <select id="rapt-tache"></select>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="raptToutEmp(true)">Tout sélectionner</button>
+            <button class="btn btn-secondary btn-sm" onclick="raptToutEmp(false)">Tout désélectionner</button>
+            <button class="btn btn-primary btn-sm" onclick="calculerHeuresTache()">⏱ Calculer</button>
+          </div>
+          <div id="rapt-employes" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:12px;"></div>
+          <div id="rapt-resultat"></div>
+        </div>
       </div>
 
       <!-- ===== VUE HISTORIQUE ===== -->
@@ -1678,7 +1694,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <div id="cd-days" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
     </div>
     <label class="checkbox-row"><input type="checkbox" id="cd-overwrite"><span>Écraser les créneaux de travail déjà présents ce jour-là</span></label>
-    <label class="checkbox-row"><input type="checkbox" id="cd-overwrite-conges"><span>Écraser les congés déjà posés ce jour-là</span></label>
+    <div class="hint">Les congés ne sont jamais copiés.</div>
     <div style="display:flex;gap:10px;margin-top:16px;">
       <button class="btn btn-primary" onclick="doCopyDay()">📋 Copier</button>
       <button class="btn btn-secondary" onclick="closeModal('modal-copy-day')">Annuler</button>
@@ -1692,7 +1708,13 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
     <button class="modal-close" onclick="closeModal('modal-copy-week')">✕</button>
     <h2>📋 Copier la semaine du <span id="cw-source-label" style="color:var(--accent2);"></span></h2>
 
-    <div class="section-label">Employés à copier</div>
+    <div class="section-label">Copier vers</div>
+    <div class="form-group" style="margin-bottom:12px;">
+      <select id="cw-target-emp" onchange="majOptionsCopieSemaine()"></select>
+      <div class="hint" id="cw-target-hint" style="margin-top:4px;"></div>
+    </div>
+
+    <div class="section-label" id="cw-source-title">Employés à copier</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;">
       <button class="btn btn-secondary btn-sm" onclick="toggleAllCopyEmp(true)">Tout sélectionner</button>
       <button class="btn btn-secondary btn-sm" onclick="toggleAllCopyEmp(false)">Tout désélectionner</button>
@@ -1704,7 +1726,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 
     <div class="section-label">Options</div>
     <label class="checkbox-row"><input type="checkbox" id="cw-overwrite"><span>Écraser les créneaux de travail déjà présents sur les jours cibles</span></label>
-    <label class="checkbox-row"><input type="checkbox" id="cw-overwrite-conges"><span>Écraser les congés déjà posés sur les jours cibles</span></label>
+    <div class="hint">Les congés ne sont jamais copiés ni écrasés.</div>
     <label class="checkbox-row"><input type="checkbox" id="cw-include-weekend" checked><span>Inclure samedi et dimanche</span></label>
 
     <div style="display:flex;gap:10px;margin-top:18px;">
@@ -2295,7 +2317,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.13.4';
+const APP_VERSION = '2.14.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2326,6 +2348,11 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.14.0', items: [
+    'Copie de journée / de semaine : les congés (et fériés posés) ne sont plus jamais copiés, donc plus jamais enregistrés dans le calendrier des congés. Les congés déjà posés sur la cible sont conservés.',
+    'Copie de semaine : possibilité de copier la semaine d\'un employé vers un AUTRE employé, sur la ou les semaines de ton choix (la semaine copiée est incluse, ainsi que les 4 semaines précédentes).',
+    'Rapports : nouveau bloc « Heures par tâche et par employé » — pour la période choisie et les employés sélectionnés, calcule le nombre d\'heures de la tâche choisie d\'après les plannings (export CSV).',
+  ] },
   { v: '2.13.4', items: [
     'Congés : à la validation (ou au refus), l\'attestation est désormais unique par employé et regroupe tous les types de congé traités (ex. 4 RTT puis 3 CP) dans un même tableau, avec le total des jours, au lieu d\'une feuille par type.',
   ] },
@@ -6391,10 +6418,11 @@ function copyDayInstances(sourceEmpId, sourceDk, targetDk, overwrite, overwriteC
   const targetHasNormal = targetInsts.some(i => !isConge(i));
   const targetHasConge = targetInsts.some(i => isConge(i));
 
-  const toCopy = sourceInsts.filter(inst => isConge(inst)
-    ? (overwriteConges || !targetHasConge)
-    : (overwrite || !targetHasNormal) && (overwriteConges || !targetHasConge)
-  );
+  // Les congés (et fériés posés) ne sont JAMAIS copiés : ils sont saisis dans le calendrier des
+  // congés et n'ont rien à faire dans une copie de journée/semaine. Un congé déjà posé sur la
+  // cible est conservé, et protège le jour contre l'ajout de tâches de travail.
+  overwriteConges = false;
+  const toCopy = sourceInsts.filter(inst => !isConge(inst) && (overwrite || !targetHasNormal) && !targetHasConge);
   // Tâches normales (non-congé) de la source qui n'ont PAS été copiées parce que la cible a déjà
   // un congé ce jour-là (protection congés) — signalé à l'appelant pour proposer un remplacement.
   const ignoreesPourConge = targetHasConge
@@ -6403,7 +6431,7 @@ function copyDayInstances(sourceEmpId, sourceDk, targetDk, overwrite, overwriteC
 
   if (!toCopy.length) return { ignoreesPourConge };
 
-  targetInsts = targetInsts.filter(inst => isConge(inst) ? !overwriteConges : !overwrite);
+  targetInsts = targetInsts.filter(inst => isConge(inst) ? true : !overwrite);
   targetInsts.push(...toCopy.map(inst => ({ ...inst, id: uid() })));
   db.planning[targetEmpId][targetDk] = targetInsts;
   return { ignoreesPourConge };
@@ -6416,7 +6444,6 @@ function openCopyDayModal() {
   sel.onchange = renderCopyDayCheckboxes;
   renderCopyDayCheckboxes();
   document.getElementById('cd-overwrite').checked = false;
-  document.getElementById('cd-overwrite-conges').checked = false;
   openModal('modal-copy-day');
 }
 
@@ -6442,7 +6469,7 @@ function doCopyDay() {
   const targets = [...document.querySelectorAll('.cd-day-cb:checked')].map(cb => cb.dataset.dk);
   if (!targets.length) { notify('Sélectionne au moins un jour cible', 'warning'); return; }
   const overwrite = document.getElementById('cd-overwrite').checked;
-  const overwriteConges = document.getElementById('cd-overwrite-conges').checked;
+  const overwriteConges = false;
   targets.forEach(dk => copyDayInstances(djCurrentEmp, djCurrentDate, dk, overwrite, overwriteConges, targetEmp));
   saveDB();
   closeModal('modal-copy-day');
@@ -6477,18 +6504,41 @@ function openCopyWeekModal() {
       }).join('')
     : '<div class="hint">Aucun employé.</div>';
 
+  const tSel = document.getElementById('cw-target-emp');
+  tSel.innerHTML = '<option value="">Le(s) même(s) employé(s) — autres semaines</option>'
+    + getEmployesTries().map(e => `<option value="${e.id}">Un autre employé : ${e.prenom} ${e.nom}</option>`).join('');
+  tSel.value = '';
+
   const weeksWrap = document.getElementById('cw-weeks-list');
   let weeksHtml = '';
-  for (let i = 1; i <= 12; i++) {
+  for (let i = -4; i <= 12; i++) {
     const monday = addDays(pgWeekMonday, i * 7);
-    weeksHtml += `<label class="checkbox-row"><input type="checkbox" class="cw-week-cb" data-monday="${dateKey(monday)}"><span>${formatWeekLabel(monday)}</span></label>`;
+    weeksHtml += `<label class="checkbox-row"><input type="checkbox" class="cw-week-cb" data-monday="${dateKey(monday)}" data-offset="${i}"><span>${formatWeekLabel(monday)}${i === 0 ? ' <b style="color:var(--accent2);">(semaine copiée)</b>' : ''}</span></label>`;
   }
   weeksWrap.innerHTML = weeksHtml;
+  majOptionsCopieSemaine();
 
   document.getElementById('cw-overwrite').checked = false;
-  document.getElementById('cw-overwrite-conges').checked = false;
   document.getElementById('cw-include-weekend').checked = true;
   openModal('modal-copy-week');
+}
+
+// Met à jour le formulaire de copie de semaine selon la cible choisie :
+// - même(s) employé(s) : la semaine copiée elle-même n'est pas sélectionnable (copie sur soi-même) ;
+// - autre employé : un seul employé source à la fois, et la semaine copiée devient sélectionnable.
+function majOptionsCopieSemaine() {
+  const target = document.getElementById('cw-target-emp')?.value || '';
+  const hint = document.getElementById('cw-target-hint');
+  const titre = document.getElementById('cw-source-title');
+  if (hint) hint.textContent = target
+    ? 'Coche UN SEUL employé source ci-dessous : sa semaine sera collée chez l\'employé choisi, sur la ou les semaines cibles (la semaine copiée est incluse). Les congés ne sont pas copiés.'
+    : 'Chaque employé coché reçoit sa propre semaine sur les semaines cibles.';
+  if (titre) titre.textContent = target ? 'Employé source (un seul)' : 'Employés à copier';
+  document.querySelectorAll('.cw-week-cb').forEach(cb => {
+    const estSource = cb.dataset.offset === '0';
+    if (estSource && !target) { cb.checked = false; cb.disabled = true; cb.parentElement.style.opacity = '.4'; }
+    else { cb.disabled = false; cb.parentElement.style.opacity = ''; }
+  });
 }
 
 // Coche/décoche tous les membres de cette équipe d'un coup, en cliquant la case de l'équipe.
@@ -6519,10 +6569,12 @@ function toggleAllCopyEmp(state) {
 function doCopyWeek() {
   const empIds = [...document.querySelectorAll('.cw-emp-cb:checked')].map(cb => cb.dataset.id);
   const weekKeys = [...document.querySelectorAll('.cw-week-cb:checked')].map(cb => cb.dataset.monday);
+  const targetEmpId = document.getElementById('cw-target-emp')?.value || '';
   if (!empIds.length) { notify('Sélectionne au moins un employé', 'warning'); return; }
+  if (targetEmpId && empIds.length !== 1) { notify('Pour copier vers un autre employé, coche un seul employé source', 'warning'); return; }
   if (!weekKeys.length) { notify('Sélectionne au moins une semaine cible', 'warning'); return; }
   const overwrite = document.getElementById('cw-overwrite').checked;
-  const overwriteConges = document.getElementById('cw-overwrite-conges').checked;
+  const overwriteConges = false;
   const includeWeekend = document.getElementById('cw-include-weekend').checked;
 
   const sourceDays = getWeekDays(pgWeekMonday);
@@ -6533,9 +6585,11 @@ function doCopyWeek() {
       sourceDays.forEach((sd, i) => {
         if (!includeWeekend && (i === 5 || i === 6)) return; // Sam / Dim
         const targetDk = dateKey(targetDays[i]);
-        const resultat = copyDayInstances(empId, dateKey(sd), targetDk, overwrite, overwriteConges);
+        const cibleEmp = targetEmpId || empId;
+        if (cibleEmp === empId && targetDk === dateKey(sd)) return; // jamais une copie sur soi-même
+        const resultat = copyDayInstances(empId, dateKey(sd), targetDk, overwrite, overwriteConges, cibleEmp);
         if (resultat?.ignoreesPourConge?.length) {
-          alertesConge.push({ empId, dk: targetDk, insts: resultat.ignoreesPourConge });
+          alertesConge.push({ empId: cibleEmp, dk: targetDk, insts: resultat.ignoreesPourConge });
         }
       });
     });
@@ -6543,7 +6597,10 @@ function doCopyWeek() {
   saveDB();
   closeModal('modal-copy-week');
   renderPlanning();
-  notify(`Semaine copiée sur ${weekKeys.length} semaine${weekKeys.length > 1 ? 's' : ''} pour ${empIds.length} employé${empIds.length > 1 ? 's' : ''}`);
+  const cibleNom = targetEmpId ? getEmpById(targetEmpId) : null;
+  notify(cibleNom
+    ? `Semaine copiée vers ${cibleNom.prenom} ${cibleNom.nom} sur ${weekKeys.length} semaine${weekKeys.length > 1 ? 's' : ''}`
+    : `Semaine copiée sur ${weekKeys.length} semaine${weekKeys.length > 1 ? 's' : ''} pour ${empIds.length} employé${empIds.length > 1 ? 's' : ''}`);
 
   if (alertesConge.length) {
     setTimeout(() => afficherAlertesCopieConge(alertesConge), 400);
@@ -11958,8 +12015,74 @@ function initRapports() {
   sel.innerHTML = '<option value="">Toutes les équipes</option>' + [...db.equipes].sort((a,b)=>a.nom.localeCompare(b.nom,'fr')).map(e => `<option value="${e.id}">${e.nom}</option>`).join('');
   if (cur) sel.value = cur;
   _rapOffset = 0;
+  initRapportHeuresTache();
   onRapPeriodeChange();
   document.getElementById('rap-wrap').innerHTML = '<div class="hint">Choisis une période et clique "Calculer".</div>';
+}
+
+function initRapportHeuresTache() {
+  const tSel = document.getElementById('rapt-tache');
+  if (!tSel) return;
+  const cur = tSel.value;
+  tSel.innerHTML = [...db.tasks].filter(t => !t.conge).sort((a, b) => (a.nom || '').localeCompare(b.nom || '', 'fr'))
+    .map(t => `<option value="${t.id}">${escHtml(t.nom)}</option>`).join('') || '<option value="">Aucune tâche</option>';
+  if (cur && db.tasks.some(t => t.id === cur)) tSel.value = cur;
+  const coches = new Set([...document.querySelectorAll('.rapt-emp-cb:checked')].map(c => c.dataset.id));
+  const premiere = coches.size === 0;
+  document.getElementById('rapt-employes').innerHTML = getEmployesGroupesParEquipe(false).map(g => `
+    <div style="margin-bottom:8px;">
+      <div style="font-weight:600;font-size:13px;">${escHtml(g.equipe?.nom || 'Sans équipe')}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:4px;padding-left:12px;">
+        ${g.employes.map(e => `<label class="checkbox-row"><input type="checkbox" class="rapt-emp-cb" data-id="${e.id}" ${premiere || coches.has(e.id) ? 'checked' : ''}><span>${escHtml(e.prenom + ' ' + e.nom)}</span></label>`).join('')}
+      </div>
+    </div>`).join('') || '<div class="hint">Aucun employé.</div>';
+}
+function raptToutEmp(etat) { document.querySelectorAll('.rapt-emp-cb').forEach(c => { c.checked = etat; }); }
+
+function calculerHeuresTache() {
+  const { debut, fin } = rapGetBornes();
+  if (!debut || !fin || isNaN(debut) || isNaN(fin)) { notify('Période invalide', 'warning'); return; }
+  if (fin < debut) { notify('La date de fin doit être après le début', 'danger'); return; }
+  const taskId = document.getElementById('rapt-tache').value;
+  const task = db.tasks.find(t => t.id === taskId);
+  if (!task) { notify('Choisis une tâche', 'warning'); return; }
+  const ids = [...document.querySelectorAll('.rapt-emp-cb:checked')].map(c => c.dataset.id);
+  if (!ids.length) { notify('Sélectionne au moins un employé', 'warning'); return; }
+  const lignes = ids.map(id => getEmpById(id)).filter(Boolean).map(emp => {
+    let min = 0, nb = 0; const jours = new Set();
+    let cursor = new Date(debut);
+    while (cursor <= fin) {
+      const dk = dateKey(cursor);
+      (db.planning[emp.id]?.[dk] || []).forEach(inst => {
+        if (inst.taskId !== taskId) return;
+        // Portion avant minuit + portion après minuit d'une tâche à cheval, comme dans les rapports.
+        min += ownDayMinutes(inst) + postMinuitWorkMinutes(inst);
+        nb++; jours.add(dk);
+      });
+      cursor = addDays(cursor, 1);
+    }
+    return { emp, min, nb, jours: jours.size };
+  }).sort((a, b) => b.min - a.min || `${a.emp.prenom} ${a.emp.nom}`.localeCompare(`${b.emp.prenom} ${b.emp.nom}`, 'fr'));
+  const total = lignes.reduce((s, l) => s + l.min, 0);
+  const totalNb = lignes.reduce((s, l) => s + l.nb, 0);
+  const fmt = d => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+  window._raptDernier = { task, debut, fin, lignes, total };
+  document.getElementById('rapt-resultat').innerHTML = `
+    <div style="font-size:13px;margin-bottom:8px;">Tâche <b>${escHtml(task.nom)}</b> — du ${fmt(debut)} au ${fmt(fin)} — <b style="color:var(--accent);">${minToHM(total)}</b> au total (${totalNb} créneau${totalNb > 1 ? 'x' : ''})</div>
+    <table style="border-collapse:collapse;width:100%;max-width:640px;font-size:13px;">
+      <thead><tr style="border-bottom:2px solid var(--border);text-align:left;color:var(--text-muted);"><th style="padding:6px;">Employé</th><th style="padding:6px;text-align:center;">Jours</th><th style="padding:6px;text-align:center;">Créneaux</th><th style="padding:6px;text-align:center;">Heures</th></tr></thead>
+      <tbody>${lignes.map(l => `<tr style="border-bottom:1px solid var(--border);${l.min ? '' : 'opacity:.5;'}"><td style="padding:6px;">${escHtml(l.emp.prenom + ' ' + l.emp.nom)}</td><td style="padding:6px;text-align:center;">${l.jours}</td><td style="padding:6px;text-align:center;">${l.nb}</td><td style="padding:6px;text-align:center;font-family:var(--mono);font-weight:700;">${l.min ? minToHM(l.min) : '—'}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td style="padding:6px;font-weight:700;">Total</td><td></td><td style="padding:6px;text-align:center;font-weight:700;">${totalNb}</td><td style="padding:6px;text-align:center;font-family:var(--mono);font-weight:800;color:var(--accent);">${minToHM(total)}</td></tr></tfoot>
+    </table>
+    <div style="margin-top:10px;"><button class="btn btn-secondary btn-sm" onclick="exporterHeuresTacheCSV()">⬇ Export CSV</button></div>`;
+}
+function exporterHeuresTacheCSV() {
+  const r = window._raptDernier; if (!r) return;
+  const fmt = d => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+  const rows = [[`Tâche : ${r.task.nom}`, `Du ${fmt(r.debut)} au ${fmt(r.fin)}`], ['Employé', 'Jours', 'Créneaux', 'Heures'],
+    ...r.lignes.map(l => [`${l.emp.prenom} ${l.emp.nom}`, l.jours, l.nb, minToHM(l.min)]), ['Total', '', r.lignes.reduce((s, l) => s + l.nb, 0), minToHM(r.total)]];
+  const csv = rows.map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+  downloadBlob(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }), `heures-${r.task.nom.replace(/[^\w-]+/g, '_')}-${dateKey(r.debut)}_${dateKey(r.fin)}.csv`);
 }
 
 function onRapPeriodeChange() {
