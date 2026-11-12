@@ -2319,7 +2319,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.15.0';
+const APP_VERSION = '2.15.1';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2350,6 +2350,9 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.15.1', items: [
+    'Planning : le total de la semaine (grille, lecture, graphique, fenêtre d\'un jour, impression, tableau de bord) tient compte de la valeur des fériés et des congés/absences qui comptent pour les heures sup (ex. 35h sur 5 jours = 7h par jour). Cumul des congés plafonné au contrat ; une absence qui ne compte pas (maladie…) réduit l\'objectif de la semaine au lieu de créer un déficit.',
+  ] },
   { v: '2.15.0', items: [
     'Jours fériés : la tâche « Férié » est pré-remplie automatiquement sur les jours vides des employés actifs quand la semaine est affichée (pas sur un jour de repos habituel ni une semaine verrouillée). Elle ne demande aucune validation de congé et se remplace en posant une tâche de travail. Chaque jour n\'est pré-rempli qu\'une fois : si tu la supprimes, elle ne revient pas. Désactivable dans Paramètres > Options.',
     'Fenêtre d\'un jour férié : nouveau bouton « 🔶 Mettre en férié » qui remplace d\'un clic les tâches planifiées par erreur par la tâche Férié, sans passer par le calendrier des congés et sans validation.',
@@ -4102,6 +4105,43 @@ function dayTotalMinutes(empId, dk) {
   });
   return total;
 }
+// Total de la semaine affiché sur le Planning, avec la VALEUR des absences (comme le Récap paie) :
+// - heures de travail planifiées ;
+// - + valeur de chaque jour de férié ou de congé/absence qui COMPTE pour les heures sup
+//   (contrat ÷ jours travaillés, voir getCreditCongeJourMin ; durée du férié s'il en a une) ;
+// - le cumul des congés (hors fériés) est plafonné au contrat de la semaine ;
+// - une absence qui NE compte PAS (ex. maladie) ne crédite rien mais réduit d'autant l'objectif
+//   de la semaine (pas de faux déficit) ;
+// - semaine sans aucun travail mais avec absence qui compte : total = objectif exact.
+// Renvoie { total, target } en minutes.
+function getTotalSemainePlanning(emp, days) {
+  const weekKey = dateKey(days[0]);
+  const contrat = getContratMinPourDate(emp, weekKey);
+  let travail = 0, credit = 0, creditCP = 0, reduction = 0, absenceCompte = false;
+  days.forEach(d => {
+    const dk = dateKey(d);
+    const insts = db.planning[emp.id]?.[dk] || [];
+    const ferieMin = insts.reduce((s, i) => s + (db.tasks.find(t => t.id === i.taskId)?.ferie ? ownDayMinutes(i) : 0), 0);
+    const jourTravail = dayTotalMinutes(emp.id, dk) - ferieMin;
+    travail += jourTravail;
+    if (jourTravail > 0) return;
+    const ferieInst = insts.find(i => db.tasks.find(t => t.id === i.taskId)?.ferie);
+    const congeInst = insts.find(i => { const t = db.tasks.find(t2 => t2.id === i.taskId); return t?.conge && !t?.ferie; });
+    if (ferieInst) {
+      credit += ferieMin > 0 ? ferieMin : getCreditCongeJourMin(emp, d);
+      absenceCompte = true;
+    } else if (congeInst) {
+      const cred = getCreditCongeJourMin(emp, d);
+      if (congeCompteVersHS(congeInst.taskId)) { credit += cred; creditCP += cred; absenceCompte = true; }
+      else reduction += cred;
+    }
+  });
+  const target = Math.max(0, contrat - reduction);
+  credit -= excedentCreditCongeSemaine(creditCP, target);
+  let total = travail + credit;
+  if (travail === 0 && absenceCompte) total = target;
+  return { total, target };
+}
 // Renvoie la tâche de congé posée ce jour-là pour cet employé, s'il y en a une.
 function getCongeDuJour(empId, dk) {
   const inst = (db.planning[empId]?.[dk] || []).find(i => db.tasks.find(t => t.id === i.taskId)?.conge);
@@ -4439,10 +4479,13 @@ function renderPlanningEdition() {
       }).join('')}</div>` : '';
       return `<td class="pg-day-cell" onclick="openDayDetail('${emp.id}','${dk}')">${badge}${stack}</td>`;
     }).join('');
-    const weekCls = badgeClass(weekTotal, contratMin);
+    const swk = getTotalSemainePlanning(emp, days);
+    weekTotal = swk.total;
+    const contratAff = swk.target;
+    const weekCls = badgeClass(weekTotal, contratAff);
     const weekCell = `<td class="pg-week-cell">
       <div class="pg-badge ${weekCls}" style="font-size:12.5px;">${minToHM(weekTotal)}</div>
-      <div class="pg-week-target">/ ${minToHM(contratMin)}</div>
+      <div class="pg-week-target">/ ${minToHM(contratAff)}</div>
     </td>`;
     const joursCongeRemp = getJoursCongeAvecRemplacement(emp.id, days);
     const boutonRemplacement = joursCongeRemp.length
@@ -4502,8 +4545,9 @@ function renderLectureCardPourEmploye(emp, weekMonday) {
       <div class="lec-day-tasks">${tasksHtml}${totalHtml}</div>
     </div>`;
   }).join('');
-  const contratMin = (emp.contratH || 35) * 60;
-  const weekTotal = days.reduce((sum, d) => sum + dayTotalMinutes(emp.id, dateKey(d)), 0);
+  const swk = getTotalSemainePlanning(emp, days);
+  const contratMin = swk.target;
+  const weekTotal = swk.total;
   const weekCls = badgeClass(weekTotal, contratMin);
   const bg = { ok: 'rgba(46,204,113,.15)', under: 'rgba(245,166,35,.15)', over: 'rgba(255,77,106,.15)', empty: 'rgba(139,146,184,.12)' };
   const col = { ok: 'var(--success)', under: 'var(--warning)', over: 'var(--danger)', empty: 'var(--text-dim)' };
@@ -4819,8 +4863,9 @@ function renderGraphiqueSemaine() {
         const alertePauseHtml = badgeAlertePauseJour(emp.id, dk);
         cells += `<div class="grw-cell grw-prop" style="grid-row:${row};grid-column:${j+2};cursor:pointer;position:relative;" onclick="openDayDetail('${emp.id}','${dk}')" title="Cliquer pour modifier cette journée">${barsHtml}${alertePauseHtml}</div>`;
       });
-      const contratMin = (emp.contratH || 35) * 60;
-      const weekTotal = days.reduce((sum, d) => sum + dayTotalMinutes(emp.id, dateKey(d)), 0);
+      const swk = getTotalSemainePlanning(emp, days);
+      const contratMin = swk.target;
+      const weekTotal = swk.total;
       const weekCls = badgeClass(weekTotal, contratMin);
       cells += `<div class="grw-cell grw-week-total" style="grid-row:${row};grid-column:9;">
         <div class="pg-badge ${weekCls}" style="font-size:12.5px;">${minToHM(weekTotal)}</div>
@@ -5510,8 +5555,9 @@ function updateDjBadge() {
 function updateDjWeekBadge() {
   const emp = getEmpById(djCurrentEmp);
   const monday = getMonday(isoToDate(djCurrentDate));
-  const total = getWeekDays(monday).reduce((sum, d) => sum + dayTotalMinutes(djCurrentEmp, dateKey(d)), 0);
-  const contratMin = (emp?.contratH || 35) * 60;
+  const swk = emp ? getTotalSemainePlanning(emp, getWeekDays(monday)) : { total: 0, target: 35 * 60 };
+  const total = swk.total;
+  const contratMin = swk.target;
   const cls = badgeClass(total, contratMin);
   const bg = { ok: 'rgba(46,204,113,.15)', under: 'rgba(245,166,35,.15)', over: 'rgba(255,77,106,.15)', empty: 'rgba(139,146,184,.12)' };
   const col = { ok: 'var(--success)', under: 'var(--warning)', over: 'var(--danger)', empty: 'var(--text-dim)' };
@@ -12400,8 +12446,8 @@ function renderDashboard() {
     else if (hasTravail) presents++;
     else sansPlanning++;
 
-    const weekTotal = weekDays.reduce((s, d) => s + dayTotalMinutes(emp.id, dateKey(d)), 0);
-    if (weekTotal > (emp.contratH || 35) * 60) enHeuresSup++;
+    const swk = getTotalSemainePlanning(emp, weekDays);
+    if (swk.total > swk.target) enHeuresSup++;
   });
 
   // Congés à venir sous 7 jours
@@ -14305,8 +14351,9 @@ function genererPlanningGraphiqueHtml(days) {
         const barsHtml = renderProportionalCell(emp.id, dk, usedTaskIds, 280);
         cells += `<div class="grw-cell grw-prop" style="grid-row:${row};grid-column:${j+2};">${barsHtml}</div>`;
       });
-      const contratMin = (emp.contratH || 35) * 60;
-      const weekTotal = days.reduce((sum, d) => sum + dayTotalMinutes(emp.id, dateKey(d)), 0);
+      const swk = getTotalSemainePlanning(emp, days);
+      const contratMin = swk.target;
+      const weekTotal = swk.total;
       const weekCls = badgeClass(weekTotal, contratMin);
       const badgeCol = { ok: '#1e8a4c', over: '#c62840', under: '#b5730a', empty: '#888' }[weekCls] || '#888';
       cells += `<div class="grw-cell grw-week-total" style="grid-row:${row};grid-column:9;">
