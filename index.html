@@ -1054,6 +1054,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <div class="hint" style="margin:4px 0 12px 26px;">Mêmes clics et mêmes fonctions qu'aujourd'hui ; les colonnes des jours sont un peu plus larges. Quand plusieurs tâches se partagent une plage, c'est leur abréviation (fiche de la tâche) qui s'affiche.</div>
 
           <div class="section-label">🛌 Repos hebdomadaire</div>
+          <label class="checkbox-row"><input type="checkbox" id="pa-opt-feries-auto" onchange="saveParamOptions()"><span>Pré-remplir automatiquement la tâche « Férié » sur les jours fériés (jours vides, remplaçable par une tâche)</span></label>
           <label class="checkbox-row"><input type="checkbox" id="pa-opt-repos-auto" onchange="saveParamOptions()"><span>Afficher « REPOS HEBDO » sur le jour de repos habituel de chaque employé (fiche employé)</span></label>
           <div class="hint" style="margin:4px 0 0 26px;">Simple affichage dans le planning, les impressions et les e-mails : rien n'est écrit dans le planning, donc aucune incidence sur les pointages, les heures, les heures sup ni les congés. Dès qu'une tâche ou un congé est posé ce jour-là, il remplace automatiquement l'affichage « REPOS HEBDO ».</div>
         </div>
@@ -1400,6 +1401,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
         <div style="display:flex;gap:10px;margin-top:12px;">
           <button class="btn btn-secondary btn-sm" onclick="completerJournee()" title="Sélectionne une tâche (simple clic) pour choisir laquelle étirer, sinon la dernière posée sera utilisée">🎯 Compléter jusqu'à l'objectif</button>
           <button class="btn btn-secondary btn-sm" onclick="openCopyDayModal()">📋 Copier vers...</button>
+          <button class="btn btn-secondary btn-sm" id="dj-btn-ferie" style="display:none;color:var(--warning);" onclick="remplacerJourParFerie()" title="Remplace toutes les tâches de ce jour par la tâche Férié — sans passer par le calendrier des congés, sans validation">🔶 Mettre en férié</button>
           <button class="btn btn-primary btn-sm" style="margin-left:auto;" onclick="closeModal('modal-day')">Terminé</button>
         </div>
       </div>
@@ -2317,7 +2319,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.14.0';
+const APP_VERSION = '2.15.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2348,6 +2350,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.15.0', items: [
+    'Jours fériés : la tâche « Férié » est pré-remplie automatiquement sur les jours vides des employés actifs quand la semaine est affichée (pas sur un jour de repos habituel ni une semaine verrouillée). Elle ne demande aucune validation de congé et se remplace en posant une tâche de travail. Chaque jour n\'est pré-rempli qu\'une fois : si tu la supprimes, elle ne revient pas. Désactivable dans Paramètres > Options.',
+    'Fenêtre d\'un jour férié : nouveau bouton « 🔶 Mettre en férié » qui remplace d\'un clic les tâches planifiées par erreur par la tâche Férié, sans passer par le calendrier des congés et sans validation.',
+  ] },
   { v: '2.14.0', items: [
     'Copie de journée / de semaine : les congés (et fériés posés) ne sont plus jamais copiés, donc plus jamais enregistrés dans le calendrier des congés. Les congés déjà posés sur la cible sont conservés.',
     'Copie de semaine : possibilité de copier la semaine d\'un employé vers un AUTRE employé, sur la ou les semaines de ton choix (la semaine copiée est incluse, ainsi que les 4 semaines précédentes).',
@@ -4233,6 +4239,7 @@ function restaurerScrollPlanning(sv) {
   document.querySelectorAll('#view-planning .grw-wrap').forEach((w, i) => { if (sv.wraps[i]) { w.scrollTop = sv.wraps[i][0]; w.scrollLeft = sv.wraps[i][1]; } });
 }
 function renderPlanning() {
+  try { if (preremplirFeriesSemaine(pgWeekMonday)) saveDB(); } catch (e) { console.error('Pré-remplissage fériés:', e); }
   const sv = capturerScrollPlanning();
   const memeVue = _planningScrollKey === sv.key;
   _planningScrollKey = sv.key;
@@ -5033,6 +5040,8 @@ function renderPalette() {
 
   let ferieHtml = '';
   const estJourFerie = djCurrentDate && !!getJoursFeries(isoToDate(djCurrentDate).getFullYear())[djCurrentDate];
+  const btnFerie = document.getElementById('dj-btn-ferie');
+  if (btnFerie) btnFerie.style.display = estJourFerie ? '' : 'none';
   const tacheFerie = db.tasks.find(t => t.ferie);
   if (estJourFerie && tacheFerie && !catFilter && (!q || tacheFerie.nom.toLowerCase().includes(q))) {
     ferieHtml = `<div class="dj-cat-label" style="color:var(--warning);">🔶 Jour férié</div>` +
@@ -8392,6 +8401,71 @@ function getOrCreateTacheFerie() {
     db.tasks.push(t);
   }
   return t;
+}
+
+// Durée (min) d'un férié posé automatiquement : la valeur d'un jour pour cet employé
+// (contrat ÷ jours travaillés, voir getCreditCongeJourMin), 7h si indéterminée.
+function dureeFerieAutoMin(emp, d) {
+  return getCreditCongeJourMin(emp, d) || 420;
+}
+function construireInstanceFerie(emp, dk) {
+  const tache = getOrCreateTacheFerie();
+  const debut = 480, fin = Math.min(1439, debut + dureeFerieAutoMin(emp, isoToDate(dk)));
+  return { id: uid(), taskId: tache.id, debut, fin, crosseMinuit: false };
+  // Pas de champ « confirme » : un férié ne passe JAMAIS par la validation des congés.
+}
+
+// Pré-remplissage automatique : pour les semaines affichées contenant un jour férié, chaque
+// employé actif dont le jour est VIDE reçoit la tâche Férié (remplaçable par une vraie tâche
+// d'un simple glisser-déposer : poser du travail retire le congé). Chaque couple employé/jour
+// n'est traité qu'UNE fois (db.params.feriesPrefill) — si tu supprimes ensuite le férié, il ne
+// revient pas. Jamais sur une semaine verrouillée, un jour de repos habituel, ni avant l'entrée
+// de l'employé. Désactivable (Paramètres > Options).
+function preremplirFeriesSemaine(monday) {
+  if (db.params.options && db.params.options.feriesAuto === false) return false;
+  if (typeof _semaineTypeEditBackupWeek !== 'undefined' && _semaineTypeEditBackupWeek) return false;
+  if (!monday || estSemaineVerrouillee(monday)) return false;
+  const jours = getWeekDays(monday).map(dateKey).filter(dk => !!getJoursFeries(isoToDate(dk).getFullYear())[dk]);
+  if (!jours.length) return false;
+  if (!db.params.feriesPrefill) db.params.feriesPrefill = {};
+  const faits = db.params.feriesPrefill;
+  let ajoutes = 0, marques = 0;
+  db.employes.forEach(emp => {
+    jours.forEach(dk => {
+      const cle = emp.id + '|' + dk;
+      if (faits[cle]) return;
+      if (!estActifPendant(emp, dk, dk)) return;
+      if (emp.dateDebutContrat && dk < emp.dateDebutContrat) return;
+      const d = isoToDate(dk);
+      if (estJourReposHabituel(emp.id, d.getDay())) return;
+      if (!db.planning[emp.id]) db.planning[emp.id] = {};
+      const insts = db.planning[emp.id][dk] || [];
+      faits[cle] = 1; marques++;
+      if (insts.length) return; // jour déjà rempli : on ne touche à rien
+      db.planning[emp.id][dk] = [construireInstanceFerie(emp, dk)];
+      ajoutes++;
+    });
+  });
+  return ajoutes + marques > 0;
+}
+
+// Bouton « Mettre en férié » de la fenêtre d'un jour férié : remplace les tâches du jour par la
+// tâche Férié, sans calendrier des congés et sans validation.
+function remplacerJourParFerie() {
+  const emp = getEmpById(djCurrentEmp);
+  if (!emp || !djCurrentDate) return;
+  if (!verifierSemaineModifiable(djCurrentDate)) return;
+  const existantes = (db.planning[djCurrentEmp]?.[djCurrentDate] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.ferie);
+  if (existantes.length && !confirm(`Remplacer ${existantes.length} tâche(s)/congé(s) de ce jour par « Férié » ?`)) return;
+  const tache = getOrCreateTacheFerie();
+  appliquerExclusionCongeTravail(djCurrentEmp, djCurrentDate, tache);
+  db.planning[djCurrentEmp][djCurrentDate] = [construireInstanceFerie(emp, djCurrentDate)];
+  if (!db.params.feriesPrefill) db.params.feriesPrefill = {};
+  db.params.feriesPrefill[djCurrentEmp + '|' + djCurrentDate] = 1;
+  saveDB();
+  renderTrack();
+  renderPlanning();
+  notify('Jour passé en férié');
 }
 
 // Durée de la tâche Férié pour un employé un jour donné — placée manuellement par l'admin depuis
@@ -12416,6 +12490,7 @@ function saveParamOptions() {
   db.params.options.headerSticky = document.getElementById('pa-opt-header-sticky').checked;
   db.params.options.cote = document.getElementById('pa-opt-cote').checked;
   db.params.options.reposAuto = document.getElementById('pa-opt-repos-auto').checked;
+  db.params.options.feriesAuto = document.getElementById('pa-opt-feries-auto').checked;
   saveDB();
   renderPlanning();
   notify('Options enregistrées');
@@ -12425,6 +12500,7 @@ function initParametres() {
   document.getElementById('pa-opt-header-sticky').checked = getOpt('headerSticky');
   document.getElementById('pa-opt-cote').checked = getOpt('cote');
   document.getElementById('pa-opt-repos-auto').checked = getOpt('reposAuto');
+  document.getElementById('pa-opt-feries-auto').checked = db.params.options?.feriesAuto !== false;
   document.getElementById('pa-societe').value = db.params.societeNom || '';
   document.getElementById('pa-societe-couleur-on').checked = !!db.params.societeCouleur;
   document.getElementById('pa-societe-couleur').value = db.params.societeCouleur || '#2f6df6';
