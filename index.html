@@ -976,7 +976,9 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
             <select id="va-periode" onchange="calculerValidation()">
               <option value="1">Aujourd'hui</option>
               <option value="7" selected>7 derniers jours</option>
+              <option value="14">14 derniers jours</option>
               <option value="30">30 derniers jours</option>
+              <option value="60">60 derniers jours</option>
             </select>
           </div>
           <div class="form-group" style="margin:0;width:140px;flex-shrink:0;">
@@ -2319,7 +2321,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.15.1';
+const APP_VERSION = '2.15.2';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2350,6 +2352,11 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.15.2', items: [
+    'Pointages : un service planifié sans aucun pointage (ex. 2e tournée oubliée après une pause alors que le 1er service a été pointé) apparaît désormais en « Non pointé » avec un bouton ➕ pour saisir l\'embauche et la débauche à la main.',
+    'Pointages : un pointage en attente de validation affiche l\'heure réellement pointée (⏳) et peut être validé/modifié directement depuis la ligne (✏️).',
+    'Validation : périodes 14 et 60 derniers jours ajoutées (un oubli de plus de 7 jours n\'apparaissait pas).',
+  ] },
   { v: '2.15.1', items: [
     'Planning : le total de la semaine (grille, lecture, graphique, fenêtre d\'un jour, impression, tableau de bord) tient compte de la valeur des fériés et des congés/absences qui comptent pour les heures sup (ex. 35h sur 5 jours = 7h par jour). Cumul des congés plafonné au contrat ; une absence qui ne compte pas (maladie…) réduit l\'objectif de la semaine au lieu de créer un déficit.',
   ] },
@@ -13256,6 +13263,8 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
           const debEnAttente = evtsDeb.some(e => e.type === 'debauche' && e.statut === 'attente');
 
           const enAttente = embEnAttente || debEnAttente;
+          const embPend = [...evtsEmb].reverse().find(e => e.type === 'embauche' && e.statut === 'attente') || null;
+          const debPend = [...evtsDeb].reverse().find(e => e.type === 'debauche' && e.statut === 'attente') || null;
           const serviceComplet = [...instsHierCross, ...groupeFusionne];
 
           if (embEvt || debEvt || enAttente) {
@@ -13282,6 +13291,7 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
               modeEmbauche: embEvt ? (modeLabels[embEvt.modeValidation] || '—') : '—',
               modeDebauche: debEvt ? (modeLabels[debEvt.modeValidation] || '—') : '—',
               dureeReelle, statutLabel, statutCls,
+              embPend, debPend, dkEmbEvt: dkHier, dkDebEvt: dk,
             });
           }
         }
@@ -13346,7 +13356,15 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
           const debEnAttente = evtsDeb.some(e => e.type === 'debauche' && e.statut === 'attente');
 
           const enAttente = embEnAttente || debEnAttente;
-          if (!embEvt && !debEvt && !enAttente) return;
+          const embPend = [...evtsEmb].reverse().find(e => e.type === 'embauche' && e.statut === 'attente') || null;
+          const debPend = [...evtsDeb].reverse().find(e => e.type === 'debauche' && e.statut === 'attente') || null;
+          // Service planifié SANS aucun pointage alors que l'employé a pointé autre chose ce jour-là
+          // (ex. 2e tournée oubliée après une pause) : affiché comme « Non pointé » pour pouvoir
+          // saisir ses heures ici, au lieu de disparaître de l'écran.
+          const finService = dkDebauche !== dk ? Infinity : derniere.fin;
+          const servicePasse = dk < dateKey(new Date()) || (dk === dateKey(new Date()) && new Date().getHours() * 60 + new Date().getMinutes() > finService);
+          const nonPointe = !embEvt && !debEvt && !enAttente;
+          if (nonPointe && !servicePasse) return;
 
           // Pour l'affichage (durée, libellé des tâches), utilise le service complet fusionné —
           // sinon "Distribution 22h→05h + Tournée 29" afficherait à tort seulement Distribution.
@@ -13370,10 +13388,12 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
             dureeReelle = Math.max(0, fMin - dMin - chaineAffichage.reduce((s, i) => s + (i.pauseDuree || 0), 0));
           }
           let statutLabel = 'Complet', statutCls = 'ok';
-          if (enAttente) { statutLabel = 'En attente de validation'; statutCls = 'warning'; }
+          if (nonPointe) { statutLabel = 'Non pointé'; statutCls = 'warning'; }
+          else if (enAttente) { statutLabel = 'En attente de validation'; statutCls = 'warning'; }
           else if (!embEvt || !debEvt) { statutLabel = 'Incomplet'; statutCls = 'muted'; }
 
           rows.push({
+            embPend, debPend, dkEmbEvt: dk, dkDebEvt: dkDebauche,
             emp, dk, instEmb: premiere, instDeb: derniere,
             tachesLabel, prevuLabel, dureePrevue, nuitMin,
             embEvt, debEvt,
@@ -13460,9 +13480,14 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
 
     const actionIcons = (r, idx) => {
       let html = '';
+      const peutCreer = !!r.instEmb?.taskId; // service planifié : on peut saisir une heure manquante
       if (r.embEvt) html += `<span class="pt-action-ico" title="Modifier l'embauche" onclick="openEditPointage(${idx},'embauche')">✏️</span><span class="pt-action-ico" title="Supprimer l'embauche" onclick="deletePointageEvt(${idx},'embauche')">🗑️</span>`;
+      else if (r.embPend) html += `<span class="pt-action-ico" title="Valider / modifier l'embauche en attente" onclick="openEditPointage(${idx},'embauche')">✏️</span>`;
+      else if (peutCreer) html += `<span class="pt-action-ico" title="Saisir l'embauche manquante" onclick="openEditPointage(${idx},'embauche')">➕</span>`;
       html += '<br>';
       if (r.debEvt) html += `<span class="pt-action-ico" title="Modifier la débauche" onclick="openEditPointage(${idx},'debauche')">✏️</span><span class="pt-action-ico" title="Supprimer la débauche" onclick="deletePointageEvt(${idx},'debauche')">🗑️</span>`;
+      else if (r.debPend) html += `<span class="pt-action-ico" title="Valider / modifier la débauche en attente" onclick="openEditPointage(${idx},'debauche')">✏️</span>`;
+      else if (peutCreer) html += `<span class="pt-action-ico" title="Saisir la débauche manquante" onclick="openEditPointage(${idx},'debauche')">➕</span>`;
       return html || '—';
     };
 
@@ -13473,7 +13498,7 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
         <td style="padding:8px;">${r.tachesLabel}</td>
         <td style="padding:8px;font-family:var(--mono);color:var(--text-muted);">${r.prevuLabel}<br><span style="font-size:11px;">${minToHM(r.dureePrevue)}</span></td>
         <td style="padding:8px;font-family:var(--mono);font-size:11px;color:${r.nuitMin > 0 ? '#9d8fff' : 'var(--text-dim)'};">${r.nuitMin > 0 ? minToHM(r.nuitMin) : '—'}</td>
-        <td style="padding:8px;font-family:var(--mono);">E ${r.reelEmbauche || '…'}<br>D ${r.reelDebauche || '…'}</td>
+        <td style="padding:8px;font-family:var(--mono);">E ${r.reelEmbauche || (r.embPend?.heure ? r.embPend.heure + ' <span title="En attente de validation" style="color:var(--warning);">⏳</span>' : '…')}<br>D ${r.reelDebauche || (r.debPend?.heure ? r.debPend.heure + ' <span title="En attente de validation" style="color:var(--warning);">⏳</span>' : '…')}</td>
         <td style="padding:8px;font-family:var(--mono);">
           <span style="color:${ecartColor(r.ecartEmbauche)};">${ecartTxt(r.ecartEmbauche)}</span><br>
           <span style="color:${ecartColor(r.ecartDebauche)};">${ecartTxt(r.ecartDebauche)}</span>
@@ -13758,14 +13783,19 @@ let epContext = null;
 function openEditPointage(rowIdx, type) {
   const r = window._ptRows[rowIdx];
   if (!r) return;
-  const evt = type === 'embauche' ? r.embEvt : r.debEvt;
-  if (!evt) return;
+  const evt = type === 'embauche' ? (r.embEvt || r.embPend) : (r.debEvt || r.debPend);
   const inst = type === 'embauche' ? r.instEmb : r.instDeb;
   const task = db.tasks.find(t => t.id === inst?.taskId);
-  epContext = { dk: r.dk, empId: r.emp.id, evtKey: evt.key };
-  document.getElementById('ep-contexte').textContent = `${r.emp.prenom} ${r.emp.nom} — ${type === 'embauche' ? 'Embauche' : 'Débauche'} — ${task?.nom || ''}`;
-  document.getElementById('ep-heure').value = evt.heureRetenue || evt.heure || '';
-  document.getElementById('ep-commentaire').value = evt.commentaireAdmin || '';
+  if (!evt && !inst?.taskId) return;
+  // Pas encore d'événement : on en CRÉE un (saisie manuelle admin), sur le jour où il doit vivre
+  // (la débauche d'un service à cheval sur minuit est enregistrée le lendemain).
+  const dkEvt = (type === 'embauche' ? r.dkEmbEvt : r.dkDebEvt) || r.dk;
+  epContext = evt
+    ? { dk: dkEvt, empId: r.emp.id, evtKey: evt.key }
+    : { dk: dkEvt, empId: r.emp.id, evtKey: null, creer: { type, instId: inst.id, taskId: inst.taskId } };
+  document.getElementById('ep-contexte').textContent = `${r.emp.prenom} ${r.emp.nom} — ${type === 'embauche' ? 'Embauche' : 'Débauche'} — ${task?.nom || ''}${evt ? '' : ' (saisie manuelle)'}`;
+  document.getElementById('ep-heure').value = evt ? (evt.heureRetenue || evt.heure || '') : minToTime(type === 'embauche' ? inst.debut : inst.fin);
+  document.getElementById('ep-commentaire').value = evt?.commentaireAdmin || '';
   openModal('modal-edit-pointage');
 }
 
@@ -13782,7 +13812,9 @@ async function saveEditPointage() {
     const snap = await fbDb.ref(path).once('value');
     const evtsJour = Object.entries(snap.val() || {}).map(([key, v]) => ({ ...v, key }));
     const splitSeuil = db.params.pointagePauseSeuilMin ?? 40;
-    const chevauchements = detecterChevauchementsRetenue(epContext.empId, epContext.dk, evtsJour, splitSeuil, epContext.evtKey, heure);
+    const chevauchements = epContext.creer
+      ? detecterChevauchementsRetenue(epContext.empId, epContext.dk, evtsJour, splitSeuil, null, heure, epContext.creer.type, epContext.creer.instId)
+      : detecterChevauchementsRetenue(epContext.empId, epContext.dk, evtsJour, splitSeuil, epContext.evtKey, heure);
     if (chevauchements.length) {
       const [x, y] = chevauchements[0];
       const confirmMsg = `⚠️ Cette modification ferait chevaucher deux tournées de la même journée :\n\n"${x.taskNom}" (${x.label}) et "${y.taskNom}" (${y.label})\n\nLes heures en commun seraient comptées deux fois dans le Récap paie. Enregistrer quand même ?`;
@@ -13792,9 +13824,12 @@ async function saveEditPointage() {
     console.error('Vérification chevauchement :', err);
   }
 
-  fbDb.ref(`${path}/${epContext.evtKey}`).update({
-    heureRetenue: heure, commentaireAdmin: commentaire, modeValidation: 'admin_modifie', statut: 'valide',
-  }).then(() => {
+  const ecriture = epContext.creer
+    ? fbDb.ref(path).push({ type: epContext.creer.type, ts: Date.now(), heure: null, instId: epContext.creer.instId, taskId: epContext.creer.taskId, statut: 'valide', modeValidation: 'admin_modifie', heureRetenue: heure, commentaireAdmin: commentaire, motif: null })
+    : fbDb.ref(`${path}/${epContext.evtKey}`).update({
+        heureRetenue: heure, commentaireAdmin: commentaire, modeValidation: 'admin_modifie', statut: 'valide',
+      });
+  ecriture.then(() => {
     logAudit('Pointage modifié', `${empNom ? empNom.prenom + ' ' + empNom.nom : epContext.empId} — ${epContext.dk} — heure retenue : ${heure}${commentaire ? ' — ' + commentaire : ''}`);
     closeModal('modal-edit-pointage');
     notify('Pointage modifié');
