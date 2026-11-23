@@ -2321,7 +2321,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.15.2';
+const APP_VERSION = '2.16.1';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2352,6 +2352,13 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.16.1', items: [
+    'Récap paie / Compteur / Clôture : correction d\'un cas où une journée pouvait compter 24h EN TROP (ex. Noé LACHENY le 07/11 : 31h45 au lieu de 7h45, +25h45 d\'heures sup affichées). Quand une embauche et une débauche avaient la même heure — ou aucune heure lisible (pointage sans heure retenue, notamment hors planning) — le calcul ajoutait « le lendemain » (+24h). Une durée nulle reste désormais nulle, et une heure illisible retombe sur l\'horaire du planning (ou est ignorée pour un pointage hors planning).',
+  ] },
+  { v: '2.16.0', items: [
+    'Planning : avant de supprimer une tâche, de passer un jour en férié ou de copier un jour/une semaine AVEC écrasement, l\'appli prévient si des pointages sont déjà enregistrés sur les tâches concernées (ils deviendraient « orphelins » et seraient mal comptés dans le Récap paie).',
+    'Pointages : nouveau bloc « 🔗 Pointages orphelins » sous le tableau — liste les pointages dont la tâche n\'existe plus dans le planning et permet de les rattacher à une tâche actuelle (veille, jour ou lendemain pour un service à cheval sur minuit). Jamais automatique.',
+  ] },
   { v: '2.15.2', items: [
     'Pointages : un service planifié sans aucun pointage (ex. 2e tournée oubliée après une pause alors que le 1er service a été pointé) apparaît désormais en « Non pointé » avec un bouton ➕ pour saisir l\'embauche et la débauche à la main.',
     'Pointages : un pointage en attente de validation affiche l\'heure réellement pointée (⏳) et peut être validé/modifié directement depuis la ligne (✏️).',
@@ -5748,8 +5755,40 @@ function saveInstancePrecise() {
   setTimeout(proposerPausesEntreTaches, 50);
 }
 
-function deleteInstanceFromModal() {
+// Pointages déjà enregistrés (Firebase) sur des tâches du planning : cherche le jour et le lendemain
+// (la débauche d'un service à cheval sur minuit vit sur le jour suivant). Sert à prévenir l'admin
+// avant une action qui détache ces pointages de leur tâche (suppression, remplacement, écrasement).
+async function pointagesLiesAuxTaches(empId, dk, instIds) {
+  if (!fbDb || !instIds.length) return [];
+  const ids = new Set(instIds);
+  const trouves = [];
+  const dks = [dk, dateKey(addDays(isoToDate(dk), 1))];
+  await Promise.all(dks.map(async d => {
+    try {
+      const snap = await fbDb.ref(`pointages/${d.slice(0, 4)}/${d}/${empId}/evenements`).once('value');
+      Object.values(snap.val() || {}).forEach(e => { if (ids.has(e.instId)) trouves.push(e); });
+    } catch (err) { console.error('Lecture pointages liés :', err); }
+  }));
+  return trouves;
+}
+async function compterPointagesLies(lots) {
+  const res = await Promise.all(lots.map(l => pointagesLiesAuxTaches(l.empId, l.dk, l.instIds)));
+  return res.reduce((s, r) => s + r.length, 0);
+}
+function messagePointagesLies(n, action) {
+  return `⚠️ ${n} pointage(s) déjà enregistré(s) sur ce que tu t'apprêtes à ${action}.\n\nIls ne seront plus rattachés à une tâche du planning (« orphelins ») et les heures du service risquent d'être mal comptées dans le Récap paie.\n\nTu pourras les rattacher à la nouvelle tâche depuis l'écran Pointages (bloc « 🔗 Pointages orphelins »).\n\nContinuer ?`;
+}
+async function confirmerSiPointes(lots, action) {
+  const n = await compterPointagesLies(lots);
+  return n ? confirm(messagePointagesLies(n, action)) : true;
+}
+
+async function deleteInstanceFromModal() {
   if (!verifierSemaineModifiable(djCurrentDate)) return;
+  {
+    const instAvant = getDayInsts().find(i => i.id === miCurrentInst);
+    if (instAvant && !(await confirmerSiPointes([{ empId: djCurrentEmp, dk: djCurrentDate, instIds: [instAvant.id] }], 'supprimer'))) return;
+  }
   const insts = getDayInsts();
   const idx = insts.findIndex(i => i.id === miCurrentInst);
   if (idx >= 0) {
@@ -5766,9 +5805,10 @@ function deleteInstanceFromModal() {
   notify('Tâche supprimée');
 }
 
-function deleteInstance(e, instId) {
+async function deleteInstance(e, instId) {
   e.stopPropagation();
   if (!verifierSemaineModifiable(djCurrentDate)) return;
+  if (!(await confirmerSiPointes([{ empId: djCurrentEmp, dk: djCurrentDate, instIds: [instId] }], 'supprimer'))) return;
   const insts = getDayInsts();
   const idx = insts.findIndex(i => i.id === instId);
   if (idx >= 0) {
@@ -6526,12 +6566,26 @@ function renderCopyDayCheckboxes() {
   }).join('');
 }
 
-function doCopyDay() {
+// Tâches de travail d'un jour cible qu'une copie avec écrasement va supprimer — uniquement les jours
+// déjà atteints (aucun pointage n'existe pour le futur).
+function lotsCiblesEcrasees(couples) {
+  const aujourdhui = dateKey(new Date());
+  const lots = [];
+  couples.forEach(({ empId, dk }) => {
+    if (dk > aujourdhui) return;
+    const ids = (db.planning[empId]?.[dk] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge).map(i => i.id);
+    if (ids.length) lots.push({ empId, dk, instIds: ids });
+  });
+  return lots;
+}
+
+async function doCopyDay() {
   const targetEmp = document.getElementById('cd-employe').value;
   const targets = [...document.querySelectorAll('.cd-day-cb:checked')].map(cb => cb.dataset.dk);
   if (!targets.length) { notify('Sélectionne au moins un jour cible', 'warning'); return; }
   const overwrite = document.getElementById('cd-overwrite').checked;
   const overwriteConges = false;
+  if (overwrite && !(await confirmerSiPointes(lotsCiblesEcrasees(targets.map(dk => ({ empId: targetEmp, dk }))), 'écraser'))) return;
   targets.forEach(dk => copyDayInstances(djCurrentEmp, djCurrentDate, dk, overwrite, overwriteConges, targetEmp));
   saveDB();
   closeModal('modal-copy-day');
@@ -6628,7 +6682,7 @@ function toggleAllCopyEmp(state) {
   document.querySelectorAll('.cw-equipe-cb').forEach(cb => { cb.checked = state; cb.indeterminate = false; });
 }
 
-function doCopyWeek() {
+async function doCopyWeek() {
   const empIds = [...document.querySelectorAll('.cw-emp-cb:checked')].map(cb => cb.dataset.id);
   const weekKeys = [...document.querySelectorAll('.cw-week-cb:checked')].map(cb => cb.dataset.monday);
   const targetEmpId = document.getElementById('cw-target-emp')?.value || '';
@@ -6640,6 +6694,20 @@ function doCopyWeek() {
   const includeWeekend = document.getElementById('cw-include-weekend').checked;
 
   const sourceDays = getWeekDays(pgWeekMonday);
+  if (overwrite) {
+    const couples = [];
+    weekKeys.forEach(mondayKey => {
+      const targetDays = getWeekDays(isoToDate(mondayKey));
+      empIds.forEach(empId => sourceDays.forEach((sd, i) => {
+        if (!includeWeekend && (i === 5 || i === 6)) return;
+        const targetDk = dateKey(targetDays[i]);
+        const cibleEmp = targetEmpId || empId;
+        if (cibleEmp === empId && targetDk === dateKey(sd)) return;
+        couples.push({ empId: cibleEmp, dk: targetDk });
+      }));
+    });
+    if (!(await confirmerSiPointes(lotsCiblesEcrasees(couples), 'écraser'))) return;
+  }
   const alertesConge = []; // { empId, dk, insts } — tâches non copiées à cause d'un congé sur la cible
   weekKeys.forEach(mondayKey => {
     const targetDays = getWeekDays(isoToDate(mondayKey));
@@ -8204,7 +8272,9 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
     const debEvt = [...evts].reverse().find(e => e.type === 'debauche' && e.instId === derniereService.id);
     if (embEvt && debEvt) {
       let dMin = timeToMin(embEvt.heureRetenue || embEvt.heure), fMin = timeToMin(debEvt.heureRetenue || debEvt.heure);
-      if (fMin <= dMin) fMin += 1440;
+      if (dMin === null) dMin = premiereService.debut;
+      if (fMin === null) fMin = derniereService.fin;
+      if (fMin < dMin) fMin += 1440;
       const pauseApres = instsHierCross.reduce((s, i) => s + postPauseMinutes(i), 0)
         + instsFusionnees.reduce((s, i) => s + (i.pauseDuree || 0), 0);
       const apresMinuitBrut = Math.max(0, fMin - 1440);
@@ -8258,8 +8328,8 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
         const evtsFinales = curDk === dk ? evts : Object.values(pointagesParAnnee[curDk.slice(0, 4)]?.[curDk]?.[empId]?.evenements || {});
         const debEvt2 = [...evtsFinales].reverse().find(e => e.instId === curInst.id && e.type === 'debauche');
         if (embEvt2 && debEvt2) {
-          let dMin2 = timeToMin(embEvt2.heureRetenue || embEvt2.heure), fMin2 = timeToMin(debEvt2.heureRetenue || debEvt2.heure);
-          if (fMin2 <= dMin2) fMin2 += 1440;
+          let dMin2 = timeToMin(embEvt2.heureRetenue || embEvt2.heure) ?? prem.debut, fMin2 = timeToMin(debEvt2.heureRetenue || debEvt2.heure) ?? curInst.fin;
+          if (fMin2 < dMin2) fMin2 += 1440;
           nuitPenibleMin += minutesFenetrePenibilite(dMin2, curDk === dk ? fMin2 : Math.min(fMin2, 1440));
           if (curDk === dk) {
             const pauseTotaleChaine = chaine.reduce((s, i) => s + (i.pauseDuree || 0), 0);
@@ -8297,9 +8367,9 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
       // ici, c'est le même principe appliqué à l'échelle d'un service au lieu du jour entier. Quand
       // un événement EXISTE mais n'a pas encore d'heureRetenue (en attente de validation), on utilise
       // l'heure réellement pointée en provisoire — jamais le planning, qui masquerait l'écart.
-      let dMin = embEvt ? timeToMin(embEvt.heureRetenue || embEvt.heure) : prem.debut;
-      let fMin = debEvt ? timeToMin(debEvt.heureRetenue || debEvt.heure) : dern.fin;
-      if (fMin <= dMin) fMin += 1440;
+      let dMin = (embEvt ? timeToMin(embEvt.heureRetenue || embEvt.heure) : null) ?? prem.debut;
+      let fMin = (debEvt ? timeToMin(debEvt.heureRetenue || debEvt.heure) : null) ?? dern.fin;
+      if (fMin < dMin) fMin += 1440; // égalité = durée nulle (jamais 24h)
       const pauseTotal = srv.reduce((s, i) => s + (i.pauseDuree || 0), 0);
       pointeMin += Math.max(0, fMin - dMin - pauseTotal);
       nuitReelMin += computeNuitMinutes(dMin, fMin, false);
@@ -8323,7 +8393,8 @@ function calculerPointeMinJour(empId, dk, pointagesParAnnee, splitSeuil) {
       if (embHP && debHP) {
         const dMin = timeToMin(embHP.heureRetenue || embHP.heure);
         let fMin = timeToMin(debHP.heureRetenue || debHP.heure);
-        if (fMin <= dMin) fMin += 1440;
+        if (dMin === null || fMin === null) return; // heure illisible : jamais 24h comptées à tort
+        if (fMin < dMin) fMin += 1440;
         pointeHorsPlanning += fMin - dMin;
         nuitReelMin += computeNuitMinutes(dMin, fMin, false);
         nuitSoireeMin += Math.max(0, Math.min(fMin, 1440) - Math.max(dMin, 1260));
@@ -8504,12 +8575,15 @@ function preremplirFeriesSemaine(monday) {
 
 // Bouton « Mettre en férié » de la fenêtre d'un jour férié : remplace les tâches du jour par la
 // tâche Férié, sans calendrier des congés et sans validation.
-function remplacerJourParFerie() {
+async function remplacerJourParFerie() {
   const emp = getEmpById(djCurrentEmp);
   if (!emp || !djCurrentDate) return;
   if (!verifierSemaineModifiable(djCurrentDate)) return;
   const existantes = (db.planning[djCurrentEmp]?.[djCurrentDate] || []).filter(i => !db.tasks.find(t => t.id === i.taskId)?.ferie);
-  if (existantes.length && !confirm(`Remplacer ${existantes.length} tâche(s)/congé(s) de ce jour par « Férié » ?`)) return;
+  const nbPointes = await compterPointagesLies([{ empId: djCurrentEmp, dk: djCurrentDate, instIds: existantes.map(i => i.id) }]);
+  if (nbPointes) {
+    if (!confirm(messagePointagesLies(nbPointes, 'remplacer par « Férié »'))) return;
+  } else if (existantes.length && !confirm(`Remplacer ${existantes.length} tâche(s)/congé(s) de ce jour par « Férié » ?`)) return;
   const tache = getOrCreateTacheFerie();
   appliquerExclusionCongeTravail(djCurrentEmp, djCurrentDate, tache);
   db.planning[djCurrentEmp][djCurrentDate] = [construireInstanceFerie(emp, djCurrentDate)];
@@ -13276,7 +13350,7 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
             if (embEvt?.heureRetenue && debEvt?.heureRetenue) {
               const dMin = timeToMin(embEvt.heureRetenue);
               let fMin = timeToMin(debEvt.heureRetenue);
-              if (fMin <= dMin) fMin += 1440;
+              if (fMin < dMin) fMin += 1440;
               dureeReelle = Math.max(0, fMin - dMin - serviceComplet.reduce((s, i) => s + (i.pauseDuree || 0), 0));
             }
             let statutLabel = 'Complet', statutCls = 'ok';
@@ -13384,7 +13458,7 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
           if (embEvt?.heureRetenue && debEvt?.heureRetenue) {
             const dMin = timeToMin(embEvt.heureRetenue);
             let fMin = timeToMin(debEvt.heureRetenue);
-            if (fMin <= dMin) fMin += 1440;
+            if (fMin < dMin) fMin += 1440;
             dureeReelle = Math.max(0, fMin - dMin - chaineAffichage.reduce((s, i) => s + (i.pauseDuree || 0), 0));
           }
           let statutLabel = 'Complet', statutCls = 'ok';
@@ -13462,7 +13536,7 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
           if (embEvt?.heureRetenue && debEvt?.heureRetenue) {
             const dMin = timeToMin(embEvt.heureRetenue);
             let fMin = timeToMin(debEvt.heureRetenue);
-            if (fMin <= dMin) fMin += 1440;
+            if (fMin < dMin) fMin += 1440;
             dureeReelle = fMin - dMin;
           }
           rows.push({ emp, dk, instEmb: { id: instId }, instDeb: { id: instId }, tachesLabel, prevuLabel: horsPlanning ? '—' : '—', dureePrevue: 0, nuitMin: 0, embEvt, debEvt, reelEmbauche: embEvt?.heure||null, reelDebauche: debEvt?.heure||null, retenuEmbauche: embEvt?.heureRetenue||null, retenuDebauche: debEvt?.heureRetenue||null, ecartEmbauche: embEvt?.ecart??null, ecartDebauche: debEvt?.ecart??null, modeEmbauche: embEvt?(modeLabels[embEvt.modeValidation]||'—'):'—', modeDebauche: debEvt?(modeLabels[debEvt.modeValidation]||'—'):'—', dureeReelle, statutLabel, statutCls });
@@ -13473,8 +13547,10 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
     const statutBg = { ok: 'rgba(46,204,113,.15)', warning: 'rgba(245,166,35,.15)', muted: 'rgba(139,146,184,.12)' };
     const statutCol = { ok: 'var(--success)', warning: 'var(--warning)', muted: 'var(--text-dim)' };
 
+    const blocOrphelins = construireBlocOrphelins(dk, data);
+
     if (!rows.length) {
-      wrap.innerHTML = '<div class="empty-state"><div class="ico">🕐</div><p>Rien à afficher pour ce jour.</p></div>';
+      wrap.innerHTML = '<div class="empty-state"><div class="ico">🕐</div><p>Rien à afficher pour ce jour.</p></div>' + blocOrphelins;
       return;
     }
 
@@ -13511,7 +13587,75 @@ function renderPointagesTable(dk, data, wrap, modeLabels, ecartColor, ecartTxt, 
         </td>
         <td style="padding:8px;text-align:center;">${actionIcons(r, idx)}</td>
       </tr>`).join('')}
-    </table></div>`;
+    </table></div>${blocOrphelins}`;
+}
+
+// Pointages « orphelins » du jour : leur tâche n'existe plus dans le planning (supprimée, remplacée,
+// écrasée par une copie…). Jamais rattachés automatiquement : l'admin choisit la tâche actuelle
+// (veille, jour ou lendemain pour les services à cheval sur minuit) à laquelle les rattacher.
+function collecterPointagesOrphelins(dk, data) {
+  const dkH = dateKey(addDays(isoToDate(dk), -1)), dkD = dateKey(addDays(isoToDate(dk), 1));
+  const res = [];
+  Object.keys(data || {}).forEach(empId => {
+    const emp = getEmpById(empId);
+    if (!emp) return;
+    const cand = [];
+    [[dkH, 'veille'], [dk, ''], [dkD, 'lendemain']].forEach(([d, lab]) => {
+      (db.planning[empId]?.[d] || [])
+        .filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge)
+        .sort((a, b) => a.debut - b.debut)
+        .forEach(inst => cand.push({ dk: d, inst, lab }));
+    });
+    const ids = new Set(cand.map(c => c.inst.id));
+    (data[empId] || []).forEach(e => {
+      if (!e.instId || e.horsPlanning || ids.has(e.instId)) return;
+      if (e.type !== 'embauche' && e.type !== 'debauche') return;
+      res.push({ emp, evt: e, cand, dk });
+    });
+  });
+  return res;
+}
+function construireBlocOrphelins(dk, data) {
+  const orph = collecterPointagesOrphelins(dk, data);
+  window._ptOrph = orph;
+  if (!orph.length) return '';
+  const fmtJ = d => d.slice(8) + '/' + d.slice(5, 7);
+  const lignes = orph.map((o, i) => {
+    const e = o.evt;
+    const options = o.cand.map((c, j) => {
+      const t = db.tasks.find(tt => tt.id === c.inst.taskId);
+      return `<option value="${j}">${c.lab ? '(' + c.lab + ') ' : ''}${fmtJ(c.dk)} — ${escHtml(t?.nom || 'Tâche')} ${minToTime(c.inst.debut)}–${minToTime(c.inst.fin)}</option>`;
+    }).join('');
+    return `<tr style="border-top:1px solid var(--border);">
+      <td style="padding:6px 8px;">${escHtml(o.emp.prenom)} ${escHtml(o.emp.nom)}</td>
+      <td style="padding:6px 8px;">${e.type === 'embauche' ? 'Embauche' : 'Débauche'}</td>
+      <td style="padding:6px 8px;font-family:var(--mono);">${e.heure || '—'}${e.heureRetenue && e.heureRetenue !== e.heure ? ' → ' + e.heureRetenue : ''}</td>
+      <td style="padding:6px 8px;font-size:11px;color:var(--text-dim);">${escHtml(e.statut || '')}</td>
+      <td style="padding:6px 8px;"><select id="orph-sel-${i}" style="max-width:340px;"><option value="">— choisir la tâche —</option>${options}</select></td>
+      <td style="padding:6px 8px;"><button class="btn btn-secondary btn-sm" onclick="rattacherPointageOrphelin(${i})">🔗 Rattacher</button></td>
+    </tr>`;
+  }).join('');
+  return `<div style="margin-top:18px;border:1px solid var(--warning);border-radius:10px;padding:12px;">
+    <div style="font-weight:700;margin-bottom:4px;">🔗 Pointages orphelins (${orph.length})</div>
+    <div class="hint" style="margin-bottom:8px;">Ces pointages ne sont rattachés à aucune tâche du planning (tâche supprimée, remplacée ou écrasée depuis). Ils ne sont pas comptés correctement tant qu'ils restent orphelins : choisis la tâche à laquelle ils appartiennent.</div>
+    <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:13px;"><tr><th style="text-align:left;">Employé</th><th style="text-align:left;">Type</th><th style="text-align:left;">Heure</th><th style="text-align:left;">Statut</th><th style="text-align:left;">Rattacher à</th><th></th></tr>${lignes}</table></div></div>`;
+}
+async function rattacherPointageOrphelin(i) {
+  const o = window._ptOrph?.[i];
+  if (!o || !fbDb) return;
+  const v = document.getElementById('orph-sel-' + i)?.value;
+  if (v === '' || v === undefined) { notify('Choisis la tâche à laquelle rattacher ce pointage', 'warning'); return; }
+  const c = o.cand[parseInt(v)];
+  if (!c) return;
+  try {
+    await fbDb.ref(`pointages/${o.dk.slice(0, 4)}/${o.dk}/${o.emp.id}/evenements/${o.evt.key}`).update({ instId: c.inst.id, taskId: c.inst.taskId });
+    const t = db.tasks.find(tt => tt.id === c.inst.taskId);
+    logAudit('Pointage rattaché', `${o.emp.prenom} ${o.emp.nom} — ${o.dk} — ${o.evt.type} ${o.evt.heureRetenue || o.evt.heure || ''} → ${t?.nom || 'Tâche'} (${c.dk})`);
+    notify('Pointage rattaché');
+  } catch (err) {
+    console.error('Rattachement pointage :', err);
+    notify('Échec du rattachement : ' + err.message, 'danger');
+  }
 }
 
 // ===================================================
@@ -13575,7 +13719,7 @@ function detecterChevauchementsRetenue(empId, dk, evtsJour, splitSeuil, override
     const heureEmb = heureEffective(embEvt), heureDeb = heureEffective(debEvt);
     if (!heureEmb || !heureDeb) return null;
     let d = timeToMin(heureEmb), f = timeToMin(heureDeb);
-    if (f <= d) f += 1440;
+    if (f < d) f += 1440;
     return { d, f, taskNom: db.tasks.find(t => t.id === prem.taskId)?.nom || 'Tâche', label: `${heureEmb}–${heureDeb}` };
   }).filter(Boolean);
 
