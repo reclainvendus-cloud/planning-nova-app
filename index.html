@@ -927,9 +927,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <button class="btn btn-secondary btn-sm" onclick="changeDistribWeek(1)">▶</button>
           <button class="btn btn-secondary btn-sm" onclick="goDistribToday()">Aujourd'hui</button>
         </div>
-        <div class="hint" style="margin:10px 0;">Capacité calculée à partir des tâches "Distribution" planifiées (nuit précédente + matinée), comparée aux volumes annoncés par les messageries.</div>
-        <button class="btn btn-secondary btn-sm" onclick="toggleDistribDiagnostic()" id="distrib-diag-btn" style="margin-bottom:10px;">🔍 Voir le détail du calcul (diagnostic)</button>
-        <div id="distrib-diag-wrap" style="display:none;margin-bottom:16px;"></div>
+        <div class="hint" style="margin:10px 0;">Capacité de mise en case calculée à partir des tâches "Distribution" planifiées (taux de chaque employé × heures), comparée aux volumes annoncés par les messageries. Saisis le volume chaud et froid de chaque jour, puis clique sur une ligne pour voir le détail.</div>
         <div id="distrib-wrap"></div>
       </div>
 
@@ -1273,22 +1271,13 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 
         <div id="pa-distribution" style="display:none;">
           <div class="task-card" style="cursor:default;max-width:640px;margin-bottom:16px;">
-            <div class="section-label" style="margin-top:0;">📦 Fenêtres horaires</div>
-            <div class="hint" style="margin-bottom:12px;">Une tâche nommée exactement <strong>"Distribution"</strong> (insensible à la casse) doit exister dans la Bibliothèque de tâches pour que le calcul fonctionne — c'est comme ça que l'appli sait quelles tâches compter.</div>
+            <div class="section-label" style="margin-top:0;">📦 Zone « chaud »</div>
+            <div class="hint" style="margin-bottom:12px;">Une tâche nommée exactement <strong>"Distribution"</strong> (insensible à la casse) doit exister dans la Bibliothèque de tâches pour que le calcul fonctionne — c'est comme ça que l'appli sait quelles tâches compter.<br>La zone chaud est la <strong>seule plage horaire</strong> pendant laquelle le chaud peut être traité. En dehors, seul le froid peut l'être. La journée de distribution commence à l'heure de début du chaud (la veille au soir) et dure 24 h.</div>
             <div class="form-row">
-              <div class="form-group" style="margin:0;"><label>Début zone chaud</label><input type="time" id="pa-distrib-chaud-debut" onchange="updateDistribResume()" value="22:00"></div>
-              <div class="form-group" style="margin:0;"><label>Fin zone chaud</label><input type="time" id="pa-distrib-chaud-fin" onchange="updateDistribResume()" value="03:30"></div>
+              <div class="form-group" style="margin:0;"><label>Début zone chaud (soir)</label><input type="time" id="pa-distrib-chaud-debut" onchange="updateDistribResume()" value="20:00"></div>
+              <div class="form-group" style="margin:0;"><label>Fin zone chaud (lendemain)</label><input type="time" id="pa-distrib-chaud-fin" onchange="updateDistribResume()" value="03:30"></div>
             </div>
-            <div class="form-row" style="margin-top:8px;">
-              <div class="form-group" style="margin:0;"><label>Fin créneau exclu</label><input type="time" id="pa-distrib-gap-fin" onchange="updateDistribResume()" value="05:00"></div>
-              <div class="form-group" style="margin:0;"><label>Fin zone froid</label><input type="time" id="pa-distrib-froid-fin" onchange="updateDistribResume()" value="18:00"></div>
-            </div>
-            <div class="hint" style="margin-top:6px;">Chaud = <span id="pa-distrib-resume-chaud"></span> · Créneau exclu (ne compte jamais) = <span id="pa-distrib-resume-gap"></span> · Froid = <span id="pa-distrib-resume-froid"></span></div>
-            <div class="form-group" style="max-width:220px;margin-top:12px;">
-              <label>Taux non productif (%)</label>
-              <input type="number" id="pa-distrib-taux" min="0" max="90" step="1" value="20">
-            </div>
-            <div class="hint">Part du temps de distribution consacrée à la préparation, aux déplacements en transpalette, etc. — déduite du temps productif chaud et froid (jamais du créneau déjà exclu).</div>
+            <div class="hint" style="margin-top:6px;">Chaud = <span id="pa-distrib-resume-chaud"></span> · Froid = <span id="pa-distrib-resume-froid"></span> (tout le reste de la journée)</div>
             <button class="btn btn-primary btn-sm" onclick="saveParamDistribution()" style="margin-top:10px;">💾 Enregistrer</button>
           </div>
         </div>
@@ -1685,6 +1674,14 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 </div>
 
 <!-- ===== MODAL COPIER LA JOURNÉE ===== -->
+<div class="modal-overlay" id="modal-distrib-solutions">
+  <div class="modal" style="width:780px;max-width:96vw;max-height:90vh;overflow-y:auto;">
+    <button class="modal-close" onclick="closeModal('modal-distrib-solutions')">✕</button>
+    <h2>💡 Solutions pour passer tous les exemplaires</h2>
+    <div id="distrib-sol-content"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-copy-day">
   <div class="modal" style="width:400px;">
     <button class="modal-close" onclick="closeModal('modal-copy-day')">✕</button>
@@ -2238,11 +2235,11 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <label class="checkbox-row"><input type="checkbox" id="em-panier-mensualise-nuit"><span>Panier nuit mensualisé (5/semaine)</span></label>
     </div>
 
-    <div class="section-label">Production chaud / froid <span style="font-weight:400;text-transform:none;color:var(--text-dim);">(utilisé par le calcul de capacité Distribution)</span></div>
+    <div class="section-label">Mise en case <span style="font-weight:400;text-transform:none;color:var(--text-dim);">(utilisé par le calcul de capacité Distribution)</span></div>
     <div class="form-row">
-      <div class="form-group"><label>Productivité chaud (u/h)</label><input type="number" id="em-prod-chaud" min="0" step="0.5" value="0"></div>
-      <div class="form-group"><label>Productivité froid (u/h)</label><input type="number" id="em-prod-froid" min="0" step="0.5" value="0"></div>
+      <div class="form-group"><label>Taux de mise en case (exemplaires/heure)</label><input type="number" id="em-taux-case" min="0" step="10" value="1000"></div>
     </div>
+    <div class="hint" style="margin-top:-6px;margin-bottom:8px;">Nombre d'exemplaires que cet employé met en case par heure de distribution — à renseigner d'après tes statistiques. Valable chaud comme froid.</div>
 
     <div class="section-label">🚪 Statut d'emploi</div>
     <div id="em-statut-emploi-badge" style="margin-bottom:8px;"></div>
@@ -2321,7 +2318,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.16.1';
+const APP_VERSION = '2.17.1';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2352,6 +2349,16 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.17.1', items: [
+    'Distribution : les pauses des tâches ne sont plus déduites du calcul (le taux de mise en case les inclut déjà).',
+  ] },
+  { v: '2.17.0', items: [
+    'Distribution — refonte du calcul : un seul « taux de mise en case » (exemplaires/heure) par employé, qui remplace les deux productivités chaud/froid (repris automatiquement : moyenne des deux anciennes valeurs). Plus de taux non productif ni de créneau exclu.',
+    'Distribution : une seule zone « chaud » paramétrable (Paramètres > Distribution, 20:00 → 03:30 par défaut) ; en dehors, seul le froid peut être traité. La journée de distribution va de l\'heure de début du chaud (la veille) à la même heure le jour même.',
+    'Distribution : si la capacité chaud dépasse le chaud annoncé, l\'excédent s\'ajoute à la capacité froid avant la comparaison avec le froid annoncé (un déficit chaud ne se rattrape pas sur le froid).',
+    'Distribution : tableau de synthèse de la semaine + fiche détaillée par jour (barres chaud/froid, flux de l\'excédent, calcul pas à pas, nombre d\'exemplaires passés par chaque employé présent).',
+    'Distribution : bouton « 💡 Proposer des solutions » — propose les heures de Distribution à ajouter pour passer tous les exemplaires, en donnant la priorité aux personnes dont le compteur modulation est le plus bas ; ajout au planning en un clic.',
+  ] },
   { v: '2.16.1', items: [
     'Récap paie / Compteur / Clôture : correction d\'un cas où une journée pouvait compter 24h EN TROP (ex. Noé LACHENY le 07/11 : 31h45 au lieu de 7h45, +25h45 d\'heures sup affichées). Quand une embauche et une débauche avaient la même heure — ou aucune heure lisible (pointage sans heure retenue, notamment hors planning) — le calcul ajoutait « le lendemain » (+24h). Une durée nulle reste désormais nulle, et une heure illisible retombe sur l\'horaire du planning (ou est ignorée pour un pointage hors planning).',
   ] },
@@ -2998,8 +3005,10 @@ function migrerEmployesDefauts(employes) {
     if (e.email === undefined) e.email = '';
     if (e.modeHS === undefined) e.modeHS = 'hebdo';
     if (e.seuilHS === undefined) e.seuilHS = e.contratH || 35;
-    if (!e.prodChaud) e.prodChaud = 1000; // 1000/h par défaut, tant que jamais configuré (0 = jamais touché)
-    if (!e.prodFroid) e.prodFroid = 1000;
+    if (e.tauxCase === undefined) { // v2.17.0 : productivité chaud/froid fusionnée en un seul taux de mise en case
+      const a = e.prodChaud || 0, b = e.prodFroid || 0;
+      e.tauxCase = (a && b) ? Math.round((a + b) / 2) : (a || b || 1000);
+    }
     if (e.reposHebdo === undefined) e.reposHebdo = 0; // 0 = dimanche
     if (!e.objectifsJours) {
       const base = e.objectif || 7;
@@ -3044,11 +3053,12 @@ function loadDB() {
   if (!db.semaineType) db.semaineType = {};
   if (!db.params) db.params = {}; // garde-fou : un navigateur tout neuf n'a rien du tout dans localStorage
   if (db.params.pointageDateDebut === undefined) db.params.pointageDateDebut = null;
-  if (db.params.distribChaudDebut === undefined) db.params.distribChaudDebut = '22:00';
+  if (db.params.distribChaudDebut === undefined) db.params.distribChaudDebut = '20:00';
   if (db.params.distribChaudFin === undefined) db.params.distribChaudFin = '03:30';
-  if (db.params.distribGapFin === undefined) db.params.distribGapFin = '05:00';
-  if (db.params.distribFroidFin === undefined) db.params.distribFroidFin = '18:00';
-  if (db.params.distribTauxNonProductif === undefined) db.params.distribTauxNonProductif = 20;
+  if (!db.params.distribV2) { // v2.17.0 : une seule zone chaud ; l'ancien défaut 22:00 devient 20:00
+    if (db.params.distribChaudDebut === '22:00') db.params.distribChaudDebut = '20:00';
+    db.params.distribV2 = true;
+  }
   if (db.params.appNoteVersion === undefined) db.params.appNoteVersion = null;
   if (db.params.appNoteText === undefined) db.params.appNoteText = '';
   if (!db.distribVolumes) db.distribVolumes = {};
@@ -6221,8 +6231,7 @@ function openEmployeModal() {
   document.getElementById('em-mode-hs').value = 'hebdo';
   document.getElementById('em-seuil-hs-h').value = 35;
   document.getElementById('em-seuil-hs-m').value = 0;
-  document.getElementById('em-prod-chaud').value = 1000;
-  document.getElementById('em-prod-froid').value = 1000;
+  document.getElementById('em-taux-case').value = 1000;
   document.getElementById('em-solde-initial').value = 0;
   document.getElementById('em-date-debut-contrat').value = '';
   document.getElementById('btn-delete-employe').style.display = 'none';
@@ -6335,8 +6344,7 @@ function editEmploye(id) {
   const seuilVal = e.seuilHS || 35;
   document.getElementById('em-seuil-hs-h').value = Math.floor(seuilVal);
   document.getElementById('em-seuil-hs-m').value = Math.round((seuilVal - Math.floor(seuilVal)) * 60);
-  document.getElementById('em-prod-chaud').value = e.prodChaud || 0;
-  document.getElementById('em-prod-froid').value = e.prodFroid || 0;
+  document.getElementById('em-taux-case').value = e.tauxCase ?? 1000;
   document.getElementById('em-solde-initial').value = e.soldeInitial ?? 0;
   document.getElementById('em-date-debut-contrat').value = e.dateDebutContrat || '';
   document.getElementById('btn-delete-employe').style.display = 'inline-flex';
@@ -6470,8 +6478,7 @@ function saveEmploye() {
     contratHistorique: historique,
     modeHS: document.getElementById('em-mode-hs').value,
     seuilHS: (parseFloat(document.getElementById('em-seuil-hs-h').value) || 0) + (parseFloat(document.getElementById('em-seuil-hs-m').value) || 0) / 60,
-    prodChaud: parseFloat(document.getElementById('em-prod-chaud').value) || 0,
-    prodFroid: parseFloat(document.getElementById('em-prod-froid').value) || 0,
+    tauxCase: Math.max(0, parseFloat(document.getElementById('em-taux-case').value) || 0),
     soldeInitial: parseFloat(document.getElementById('em-solde-initial').value) || 0,
     dateDebutContrat,
     // Même protection que pour les compétences (bug v1.97.0) : ce formulaire ne gère ni le statut
@@ -8895,7 +8902,19 @@ const AIDE_HTML = `
 <details class="aide-section" id="aide-distribution">
 <summary>📦 Distribution</summary>
 <div class="aide-body">
-<p>Suivi des volumes/quantités à distribuer par tournée ou par employé (chaud/froid), en lien avec les objectifs de production renseignés dans la fiche employé.</p>
+<p>Compare, pour chaque jour, la <b>capacité de mise en case</b> de l'équipe aux volumes annoncés (exemplaires chaud et froid).</p>
+<h4>Comment c'est calculé</h4>
+<ul>
+<li>Chaque employé a un <b>taux de mise en case</b> (exemplaires/heure), saisi dans sa fiche d'après tes statistiques.</li>
+<li>La <b>zone chaud</b> (Paramètres &gt; Distribution, 20:00 → 03:30 par défaut) est la seule plage où le chaud peut être traité ; en dehors, seul le froid peut l'être.</li>
+<li>Capacité = heures de tâche « Distribution » planifiées × taux de chaque employé, séparément pour la zone chaud et le reste.</li>
+<li>Si la capacité chaud dépasse le chaud annoncé, l'<b>excédent s'ajoute à la capacité froid</b> avant de la comparer au froid annoncé. Un manque en chaud ne se rattrape pas sur le froid.</li>
+</ul>
+<h4>Utilisation</h4>
+<ul>
+<li>Saisis le volume chaud et froid annoncé de chaque jour, puis clique sur une ligne pour ouvrir le détail (barres, calcul, exemplaires passés par chaque employé).</li>
+<li><b>💡 Proposer des solutions</b> (jour en manque) : propose les heures de Distribution à ajouter, en priorité aux personnes dont le compteur modulation est le plus bas, avec ajout au planning en un clic. Repos quotidien et durée hebdomadaire maximale ne sont pas contrôlés.</li>
+</ul>
 </div>
 </details>
 
@@ -15489,184 +15508,125 @@ let _presenceRef = null;
 function initParamDistribution() {
   document.getElementById('pa-distrib-chaud-debut').value = db.params.distribChaudDebut;
   document.getElementById('pa-distrib-chaud-fin').value = db.params.distribChaudFin;
-  document.getElementById('pa-distrib-gap-fin').value = db.params.distribGapFin;
-  document.getElementById('pa-distrib-froid-fin').value = db.params.distribFroidFin;
-  document.getElementById('pa-distrib-taux').value = db.params.distribTauxNonProductif;
   updateDistribResume();
 }
 
 function updateDistribResume() {
   const c1 = document.getElementById('pa-distrib-chaud-debut').value;
   const c2 = document.getElementById('pa-distrib-chaud-fin').value;
-  const g2 = document.getElementById('pa-distrib-gap-fin').value;
-  const f2 = document.getElementById('pa-distrib-froid-fin').value;
   document.getElementById('pa-distrib-resume-chaud').textContent = `${c1} → ${c2}`;
-  document.getElementById('pa-distrib-resume-gap').textContent = `${c2} → ${g2}`;
-  document.getElementById('pa-distrib-resume-froid').textContent = `${g2} → ${f2}`;
+  document.getElementById('pa-distrib-resume-froid').textContent = `${c2} → ${c1}`;
 }
 
 function saveParamDistribution() {
-  db.params.distribChaudDebut = document.getElementById('pa-distrib-chaud-debut').value || '22:00';
+  db.params.distribChaudDebut = document.getElementById('pa-distrib-chaud-debut').value || '20:00';
   db.params.distribChaudFin = document.getElementById('pa-distrib-chaud-fin').value || '03:30';
-  db.params.distribGapFin = document.getElementById('pa-distrib-gap-fin').value || '05:00';
-  db.params.distribFroidFin = document.getElementById('pa-distrib-froid-fin').value || '18:00';
-  db.params.distribTauxNonProductif = parseInt(document.getElementById('pa-distrib-taux').value) || 0;
   saveDB();
   updateDistribResume();
   notify('Paramètres Distribution enregistrés');
+  if (document.getElementById('view-distribution')?.classList.contains('active')) renderDistribution();
 }
 
-// Convertit les 4 bornes horaires en zones exprimées en minutes depuis T=0 (= début de la zone
-// chaud, sur le jour PRÉCÉDENT celui pour lequel on calcule la capacité).
+// Zones de la « journée de distribution » du jour D, en minutes depuis 00:00 de la VEILLE (D-1) :
+// la journée va de l'heure de début du chaud (veille) à la même heure le jour D (24 h). Le chaud
+// occupe [debut, debut + dureeChaud[ et le froid tout le reste.
 function getDistribZones() {
-  const chaudDebutRaw = timeToMin(db.params.distribChaudDebut || '22:00');
-  const chaudFinRaw = timeToMin(db.params.distribChaudFin || '03:30');
-  const gapFinRaw = timeToMin(db.params.distribGapFin || '05:00');
-  const froidFinRaw = timeToMin(db.params.distribFroidFin || '18:00');
-  const offsetDkPrec = -chaudDebutRaw;
-  const offsetDk = 1440 - chaudDebutRaw;
-  return {
-    offsetDkPrec, offsetDk,
-    zChaudFin: chaudFinRaw + offsetDk,
-    zGapFin: gapFinRaw + offsetDk,
-    zFroidFin: froidFinRaw + offsetDk,
-  };
+  const s = timeToMin(db.params.distribChaudDebut || '20:00') ?? 1200;
+  const e = timeToMin(db.params.distribChaudFin || '03:30') ?? 210;
+  const dureeChaud = ((e - s) % 1440 + 1440) % 1440; // 0 si début = fin : pas de zone chaud
+  return { debut: s, finChaud: s + dureeChaud, fin: s + 1440, dureeChaud };
 }
 
-// Calcule la capacité de traitement chaud/froid pour le jour dk, en agrégeant les tâches
-// "Distribution" posées la veille (soir/nuit, souvent à cheval sur minuit) ET le jour même
-// (matinée/journée) — les deux faisant partie de la même "nuit de distribution" qui se termine
-// ce jour-là. Modélise la bascule chaud→froid si le chaud annoncé est traité en avance.
-function calculerCapaciteDistribution(dk) {
-  const zones = getDistribZones();
-  const dkPrec = dateKey(addDays(isoToDate(dk), -1));
-  const tauxProductif = 1 - (db.params.distribTauxNonProductif ?? 20) / 100;
+// Tâches « Distribution » de la Bibliothèque (nom exact, insensible à la casse)
+function getTachesDistribution() {
+  return db.tasks.filter(t => (t.nom || '').trim().toLowerCase() === 'distribution');
+}
 
-  const taskDistrib = db.tasks.filter(t => (t.nom || '').trim().toLowerCase() === 'distribution');
-  if (!taskDistrib.length) return { erreur: true };
-  const taskIds = new Set(taskDistrib.map(t => t.id));
+// Intervalle d'une instance, en minutes depuis 00:00 de la
+// veille du jour D — `off` = décalage du jour où l'instance est posée par rapport à cette origine.
+function segmentsInstanceDistribution(i, off) {
+  // Les pauses ne sont PAS déduites : le taux de mise en case les inclut déjà.
+  return [[i.debut + off, (i.crosseMinuit ? i.fin + 1440 : i.fin) + off]];
+}
+function chevauchementMin(a1, b1, a2, b2) { return Math.max(0, Math.min(b1, b2) - Math.max(a1, a2)); }
+
+// Taux moyen de référence (exemplaires/heure) quand personne n'est planifié : moyenne des taux
+// des employés ayant la compétence Distribution (sinon de tous), 1000 à défaut.
+function tauxReferenceDistribution() {
+  const ids = new Set(getTachesDistribution().map(t => t.id));
+  let emps = db.employes.filter(e => (e.tauxCase || 0) > 0);
+  const avecComp = emps.filter(e => (e.competences || []).some(id => ids.has(id)));
+  if (avecComp.length) emps = avecComp;
+  return emps.length ? emps.reduce((s, e) => s + e.tauxCase, 0) / emps.length : 1000;
+}
+
+// Capacité de distribution de la journée D (de l'heure de début du chaud la veille à la même heure
+// le jour D) :
+//  - chaque employé : minutes de tâche « Distribution » dans la zone chaud / hors zone chaud
+//    (= froid), pauses déduites, × son taux de mise en case ;
+//  - capacité chaud comparée au volume chaud annoncé : l'EXCÉDENT éventuel s'ajoute à la capacité
+//    froid avant de la comparer au volume froid annoncé. Un déficit chaud ne se rattrape pas sur
+//    le froid (le chaud ne peut être traité que dans sa zone).
+function calculerCapaciteDistribution(dk) {
+  const tasks = getTachesDistribution();
+  if (!tasks.length) return { erreur: true };
+  const ids = new Set(tasks.map(t => t.id));
+  const z = getDistribZones();
+  const d = isoToDate(dk);
+  const jours = [-2, -1, 0, 1].map(delta => ({ dk: dateKey(addDays(d, delta)), off: (delta + 1) * 1440, delta }));
 
   const parEmploye = [];
-  let nbInstancesTrouvees = 0; // diagnostic : combien d'instances "Distribution" existent ce jour-là,
-  // même si elles finissent par ne recouper aucune zone chaud/froid définie
-  db.employes.forEach(emp => {
+  let nbInstancesTrouvees = 0;
+  getEmployesTries().forEach(emp => {
+    const taux = emp.tauxCase || 0;
     let chaudMin = 0, froidMin = 0;
-    [[dkPrec, zones.offsetDkPrec], [dk, zones.offsetDk]].forEach(([jour, offset]) => {
-      (db.planning[emp.id]?.[jour] || []).filter(i => taskIds.has(i.taskId)).forEach(i => {
+    const plages = [];
+    jours.forEach(j => {
+      (db.planning[emp.id]?.[j.dk] || []).filter(i => ids.has(i.taskId)).forEach(i => {
         nbInstancesTrouvees++;
-        const absDebut = i.debut + offset;
-        const absFin = (i.crosseMinuit ? i.fin + 1440 : i.fin) + offset;
-        const chevChaud = Math.max(0, Math.min(absFin, zones.zChaudFin) - Math.max(absDebut, 0));
-        const chevFroid = Math.max(0, Math.min(absFin, zones.zFroidFin) - Math.max(absDebut, zones.zGapFin));
-        chaudMin += chevChaud;
-        froidMin += chevFroid;
-      });
-    });
-    if (chaudMin > 0 || froidMin > 0) {
-      parEmploye.push({ emp, chaudMin: chaudMin * tauxProductif, froidMin: froidMin * tauxProductif });
-    }
-  });
-
-  const capaciteChaudMax = parEmploye.reduce((s, e) => s + (e.chaudMin / 60) * (e.emp.prodChaud || 0), 0);
-  const volumeChaud = db.distribVolumes?.[dk]?.chaud || 0;
-  const volumeFroid = db.distribVolumes?.[dk]?.froid || 0;
-
-  let capaciteChaudRetenue, capaciteFroidBonus = 0;
-  if (capaciteChaudMax <= volumeChaud || capaciteChaudMax === 0) {
-    capaciteChaudRetenue = capaciteChaudMax;
-  } else {
-    // Le chaud se termine en avance : la fraction du temps de zone non utilisée bascule vers le
-    // froid, au rythme froid de chaque employé.
-    const fractionUtilisee = volumeChaud / capaciteChaudMax;
-    capaciteChaudRetenue = volumeChaud;
-    parEmploye.forEach(e => {
-      const minutesLiberees = e.chaudMin * (1 - fractionUtilisee);
-      capaciteFroidBonus += (minutesLiberees / 60) * (e.emp.prodFroid || 0);
-    });
-  }
-
-  const capaciteFroidZone = parEmploye.reduce((s, e) => s + (e.froidMin / 60) * (e.emp.prodFroid || 0), 0);
-  const capaciteFroidTotale = capaciteFroidZone + capaciteFroidBonus;
-
-  return {
-    volumeChaud, volumeFroid,
-    capaciteChaud: Math.round(capaciteChaudMax), // capacité MAXIMALE théorique (ce que l'équipe
-    // peut réellement traiter), pas la valeur plafonnée au volume annoncé — sinon "0" s'affiche
-    // dès que le volume chaud n'est pas encore saisi, ce qui est trompeur (la capacité existe,
-    // elle a juste été entièrement réorientée vers le froid faute de volume chaud à traiter).
-    capaciteFroid: Math.round(capaciteFroidTotale),
-    ecartChaud: Math.round(capaciteChaudMax - volumeChaud),
-    ecartFroid: Math.round(capaciteFroidTotale - volumeFroid),
-    aBasculement: capaciteFroidBonus > 0,
-    nbEmployes: parEmploye.length,
-    nbInstancesTrouvees,
-    horsZones: nbInstancesTrouvees > 0 && parEmploye.length === 0, // tâches posées mais aucune ne
-    // recoupe les fenêtres chaud/froid définies — signal fort que les horaires réels de la tâche
-    // "Distribution" ne correspondent pas aux fenêtres configurées dans Paramètres > Distribution.
-  };
-}
-
-let distribDiagVisible = false;
-function toggleDistribDiagnostic() {
-  distribDiagVisible = !distribDiagVisible;
-  document.getElementById('distrib-diag-wrap').style.display = distribDiagVisible ? 'block' : 'none';
-  document.getElementById('distrib-diag-btn').textContent = distribDiagVisible ? '🔍 Masquer le diagnostic' : '🔍 Voir le détail du calcul (diagnostic)';
-  if (distribDiagVisible) renderDistribDiagnostic();
-}
-
-// Reproduit exactement le calcul de calculerCapaciteDistribution mais expose chaque étape —
-// bornes de zones effectivement utilisées, et détail instance par instance avec son chevauchement.
-function renderDistribDiagnostic() {
-  const wrap = document.getElementById('distrib-diag-wrap');
-  const zones = getDistribZones();
-  const days = getWeekDays(distribWeekMonday);
-  const taskDistrib = db.tasks.filter(t => (t.nom || '').trim().toLowerCase() === 'distribution');
-
-  let html = `<div class="task-card" style="cursor:default;">
-    <div class="section-label" style="margin-top:0;">Bornes actuellement utilisées</div>
-    <div style="font-family:var(--mono);font-size:13px;line-height:1.8;">
-      Début zone chaud : <strong>${db.params.distribChaudDebut}</strong> (${timeToMin(db.params.distribChaudDebut)} min)<br>
-      Fin zone chaud / début créneau exclu : <strong>${db.params.distribChaudFin}</strong> (${timeToMin(db.params.distribChaudFin)} min)<br>
-      Fin créneau exclu / début zone froid : <strong>${db.params.distribGapFin}</strong> (${timeToMin(db.params.distribGapFin)} min)<br>
-      Fin zone froid : <strong>${db.params.distribFroidFin}</strong> (${timeToMin(db.params.distribFroidFin)} min)<br>
-      Taux non productif : <strong>${db.params.distribTauxNonProductif}%</strong><br>
-      Tâche(s) "Distribution" trouvée(s) : <strong>${taskDistrib.length ? taskDistrib.map(t => t.nom + ' (id:' + t.id + ')').join(', ') : 'AUCUNE ⚠️'}</strong><br>
-      Zone chaud (référentiel absolu) : 0 → ${zones.zChaudFin} min<br>
-      Zone exclue : ${zones.zChaudFin} → ${zones.zGapFin} min<br>
-      Zone froid : ${zones.zGapFin} → ${zones.zFroidFin} min
-    </div>
-  </div>`;
-
-  if (!taskDistrib.length) {
-    wrap.innerHTML = html;
-    return;
-  }
-  const taskIds = new Set(taskDistrib.map(t => t.id));
-
-  days.forEach(d => {
-    const dk = dateKey(d);
-    const dkPrec = dateKey(addDays(d, -1));
-    const lignes = [];
-    [[dkPrec, zones.offsetDkPrec, 'veille'], [dk, zones.offsetDk, 'jour même']].forEach(([jour, offset, label]) => {
-      db.employes.forEach(emp => {
-        (db.planning[emp.id]?.[jour] || []).filter(i => taskIds.has(i.taskId)).forEach(i => {
-          const absDebut = i.debut + offset;
-          const absFin = (i.crosseMinuit ? i.fin + 1440 : i.fin) + offset;
-          const chevChaud = Math.max(0, Math.min(absFin, zones.zChaudFin) - Math.max(absDebut, 0));
-          const chevFroid = Math.max(0, Math.min(absFin, zones.zFroidFin) - Math.max(absDebut, zones.zGapFin));
-          lignes.push(`${emp.prenom} ${emp.nom} — posée sur ${jour} (${label}) — ${minToTime(i.debut)}${i.crosseMinuit ? ' → ' + minToTime(i.fin) + ' (lend.)' : ' → ' + minToTime(i.fin)} — abs[${absDebut},${absFin}] — chevChaud=${chevChaud}min, chevFroid=${chevFroid}min`);
+        segmentsInstanceDistribution(i, j.off).forEach(([a, b]) => {
+          const c = chevauchementMin(a, b, z.debut, z.finChaud);
+          const f = chevauchementMin(a, b, z.finChaud, z.fin);
+          if (c + f <= 0) return;
+          chaudMin += c; froidMin += f;
+          const a2 = Math.max(a, z.debut), b2 = Math.min(b, z.fin);
+          plages.push({ a: a2, b: b2, chaud: c, froid: f });
         });
       });
     });
-    if (lignes.length) {
-      html += `<div class="task-card" style="cursor:default;margin-top:10px;">
-        <div style="font-weight:700;margin-bottom:6px;">${dk}</div>
-        <div style="font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--text-muted);">${lignes.join('<br>')}</div>
-      </div>`;
+    if (chaudMin > 0 || froidMin > 0) {
+      plages.sort((x, y) => x.a - y.a);
+      parEmploye.push({
+        emp, taux, chaudMin, froidMin, plages,
+        chaudEx: chaudMin / 60 * taux, froidEx: froidMin / 60 * taux,
+      });
     }
   });
 
-  wrap.innerHTML = html;
+  const heuresChaud = parEmploye.reduce((s, e) => s + e.chaudMin, 0) / 60;
+  const heuresFroid = parEmploye.reduce((s, e) => s + e.froidMin, 0) / 60;
+  const capChaud = parEmploye.reduce((s, e) => s + e.chaudEx, 0);
+  const capFroidPropre = parEmploye.reduce((s, e) => s + e.froidEx, 0);
+  const volChaud = db.distribVolumes?.[dk]?.chaud || 0;
+  const volFroid = db.distribVolumes?.[dk]?.froid || 0;
+  const excedent = Math.max(0, capChaud - volChaud);
+  const manqueChaud = Math.max(0, volChaud - capChaud);
+  const capFroid = capFroidPropre + excedent;
+  const manqueFroid = Math.max(0, volFroid - capFroid);
+  const ref = tauxReferenceDistribution();
+  const tauxMoyenChaud = heuresChaud > 0 ? capChaud / heuresChaud : ref;
+  const tauxMoyenFroid = heuresFroid > 0 ? capFroidPropre / heuresFroid : ref;
+  return {
+    dk, zones: z, parEmploye,
+    volChaud, volFroid,
+    heuresChaud, heuresFroid, capChaud, capFroidPropre, excedent, capFroid,
+    ecartChaud: capChaud - volChaud, ecartFroid: capFroid - volFroid,
+    manqueChaud, manqueFroid,
+    tauxMoyenChaud, tauxMoyenFroid,
+    heuresManquantesChaud: tauxMoyenChaud > 0 ? manqueChaud / tauxMoyenChaud : 0,
+    heuresManquantesFroid: tauxMoyenFroid > 0 ? manqueFroid / tauxMoyenFroid : 0,
+    nbInstancesTrouvees,
+  };
 }
 
 let distribWeekMonday = getMonday(new Date());
@@ -15751,64 +15711,149 @@ function renderDistribution() {
   document.getElementById('distrib-week-label').textContent = formatWeekLabel(distribWeekMonday);
 
   const alerteEl = document.getElementById('distrib-alerte-tache');
-  const aTacheDistribution = db.tasks.some(t => (t.nom || '').trim().toLowerCase() === 'distribution');
+  const aTacheDistribution = getTachesDistribution().length > 0;
   alerteEl.innerHTML = aTacheDistribution ? '' : `<div class="task-card" style="cursor:default;border:2px solid var(--danger);background:rgba(255,77,106,.08);margin-bottom:16px;">
     <div style="font-weight:800;color:var(--danger);">⚠️ Aucune tâche nommée "Distribution" trouvée</div>
     <div style="font-size:13px;color:var(--text-muted);margin-top:4px;">Le calcul de capacité a besoin d'une tâche portant exactement ce nom (insensible à la casse) dans la Bibliothèque de tâches — sinon impossible de savoir quelles tâches planifiées compter.</div>
   </div>`;
 
+  const z = getDistribZones();
   const days = getWeekDays(distribWeekMonday);
-  const moisNoms = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
   const DOW = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+  const fmtEx = n => Math.round(n).toLocaleString('fr-FR');
+  const fmtEcart = n => (n >= 0 ? '+' : '−') + fmtEx(Math.abs(n));
+  const colEcart = n => n >= 0 ? 'var(--success)' : 'var(--danger)';
+  const fmtH = h => minToHM(Math.round(h * 60));
+  const hh = abs => minToTime(((Math.round(abs) % 1440) + 1440) % 1440);
 
-  const rows = days.map((d, idx) => {
+  const barre = (segments, volume) => {
+    const total = segments.reduce((s, x) => s + x.val, 0);
+    const max = Math.max(total, volume, 1) * 1.05;
+    const pct = v => Math.min(100, v / max * 100);
+    const segs = segments.filter(x => x.val > 0).map(x => `<div title="${x.titre}" style="width:${pct(x.val)}%;background:${x.couleur};"></div>`).join('');
+    const marq = volume > 0 ? `<div title="Volume annoncé : ${fmtEx(volume)}" style="position:absolute;left:calc(${pct(volume)}% - 1px);top:-4px;bottom:-4px;width:3px;background:var(--text,#fff);border-radius:2px;"></div>` : '';
+    return `<div style="position:relative;margin:10px 4px 6px 0;"><div style="display:flex;height:20px;background:var(--surface2);border-radius:10px;overflow:hidden;">${segs}</div>${marq}</div>`;
+  };
+
+  const synth = [];
+  const fiches = [];
+  days.forEach((d, idx) => {
     const dk = dateKey(d);
     const r = calculerCapaciteDistribution(dk);
+    const libelle = `${DOW[idx]} ${d.getDate()}/${d.getMonth() + 1}`;
     const volChaud = db.distribVolumes?.[dk]?.chaud || '';
     const volFroid = db.distribVolumes?.[dk]?.froid || '';
+    const inputs = `<td style="padding:6px 10px;text-align:right;"><input type="number" min="0" step="100" value="${volChaud}" data-dk="${dk}" data-type="chaud" class="distrib-vol-input" style="width:100px;text-align:right;box-sizing:border-box;" onchange="saveDistribVolume(this)"></td>
+      <td style="padding:6px 10px;text-align:right;"><input type="number" min="0" step="100" value="${volFroid}" data-dk="${dk}" data-type="froid" class="distrib-vol-input" style="width:100px;text-align:right;box-sizing:border-box;" onchange="saveDistribVolume(this)"></td>`;
 
     if (r.erreur) {
-      return `<tr style="border-top:1px solid var(--border);">
-        <td style="padding:8px 10px;font-weight:700;">${DOW[idx]} ${d.getDate()}/${d.getMonth()+1}</td>
-        <td colspan="6" style="padding:8px 10px;color:var(--text-dim);text-align:center;">—</td>
-      </tr>`;
+      synth.push(`<tr style="border-top:1px solid var(--border);"><td style="padding:8px 10px;font-weight:700;">${libelle}</td>${inputs}<td colspan="7" style="padding:8px 10px;color:var(--text-dim);text-align:center;">—</td></tr>`);
+      return;
     }
+    const aDonnees = r.parEmploye.length > 0 || r.volChaud > 0 || r.volFroid > 0;
+    const manque = r.manqueChaud > 0 || r.manqueFroid > 0;
+    const alerteHorsZones = '';
+    synth.push(`<tr style="border-top:1px solid var(--border);cursor:pointer;" onclick="ouvrirFicheDistribution('${dk}')">
+      <td style="padding:8px 10px;font-weight:700;white-space:nowrap;">${libelle}${alerteHorsZones}</td>
+      ${inputs.replace(/<td /g, '<td onclick="event.stopPropagation()" ')}
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:var(--text-muted);">${fmtH(r.heuresChaud)}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${fmtEx(r.capChaud)}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-weight:700;color:${colEcart(r.ecartChaud)};">${fmtEcart(r.ecartChaud)}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:var(--text-muted);">${fmtH(r.heuresFroid)}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${fmtEx(r.capFroid)}${r.excedent > 0 ? ` <span title="Dont ${fmtEx(r.excedent)} d'excédent chaud reporté" style="color:var(--warning);">↷</span>` : ''}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-weight:700;color:${colEcart(r.ecartFroid)};">${fmtEcart(r.ecartFroid)}</td>
+      <td style="padding:8px 10px;text-align:center;">${!aDonnees ? '—' : manque ? '<span class="flag-badge" style="background:rgba(255,77,106,.15);color:var(--danger);">⚠️ Manque</span>' : '<span class="flag-badge" style="background:rgba(46,204,113,.15);color:var(--success);">✅ OK</span>'}</td>
+    </tr>`);
 
-    const ecartCol = (v) => v >= 0 ? 'var(--success)' : 'var(--danger)';
-    const ecartTxt = (v) => (v >= 0 ? '+' : '') + v.toLocaleString('fr-FR');
-    const alerteHorsZones = r.horsZones
-      ? ` <span title="${r.nbInstancesTrouvees} tâche(s) 'Distribution' posée(s) ce jour, mais aucune ne recoupe les fenêtres chaud/froid définies dans Paramètres > Distribution" style="color:var(--warning);cursor:help;">⚠️</span>`
-      : '';
+    if (!aDonnees) return;
 
-    return `<tr style="border-top:1px solid var(--border);">
-      <td style="padding:8px 10px;font-weight:700;white-space:nowrap;">${DOW[idx]} ${d.getDate()}/${d.getMonth()+1}${alerteHorsZones}</td>
-      <td style="padding:6px 10px;text-align:right;"><input type="number" min="0" step="100" value="${volChaud}" data-dk="${dk}" data-type="chaud" class="distrib-vol-input" style="width:110px;text-align:right;box-sizing:border-box;" onchange="saveDistribVolume(this)"></td>
-      <td style="padding:6px 10px;text-align:right;"><input type="number" min="0" step="100" value="${volFroid}" data-dk="${dk}" data-type="froid" class="distrib-vol-input" style="width:110px;text-align:right;box-sizing:border-box;" onchange="saveDistribVolume(this)"></td>
-      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${r.capaciteChaud.toLocaleString('fr-FR')}${r.aBasculement ? ' <span title="Comprend un bascule chaud→froid" style="color:var(--accent);">↷</span>' : ''}</td>
-      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${r.capaciteFroid.toLocaleString('fr-FR')}</td>
-      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-weight:700;color:${ecartCol(r.ecartChaud)};">${ecartTxt(r.ecartChaud)}</td>
-      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-weight:700;color:${ecartCol(r.ecartFroid)};">${ecartTxt(r.ecartFroid)}</td>
-    </tr>`;
-  }).join('');
+    // ---- Fiche détaillée du jour ----
+    const blocChaud = `<div style="flex:1;min-width:300px;">
+      <div style="font-weight:800;letter-spacing:.3px;">🔥 CHAUD <span style="font-weight:500;color:var(--text-dim);font-size:12px;">zone ${hh(z.debut)} → ${hh(z.finChaud)}</span></div>
+      ${barre([{ val: r.capChaud, couleur: r.ecartChaud >= 0 ? 'var(--success)' : 'var(--danger)', titre: 'Capacité chaud : ' + fmtEx(r.capChaud) }], r.volChaud)}
+      <div style="font-size:13px;line-height:1.7;">
+        Capacité : <b>${fmtH(r.heuresChaud)}</b> de distribution dans la zone chaud ≈ <b>${fmtEx(r.capChaud)}</b> ex.<br>
+        Annoncé : <b>${fmtEx(r.volChaud)}</b> ex.<br>
+        ${r.ecartChaud >= 0
+          ? `<span style="color:var(--success);font-weight:700;">✅ Excédent ${fmtEx(r.excedent)} ex.</span>${r.excedent > 0 ? ' → reporté sur la capacité froid' : ''}`
+          : `<span style="color:var(--danger);font-weight:700;">⚠️ Il manque ${fmtEx(r.manqueChaud)} ex.</span> ≈ <b>${fmtH(r.heuresManquantesChaud)}</b> de distribution à ajouter <u>dans la zone chaud</u> (le chaud ne se rattrape pas sur le froid)`}
+      </div></div>`;
+    const blocFroid = `<div style="flex:1;min-width:300px;">
+      <div style="font-weight:800;letter-spacing:.3px;">❄️ FROID <span style="font-weight:500;color:var(--text-dim);font-size:12px;">hors zone chaud (${hh(z.finChaud)} → ${hh(z.debut)})</span></div>
+      ${barre([
+        { val: r.capFroidPropre, couleur: 'var(--accent)', titre: 'Capacité froid propre : ' + fmtEx(r.capFroidPropre) },
+        { val: r.excedent, couleur: 'var(--warning)', titre: 'Excédent chaud reporté : ' + fmtEx(r.excedent) },
+      ], r.volFroid)}
+      <div style="font-size:13px;line-height:1.7;">
+        Capacité propre : <b>${fmtH(r.heuresFroid)}</b> hors zone chaud ≈ <b>${fmtEx(r.capFroidPropre)}</b> ex.<br>
+        <span style="color:var(--warning);">+ Excédent chaud reporté : <b>${fmtEx(r.excedent)}</b> ex.</span><br>
+        = Capacité froid : <b>${fmtEx(r.capFroid)}</b> ex. &nbsp;·&nbsp; Annoncé : <b>${fmtEx(r.volFroid)}</b> ex.<br>
+        ${r.ecartFroid >= 0
+          ? `<span style="color:var(--success);font-weight:700;">✅ Excédent ${fmtEx(r.ecartFroid)} ex.</span>`
+          : `<span style="color:var(--danger);font-weight:700;">⚠️ Il manque ${fmtEx(r.manqueFroid)} ex.</span> ≈ <b>${fmtH(r.heuresManquantesFroid)}</b> de distribution (à ${fmtEx(r.tauxMoyenFroid)} ex./h)`}
+      </div></div>`;
+
+    const lignesEmp = r.parEmploye.map(e => {
+      // fusionne les morceaux accolés (ex. 22:00→24:00 puis 00:00→05:30)
+      const fus = [];
+      e.plages.forEach(p => { const l = fus[fus.length - 1]; if (l && Math.abs(p.a - l.b) < 1) l.b = p.b; else fus.push({ a: p.a, b: p.b }); });
+      const plagesTxt = fus.map(p => `${hh(p.a)} → ${hh(p.b)}`).join(' · ');
+      return `<tr style="border-top:1px solid var(--border);">
+        <td style="padding:6px 8px;font-weight:600;white-space:nowrap;">${escHtml(e.emp.prenom)} ${escHtml(e.emp.nom)}</td>
+        <td style="padding:6px 8px;font-family:var(--mono);font-size:12px;white-space:nowrap;">${plagesTxt}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtEx(e.taux)}${e.taux ? '' : ' <span title="Taux non renseigné (fiche employé)" style="color:var(--warning);">⚠️</span>'}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${minToHM(Math.round(e.chaudMin))}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtEx(e.chaudEx)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${minToHM(Math.round(e.froidMin))}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtEx(e.froidEx)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);font-weight:700;">${fmtEx(e.chaudEx + e.froidEx)}</td>
+      </tr>`;
+    }).join('');
+    const tableEmp = r.parEmploye.length ? `<div style="overflow-x:auto;margin-top:14px;"><table class="pg" style="width:100%;border-collapse:collapse;font-size:13px;min-width:640px;">
+      <tr style="background:var(--surface2);"><th style="text-align:left;padding:6px 8px;">Employé</th><th style="text-align:left;padding:6px 8px;">Distribution planifiée</th><th style="text-align:right;padding:6px 8px;">Taux (ex./h)</th><th style="text-align:right;padding:6px 8px;">Heures chaud</th><th style="text-align:right;padding:6px 8px;">Ex. chaud</th><th style="text-align:right;padding:6px 8px;">Heures froid</th><th style="text-align:right;padding:6px 8px;">Ex. froid</th><th style="text-align:right;padding:6px 8px;">Total ex.</th></tr>
+      ${lignesEmp}
+      <tr style="border-top:2px solid var(--border);font-weight:800;"><td style="padding:6px 8px;" colspan="3">Total (${r.parEmploye.length} personne${r.parEmploye.length > 1 ? 's' : ''})</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtH(r.heuresChaud)}</td><td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtEx(r.capChaud)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtH(r.heuresFroid)}</td><td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtEx(r.capFroidPropre)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtEx(r.capChaud + r.capFroidPropre)}</td></tr>
+    </table></div>` : '<div class="hint" style="margin-top:12px;">Aucune tâche « Distribution » planifiée sur cette journée.</div>';
+
+    const boutonSol = manque ? `<button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="proposerSolutionsDistribution('${dk}')">💡 Proposer des solutions pour passer tous les exemplaires</button>` : '';
+    const ouvert = distribOuverts.has(dk) || (distribOuverts.size === 0 && !distribOuvertsInit && manque);
+    fiches.push(`<details class="task-card" id="distrib-fiche-${dk}" style="cursor:default;margin-top:10px;" ${ouvert ? 'open' : ''} ontoggle="distribOuverts[this.open ? 'add' : 'delete']('${dk}');distribOuvertsInit=true;">
+      <summary style="cursor:pointer;font-weight:800;font-size:15px;">${libelle} — détail du calcul ${manque ? '<span style="color:var(--danger);font-size:12px;margin-left:8px;">⚠️ manque</span>' : '<span style="color:var(--success);font-size:12px;margin-left:8px;">✅</span>'}</summary>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:12px;">${blocChaud}${blocFroid}</div>
+      ${tableEmp}${boutonSol}
+    </details>`);
+  });
 
   document.getElementById('distrib-wrap').innerHTML = `<div style="overflow-x:auto;">
-    <table class="pg" style="width:100%;border-collapse:collapse;min-width:820px;">
-      <colgroup>
-        <col style="width:110px;"><col><col><col style="width:130px;"><col style="width:130px;"><col style="width:110px;"><col style="width:110px;">
-      </colgroup>
+    <table class="pg" style="width:100%;border-collapse:collapse;min-width:980px;">
       <tr style="background:var(--surface2);">
         <th style="text-align:left;padding:8px 10px;">Jour</th>
-        <th style="text-align:right;padding:8px 10px;">Volume chaud annoncé</th>
-        <th style="text-align:right;padding:8px 10px;">Volume froid annoncé</th>
+        <th style="text-align:right;padding:8px 10px;">Annoncé chaud</th>
+        <th style="text-align:right;padding:8px 10px;">Annoncé froid</th>
+        <th style="text-align:right;padding:8px 10px;">Heures chaud</th>
         <th style="text-align:right;padding:8px 10px;">Capacité chaud</th>
-        <th style="text-align:right;padding:8px 10px;">Capacité froid</th>
         <th style="text-align:right;padding:8px 10px;">Écart chaud</th>
+        <th style="text-align:right;padding:8px 10px;">Heures froid</th>
+        <th style="text-align:right;padding:8px 10px;">Capacité froid</th>
         <th style="text-align:right;padding:8px 10px;">Écart froid</th>
+        <th style="padding:8px 10px;">Statut</th>
       </tr>
-      ${rows}
+      ${synth.join('')}
     </table>
   </div>
-  <div class="hint" style="margin-top:10px;">"Capacité chaud" = ce que l'équipe peut traiter au maximum sur ce créneau (indépendamment du volume saisi). ↷ = une partie de ce temps a basculé vers le froid car le volume chaud annoncé est inférieur à cette capacité (le chaud est traité en avance, ou pas encore saisi).</div>`;
+  <div class="hint" style="margin-top:10px;">Zone chaud : <b>${hh(z.debut)} → ${hh(z.finChaud)}</b> (la veille au soir jusqu'au matin) — hors de cette zone, seul le froid peut être traité. Capacité = heures de tâche « Distribution » × taux de mise en case de chaque employé. L'<b>excédent chaud</b> (↷) s'ajoute à la capacité froid avant la comparaison avec le froid annoncé. Clique sur une ligne pour ouvrir le détail du jour.</div>
+  ${fiches.join('')}`;
+}
+let distribOuverts = new Set();
+let distribOuvertsInit = false;
+function ouvrirFicheDistribution(dk) {
+  const el = document.getElementById('distrib-fiche-' + dk);
+  if (!el) return;
+  el.open = true;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function saveDistribVolume(input) {
@@ -15818,6 +15863,215 @@ function saveDistribVolume(input) {
   db.distribVolumes[dk][type] = val;
   saveDB();
   renderDistribution();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Propositions de renfort : quelles heures de Distribution ajouter, et à qui, pour passer tous les
+// exemplaires annoncés. Priorité aux personnes dont le compteur modulation est le plus bas
+// (déficit d'heures en premier). Jamais appliqué automatiquement : l'admin choisit.
+// ---------------------------------------------------------------------------------------------
+const DISTRIB_MAX_MIN_JOURNEE = 600; // 10 h de travail max dans la journée de distribution
+
+function intervallesLibresDistribution(occ, a, b) {
+  const tri = occ.map(([x, y]) => [Math.max(x, a), Math.min(y, b)]).filter(([x, y]) => y > x).sort((p, q) => p[0] - q[0]);
+  const res = [];
+  let cur = a;
+  tri.forEach(([x, y]) => { if (x > cur) res.push([cur, x]); cur = Math.max(cur, y); });
+  if (cur < b) res.push([cur, b]);
+  return res;
+}
+
+function construirePlanRenfortDistribution(dk, r, soldes) {
+  const z = r.zones;
+  const d = isoToDate(dk);
+  const dkPrec = dateKey(addDays(d, -1));
+  const ids = new Set(getTachesDistribution().map(t => t.id));
+  let cands = db.employes.filter(e => (e.tauxCase || 0) > 0 && estActifPendant(e, dkPrec, dk));
+  const avecComp = cands.filter(e => (e.competences || []).some(id => ids.has(id)));
+  const restreintCompetence = avecComp.length > 0;
+  if (restreintCompetence) cands = avecComp;
+
+  const infos = cands.map(emp => {
+    const occ = [];
+    let travaille = 0;
+    [-2, -1, 0, 1].forEach(delta => {
+      const dj = addDays(d, delta), dkj = dateKey(dj), off = (delta + 1) * 1440;
+      const insts = db.planning[emp.id]?.[dkj] || [];
+      const conge = insts.some(i => db.tasks.find(t => t.id === i.taskId)?.conge);
+      if (conge || (!insts.length && estJourReposHabituel(emp.id, dj.getDay()))) occ.push([off, off + 1440]);
+      insts.filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge).forEach(i => {
+        const a = i.debut + off, b = (i.crosseMinuit ? i.fin + 1440 : i.fin) + off;
+        occ.push([a, b]);
+        travaille += chevauchementMin(a, b, z.debut, z.fin);
+      });
+    });
+    return { emp, occ, travaille, solde: soldes ? (soldes[emp.id] ?? 0) : 0 };
+  });
+  infos.sort((x, y) => (x.solde - y.solde) || x.emp.nom.localeCompare(y.emp.nom, 'fr'));
+
+  let besoinC = r.manqueChaud, besoinF = r.manqueFroid;
+  const propositions = [];
+
+  const allouer = (info, zone, besoinEx) => {
+    const [za, zb] = zone === 'chaud' ? [z.debut, z.finChaud] : [z.finChaud, z.fin];
+    if (zb <= za) return null;
+    const reste = DISTRIB_MAX_MIN_JOURNEE - info.travaille;
+    if (reste < 60) return null;
+    const libres = intervallesLibresDistribution(info.occ, za, zb).filter(([x, y]) => y - x >= 60);
+    if (!libres.length) return null;
+    const voulu = Math.max(60, Math.ceil(besoinEx / info.emp.tauxCase * 2) / 2 * 60);
+    let choix = null;
+    libres.forEach(([x, y]) => {
+      const colleDebut = info.occ.some(([p, q]) => q === x), colleFin = info.occ.some(([p, q]) => p === y);
+      const score = (colleDebut || colleFin) ? 1 : 0;
+      if (!choix || score > choix.score) choix = { x, y, colleDebut, colleFin, score };
+    });
+    let longueur = Math.min(choix.y - choix.x, voulu, reste);
+    longueur = Math.floor(longueur / 30) * 30;
+    if (longueur < 60) return null;
+    let a, b;
+    if (choix.colleFin && !choix.colleDebut) { b = choix.y; a = b - longueur; } else { a = choix.x; b = a + longueur; }
+    return { a, b, min: b - a };
+  };
+  const ajouter = (info, zone, blk) => {
+    const ex = blk.min / 60 * info.emp.tauxCase;
+    propositions.push({ emp: info.emp, solde: info.solde, zone, a: blk.a, b: blk.b, min: blk.min, ex });
+    info.occ.push([blk.a, blk.b]);
+    info.travaille += blk.min;
+    if (zone === 'chaud') { const vC = Math.min(ex, besoinC); besoinC -= vC; besoinF -= (ex - vC); }
+    else besoinF -= ex;
+  };
+
+  // 1) déficit chaud : uniquement des heures DANS la zone chaud
+  for (const info of infos) {
+    if (besoinC <= 0) break;
+    const blk = allouer(info, 'chaud', besoinC);
+    if (blk) ajouter(info, 'chaud', blk);
+  }
+  // 2) déficit froid : heures hors zone chaud d'abord, puis (si le chaud est couvert) dans la zone chaud
+  for (const zone of ['froid', 'chaud']) {
+    if (zone === 'chaud' && besoinC > 0) continue;
+    for (const info of infos) {
+      if (besoinF <= 0) break;
+      const blk = allouer(info, zone, besoinF);
+      if (blk) ajouter(info, zone, blk);
+    }
+  }
+
+  const dejaPropose = new Set(propositions.map(p => p.emp.id));
+  const disponibles = infos.filter(i => !dejaPropose.has(i.emp.id)).map(i => ({
+    emp: i.emp, solde: i.solde,
+    libreChaud: intervallesLibresDistribution(i.occ, z.debut, z.finChaud).reduce((s, [x, y]) => s + (y - x >= 60 ? y - x : 0), 0),
+    libreFroid: intervallesLibresDistribution(i.occ, z.finChaud, z.fin).reduce((s, [x, y]) => s + (y - x >= 60 ? y - x : 0), 0),
+  })).filter(i => i.libreChaud + i.libreFroid > 0);
+
+  return { propositions, resteChaud: Math.max(0, besoinC), resteFroid: Math.max(0, besoinF), restreintCompetence, nbCandidats: cands.length, disponibles };
+}
+
+async function proposerSolutionsDistribution(dk) {
+  const r = calculerCapaciteDistribution(dk);
+  if (r.erreur) return;
+  const cont = document.getElementById('distrib-sol-content');
+  openModal('modal-distrib-solutions');
+  cont.innerHTML = '<div class="hint">Calcul des propositions (lecture du compteur modulation)…</div>';
+  let soldes = _compteurPourPlanning;
+  if (!soldes && fbDb) {
+    try {
+      const { cartes } = await calculerCartesCompteurPures(getCompteurDepuis(), '');
+      soldes = {};
+      cartes.forEach(c => { soldes[c.emp.id] = c.total; });
+      _compteurPourPlanning = soldes;
+    } catch (e) { console.error('Compteur pour Distribution :', e); soldes = null; }
+  }
+  const plan = construirePlanRenfortDistribution(dk, r, soldes);
+  window._distribPlan = { dk, plan };
+
+  const fmtEx = n => Math.round(n).toLocaleString('fr-FR');
+  const fmtH = min => minToHM(Math.round(min));
+  const hh = abs => minToTime(((Math.round(abs) % 1440) + 1440) % 1440);
+  const DOW = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+  const d = isoToDate(dk);
+  const badgeSolde = s => soldes ? `<span style="font-family:var(--mono);font-weight:800;color:${s >= 0 ? 'var(--success)' : 'var(--danger)'};">${s >= 0 ? '+' : '−'}${minToHM(Math.abs(Math.round(s)))}</span>` : '<span style="color:var(--text-dim);">n/d</span>';
+
+  const lignesZone = zone => {
+    const props = plan.propositions.map((p, idx) => ({ p, idx })).filter(x => x.p.zone === zone);
+    if (!props.length) return '';
+    return `<div style="font-weight:800;margin:14px 0 6px;">${zone === 'chaud' ? '🔥 À ajouter dans la zone chaud' : '❄️ À ajouter hors zone chaud (froid)'}</div>
+      <table class="pg" style="width:100%;border-collapse:collapse;font-size:13px;">
+      <tr style="background:var(--surface2);"><th style="text-align:left;padding:6px 8px;">Employé</th><th style="text-align:right;padding:6px 8px;">Compteur</th><th style="text-align:left;padding:6px 8px;">Créneau à ajouter</th><th style="text-align:right;padding:6px 8px;">Durée</th><th style="text-align:right;padding:6px 8px;">+ exemplaires</th><th></th></tr>
+      ${props.map(({ p, idx }) => `<tr style="border-top:1px solid var(--border);">
+        <td style="padding:6px 8px;font-weight:600;">${escHtml(p.emp.prenom)} ${escHtml(p.emp.nom)}</td>
+        <td style="padding:6px 8px;text-align:right;">${badgeSolde(p.solde)}</td>
+        <td style="padding:6px 8px;font-family:var(--mono);">${hh(p.a)} → ${hh(p.b)} <span style="color:var(--text-dim);font-size:11px;">(${p.a < 1440 ? 'soir du ' + DOW[addDays(d, -1).getDay()] + ' ' + addDays(d, -1).getDate() : DOW[d.getDay()] + ' ' + d.getDate()})</span></td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtH(p.min)}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">+${fmtEx(p.ex)}</td>
+        <td style="padding:6px 8px;text-align:right;"><button class="btn btn-secondary btn-sm" onclick="appliquerRenfortDistribution(${idx})">➕ Ajouter</button></td>
+      </tr>`).join('')}</table>`;
+  };
+
+  const besoin = [];
+  if (r.manqueChaud > 0) besoin.push(`chaud : manque <b>${fmtEx(r.manqueChaud)}</b> ex. (≈ ${minToHM(Math.round(r.heuresManquantesChaud * 60))})`);
+  if (r.manqueFroid > 0) besoin.push(`froid : manque <b>${fmtEx(r.manqueFroid)}</b> ex. (≈ ${minToHM(Math.round(r.heuresManquantesFroid * 60))})`);
+
+  let html = `<div style="font-size:14px;margin-bottom:8px;"><b>${DOW[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}</b>${besoin.length ? ' — ' + besoin.join(' · ') : ''}</div>
+    <div class="hint" style="margin-bottom:6px;">Classement par <b>compteur modulation croissant</b> (déficit d'heures en premier)${soldes ? '' : ' — <span style="color:var(--warning);">compteur indisponible, classement alphabétique</span>'}. Sont proposées les personnes ${plan.restreintCompetence ? 'ayant la compétence « Distribution »' : 'actives'}, sans congé ni repos, libres sur le créneau et dont la journée ne dépasse pas 10 h. <b>Repos quotidien et durée hebdomadaire maximale ne sont pas vérifiés</b> : contrôle-les avant d'ajouter.</div>`;
+
+  if (!besoin.length) {
+    html += '<div class="hint" style="color:var(--success);margin:12px 0;font-weight:700;">✅ Plus aucun manque sur cette journée : tous les exemplaires annoncés peuvent être passés.</div>';
+  } else if (!plan.propositions.length) {
+    html += '<div class="hint" style="color:var(--warning);margin:12px 0;">Aucune personne disponible sur ce créneau : tous les candidats sont déjà occupés, en congé ou au repos.</div>';
+  } else {
+    html += lignesZone('chaud') + lignesZone('froid');
+    html += `<div style="margin-top:14px;"><button class="btn btn-primary btn-sm" onclick="appliquerRenfortDistribution(-1)">➕ Tout ajouter au planning</button></div>`;
+  }
+  if (plan.resteChaud > 0 || plan.resteFroid > 0) {
+    html += `<div class="hint" style="margin-top:12px;color:var(--warning);">⚠️ Même avec ces ajouts, il manquerait encore ${plan.resteChaud > 0 ? fmtEx(plan.resteChaud) + ' ex. en chaud ' : ''}${plan.resteFroid > 0 ? fmtEx(plan.resteFroid) + ' ex. en froid' : ''} : pas assez de personnel disponible — il faudra étendre des horaires existants, faire appel à des renforts ou réduire le volume.</div>`;
+  } else if (plan.propositions.length) {
+    html += `<div class="hint" style="margin-top:12px;color:var(--success);">✅ Avec ces ajouts, tous les exemplaires annoncés peuvent être passés.</div>`;
+  }
+  if (besoin.length && plan.disponibles.length) {
+    html += `<div style="font-weight:700;margin:16px 0 4px;font-size:13px;">Autres personnes disponibles (non retenues)</div>
+      <div style="font-size:12px;color:var(--text-muted);line-height:1.7;">${plan.disponibles.map(i => `${escHtml(i.emp.prenom)} ${escHtml(i.emp.nom)} (${soldes ? (i.solde >= 0 ? '+' : '−') + minToHM(Math.abs(Math.round(i.solde))) : 'n/d'}) — libre ${i.libreChaud ? fmtH(i.libreChaud) + ' en chaud' : ''}${i.libreChaud && i.libreFroid ? ' · ' : ''}${i.libreFroid ? fmtH(i.libreFroid) + ' en froid' : ''}`).join('<br>')}</div>`;
+  }
+  cont.innerHTML = html;
+}
+
+// Pose une proposition dans le planning (idx = -1 : toutes). Une proposition à cheval sur minuit
+// devient une tâche « se termine le lendemain », comme n'importe quelle tâche du planning.
+function poserTacheDistribution(empId, a, b, dk) {
+  const taches = getTachesDistribution();
+  if (!taches.length) return false;
+  const d = isoToDate(dk);
+  const dayIdx = Math.floor(a / 1440); // 0 = veille de D, 1 = jour D
+  const dkJour = dateKey(addDays(d, dayIdx - 1));
+  if (!verifierSemaineModifiable(dkJour)) return false;
+  const debut = a - dayIdx * 1440;
+  const crosse = b > (dayIdx + 1) * 1440;
+  const fin = crosse ? b - (dayIdx + 1) * 1440 : b - dayIdx * 1440;
+  if (!db.planning[empId]) db.planning[empId] = {};
+  if (!db.planning[empId][dkJour]) db.planning[empId][dkJour] = [];
+  db.planning[empId][dkJour].push({ id: uid(), taskId: taches[0].id, debut, fin, crosseMinuit: crosse });
+  return true;
+}
+function appliquerRenfortDistribution(idx) {
+  const ctx = window._distribPlan;
+  if (!ctx) return;
+  const liste = idx === -1 ? ctx.plan.propositions : [ctx.plan.propositions[idx]];
+  let n = 0;
+  liste.forEach(p => {
+    if (!p) return;
+    if (poserTacheDistribution(p.emp.id, p.a, p.b, ctx.dk)) {
+      n++;
+      logAudit('Distribution : renfort ajouté', `${p.emp.prenom} ${p.emp.nom} — journée du ${ctx.dk} — ${minToTime(((p.a % 1440) + 1440) % 1440)} → ${minToTime(((p.b % 1440) + 1440) % 1440)} (${p.zone})`);
+    }
+  });
+  if (!n) return;
+  saveDB();
+  renderDistribution();
+  if (document.getElementById('view-planning')?.classList.contains('active')) renderPlanning();
+  notify(n > 1 ? `${n} créneaux de distribution ajoutés au planning` : 'Créneau de distribution ajouté au planning');
+  if (idx === -1) closeModal('modal-distrib-solutions');
+  else proposerSolutionsDistribution(ctx.dk); // recalcule : le besoin et les disponibilités ont changé
 }
 
 function logAudit(action, details) {
