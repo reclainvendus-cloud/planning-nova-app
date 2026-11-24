@@ -1675,9 +1675,9 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 
 <!-- ===== MODAL COPIER LA JOURNÉE ===== -->
 <div class="modal-overlay" id="modal-distrib-solutions">
-  <div class="modal" style="width:780px;max-width:96vw;max-height:90vh;overflow-y:auto;">
+  <div class="modal" style="width:900px;max-width:96vw;max-height:90vh;overflow-y:auto;">
     <button class="modal-close" onclick="closeModal('modal-distrib-solutions')">✕</button>
-    <h2>💡 Solutions pour passer tous les exemplaires</h2>
+    <h2>🧭 Assistant de planification — Distribution</h2>
     <div id="distrib-sol-content"></div>
   </div>
 </div>
@@ -2318,7 +2318,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.17.1';
+const APP_VERSION = '2.18.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2349,6 +2349,12 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.18.0', items: [
+    'Distribution — nouvel « 🧭 Assistant de planification » (remplace « Proposer des solutions ») : tu choisis QUI ajuster, de COMBIEN (pas de 30 min, 10 h max par personne) et où (à l\'embauche ou à la fin du service), avec l\'effet sur les exemplaires en direct avant d\'appliquer.',
+    'Assistant : seules les personnes ayant la compétence Distribution sont proposées — d\'abord celles déjà en distribution à l\'embauche/à la fin, puis celles dont le service est proche, puis (dernier recours) les personnes libres (heures sup.). Tri : proximité, puis compteur (le plus bas pour un ajout, le plus haut pour un retrait).',
+    'Assistant : trois façons d\'ajouter (prolonger la distribution, heures sup. avant/après le service, ou distribution à la place du début/de la fin d\'une autre tâche) + onglet « Retirer » en cas de capacité excédentaire, chaud et froid séparés. Pause de 30 min ajoutée automatiquement si le service dépasse 6 h.',
+    'Assistant : le solde du compteur modulation est relu à chaque ouverture (plus besoin de relancer l\'appli après correction d\'un pointage).',
+  ] },
   { v: '2.17.1', items: [
     'Distribution : les pauses des tâches ne sont plus déduites du calcul (le taux de mise en case les inclut déjà).',
   ] },
@@ -15563,11 +15569,12 @@ function tauxReferenceDistribution() {
 // Capacité de distribution de la journée D (de l'heure de début du chaud la veille à la même heure
 // le jour D) :
 //  - chaque employé : minutes de tâche « Distribution » dans la zone chaud / hors zone chaud
-//    (= froid), pauses déduites, × son taux de mise en case ;
+//    (= froid), × son taux de mise en case ;
 //  - capacité chaud comparée au volume chaud annoncé : l'EXCÉDENT éventuel s'ajoute à la capacité
 //    froid avant de la comparer au volume froid annoncé. Un déficit chaud ne se rattrape pas sur
 //    le froid (le chaud ne peut être traité que dans sa zone).
-function calculerCapaciteDistribution(dk) {
+function calculerCapaciteDistribution(dk, P) {
+  P = P || db.planning;
   const tasks = getTachesDistribution();
   if (!tasks.length) return { erreur: true };
   const ids = new Set(tasks.map(t => t.id));
@@ -15582,7 +15589,7 @@ function calculerCapaciteDistribution(dk) {
     let chaudMin = 0, froidMin = 0;
     const plages = [];
     jours.forEach(j => {
-      (db.planning[emp.id]?.[j.dk] || []).filter(i => ids.has(i.taskId)).forEach(i => {
+      (P[emp.id]?.[j.dk] || []).filter(i => ids.has(i.taskId)).forEach(i => {
         nbInstancesTrouvees++;
         segmentsInstanceDistribution(i, j.off).forEach(([a, b]) => {
           const c = chevauchementMin(a, b, z.debut, z.finChaud);
@@ -15818,7 +15825,7 @@ function renderDistribution() {
         <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtEx(r.capChaud + r.capFroidPropre)}</td></tr>
     </table></div>` : '<div class="hint" style="margin-top:12px;">Aucune tâche « Distribution » planifiée sur cette journée.</div>';
 
-    const boutonSol = manque ? `<button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="proposerSolutionsDistribution('${dk}')">💡 Proposer des solutions pour passer tous les exemplaires</button>` : '';
+    const boutonSol = aDonnees ? `<button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="ouvrirAssistantDistribution('${dk}')">🧭 Assistant de planification</button>` : '';
     const ouvert = distribOuverts.has(dk) || (distribOuverts.size === 0 && !distribOuvertsInit && manque);
     fiches.push(`<details class="task-card" id="distrib-fiche-${dk}" style="cursor:default;margin-top:10px;" ${ouvert ? 'open' : ''} ontoggle="distribOuverts[this.open ? 'add' : 'delete']('${dk}');distribOuvertsInit=true;">
       <summary style="cursor:pointer;font-weight:800;font-size:15px;">${libelle} — détail du calcul ${manque ? '<span style="color:var(--danger);font-size:12px;margin-left:8px;">⚠️ manque</span>' : '<span style="color:var(--success);font-size:12px;margin-left:8px;">✅</span>'}</summary>
@@ -15866,212 +15873,456 @@ function saveDistribVolume(input) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Propositions de renfort : quelles heures de Distribution ajouter, et à qui, pour passer tous les
-// exemplaires annoncés. Priorité aux personnes dont le compteur modulation est le plus bas
-// (déficit d'heures en premier). Jamais appliqué automatiquement : l'admin choisit.
+// ASSISTANT DE PLANIFICATION DISTRIBUTION
+// L'appli détecte l'écart chaud/froid ; l'admin choisit QUI ajuster et de COMBIEN, au début ou à la
+// fin du service. Aperçu en direct (planning simulé), puis application au vrai planning.
+// Seules les personnes ayant la compétence « Distribution » sont proposées.
 // ---------------------------------------------------------------------------------------------
 const DISTRIB_MAX_MIN_JOURNEE = 600; // 10 h de travail max dans la journée de distribution
+const DISTRIB_PAS_MIN = 30;
+let asst = null; // état de l'assistant (voir ouvrirAssistantDistribution)
 
-function intervallesLibresDistribution(occ, a, b) {
-  const tri = occ.map(([x, y]) => [Math.max(x, a), Math.min(y, b)]).filter(([x, y]) => y > x).sort((p, q) => p[0] - q[0]);
+function hhAbs(abs) { return minToTime(((Math.round(abs) % 1440) + 1440) % 1440); }
+function fmtExAsst(n) { return Math.round(n).toLocaleString('fr-FR'); }
+function badgeSoldeAsst(s) {
+  if (s === null || s === undefined) return '<span style="color:var(--text-dim);">n/d</span>';
+  return `<span style="font-family:var(--mono);font-weight:800;color:${s >= 0 ? 'var(--success)' : 'var(--danger)'};">${s >= 0 ? '+' : '−'}${minToHM(Math.abs(Math.round(s)))}</span>`;
+}
+function absInst(inst, off) { return [inst.debut + off, (inst.crosseMinuit ? inst.fin + 1440 : inst.fin) + off]; }
+
+// Tâches d'un employé (jours D-2 à D+1) en minutes absolues depuis 00:00 de la veille de D.
+function tachesAbsEmploye(P, empId, d, idsDist) {
   const res = [];
-  let cur = a;
-  tri.forEach(([x, y]) => { if (x > cur) res.push([cur, x]); cur = Math.max(cur, y); });
-  if (cur < b) res.push([cur, b]);
+  [-2, -1, 0, 1].forEach(delta => {
+    const dkj = dateKey(addDays(d, delta)), off = (delta + 1) * 1440;
+    (P[empId]?.[dkj] || []).forEach(inst => {
+      const t = db.tasks.find(tt => tt.id === inst.taskId);
+      const [a, b] = absInst(inst, off);
+      res.push({ inst, dkj, off, a, b, conge: !!t?.conge, dist: idsDist.has(inst.taskId), nom: t?.nom || 'Tâche' });
+    });
+  });
+  return res.sort((x, y) => x.a - y.a);
+}
+// Services = tâches consécutives séparées d'au plus le seuil de pause (comme pour les pointages)
+function servicesDepuisTaches(taches, seuil) {
+  const res = [];
+  taches.filter(t => !t.conge).forEach(t => {
+    const s = res[res.length - 1];
+    if (s && t.a - s.b <= seuil) { s.taches.push(t); s.b = Math.max(s.b, t.b); }
+    else res.push({ taches: [t], a: t.a, b: t.b });
+  });
+  res.forEach(s => { s.premiere = s.taches[0]; s.derniere = s.taches.reduce((m, t) => t.b >= m.b ? t : m); });
   return res;
 }
 
-function construirePlanRenfortDistribution(dk, r, soldes) {
-  const z = r.zones;
-  const d = isoToDate(dk);
-  const dkPrec = dateKey(addDays(d, -1));
-  const ids = new Set(getTachesDistribution().map(t => t.id));
-  let cands = db.employes.filter(e => (e.tauxCase || 0) > 0 && estActifPendant(e, dkPrec, dk));
-  const avecComp = cands.filter(e => (e.competences || []).some(id => ids.has(id)));
-  const restreintCompetence = avecComp.length > 0;
-  if (restreintCompetence) cands = avecComp;
-
-  const infos = cands.map(emp => {
-    const occ = [];
-    let travaille = 0;
-    [-2, -1, 0, 1].forEach(delta => {
-      const dj = addDays(d, delta), dkj = dateKey(dj), off = (delta + 1) * 1440;
-      const insts = db.planning[emp.id]?.[dkj] || [];
-      const conge = insts.some(i => db.tasks.find(t => t.id === i.taskId)?.conge);
-      if (conge || (!insts.length && estJourReposHabituel(emp.id, dj.getDay()))) occ.push([off, off + 1440]);
-      insts.filter(i => !db.tasks.find(t => t.id === i.taskId)?.conge).forEach(i => {
-        const a = i.debut + off, b = (i.crosseMinuit ? i.fin + 1440 : i.fin) + off;
-        occ.push([a, b]);
-        travaille += chevauchementMin(a, b, z.debut, z.fin);
-      });
-    });
-    return { emp, occ, travaille, solde: soldes ? (soldes[emp.id] ?? 0) : 0 };
-  });
-  infos.sort((x, y) => (x.solde - y.solde) || x.emp.nom.localeCompare(y.emp.nom, 'fr'));
-
-  let besoinC = r.manqueChaud, besoinF = r.manqueFroid;
-  const propositions = [];
-
-  const allouer = (info, zone, besoinEx) => {
-    const [za, zb] = zone === 'chaud' ? [z.debut, z.finChaud] : [z.finChaud, z.fin];
-    if (zb <= za) return null;
-    const reste = DISTRIB_MAX_MIN_JOURNEE - info.travaille;
-    if (reste < 60) return null;
-    const libres = intervallesLibresDistribution(info.occ, za, zb).filter(([x, y]) => y - x >= 60);
-    if (!libres.length) return null;
-    const voulu = Math.max(60, Math.ceil(besoinEx / info.emp.tauxCase * 2) / 2 * 60);
-    let choix = null;
-    libres.forEach(([x, y]) => {
-      const colleDebut = info.occ.some(([p, q]) => q === x), colleFin = info.occ.some(([p, q]) => p === y);
-      const score = (colleDebut || colleFin) ? 1 : 0;
-      if (!choix || score > choix.score) choix = { x, y, colleDebut, colleFin, score };
-    });
-    let longueur = Math.min(choix.y - choix.x, voulu, reste);
-    longueur = Math.floor(longueur / 30) * 30;
-    if (longueur < 60) return null;
-    let a, b;
-    if (choix.colleFin && !choix.colleDebut) { b = choix.y; a = b - longueur; } else { a = choix.x; b = a + longueur; }
-    return { a, b, min: b - a };
-  };
-  const ajouter = (info, zone, blk) => {
-    const ex = blk.min / 60 * info.emp.tauxCase;
-    propositions.push({ emp: info.emp, solde: info.solde, zone, a: blk.a, b: blk.b, min: blk.min, ex });
-    info.occ.push([blk.a, blk.b]);
-    info.travaille += blk.min;
-    if (zone === 'chaud') { const vC = Math.min(ex, besoinC); besoinC -= vC; besoinF -= (ex - vC); }
-    else besoinF -= ex;
-  };
-
-  // 1) déficit chaud : uniquement des heures DANS la zone chaud
-  for (const info of infos) {
-    if (besoinC <= 0) break;
-    const blk = allouer(info, 'chaud', besoinC);
-    if (blk) ajouter(info, 'chaud', blk);
+// ---- Écriture d'une instance en coordonnées absolues (jour/heure/« lendemain » recalculés) ----
+function localiserInstanceAsst(P, d, empId, instId) {
+  for (const delta of [-2, -1, 0, 1]) {
+    const dkj = dateKey(addDays(d, delta));
+    const arr = P[empId]?.[dkj];
+    const inst = arr?.find(i => i.id === instId);
+    if (inst) return { inst, dkj, arr, off: (delta + 1) * 1440 };
   }
-  // 2) déficit froid : heures hors zone chaud d'abord, puis (si le chaud est couvert) dans la zone chaud
-  for (const zone of ['froid', 'chaud']) {
-    if (zone === 'chaud' && besoinC > 0) continue;
-    for (const info of infos) {
-      if (besoinF <= 0) break;
-      const blk = allouer(info, zone, besoinF);
-      if (blk) ajouter(info, zone, blk);
+  return null;
+}
+function coordsAbs(d, a, b) {
+  const dayIdx = Math.floor(a / 1440);
+  const crosse = b > (dayIdx + 1) * 1440;
+  const fin = crosse ? b - (dayIdx + 1) * 1440 : b - dayIdx * 1440;
+  return { dkJour: dateKey(addDays(d, dayIdx - 1)), debut: a - dayIdx * 1440, fin, crosse };
+}
+// ancien = résultat de localiserInstanceAsst (déplacer/redimensionner) ou null (créer avec taskId)
+function ecrireInstanceAbs(P, d, empId, a, b, ancien, taskId) {
+  if (b - a <= 0) { // plus rien : on supprime
+    if (ancien) { const i = ancien.arr.indexOf(ancien.inst); if (i >= 0) ancien.arr.splice(i, 1); }
+    return true;
+  }
+  const c = coordsAbs(d, a, b);
+  if (c.crosse && c.fin > 1439) return false; // une tâche ne peut pas dépasser 24 h
+  let inst;
+  if (ancien) {
+    const i = ancien.arr.indexOf(ancien.inst); if (i >= 0) ancien.arr.splice(i, 1);
+    inst = { ...ancien.inst, debut: c.debut, fin: c.fin, crosseMinuit: c.crosse };
+    if (ancien.inst.pauseDuree > 0) { // la pause reste à la même heure ; supprimée si elle sort de la tâche
+      const pauseAbs = ancien.off + ancien.inst.debut + (ancien.inst.pauseDebut || 0);
+      const nouv = pauseAbs - a;
+      if (nouv >= 0 && nouv + ancien.inst.pauseDuree <= b - a) inst.pauseDebut = nouv;
+      else { delete inst.pauseDebut; delete inst.pauseDuree; }
     }
+  } else {
+    inst = { id: uid(), taskId, debut: c.debut, fin: c.fin, crosseMinuit: c.crosse };
   }
-
-  const dejaPropose = new Set(propositions.map(p => p.emp.id));
-  const disponibles = infos.filter(i => !dejaPropose.has(i.emp.id)).map(i => ({
-    emp: i.emp, solde: i.solde,
-    libreChaud: intervallesLibresDistribution(i.occ, z.debut, z.finChaud).reduce((s, [x, y]) => s + (y - x >= 60 ? y - x : 0), 0),
-    libreFroid: intervallesLibresDistribution(i.occ, z.finChaud, z.fin).reduce((s, [x, y]) => s + (y - x >= 60 ? y - x : 0), 0),
-  })).filter(i => i.libreChaud + i.libreFroid > 0);
-
-  return { propositions, resteChaud: Math.max(0, besoinC), resteFroid: Math.max(0, besoinF), restreintCompetence, nbCandidats: cands.length, disponibles };
+  if (!P[empId]) P[empId] = {};
+  if (!P[empId][c.dkJour]) P[empId][c.dkJour] = [];
+  P[empId][c.dkJour].push(inst);
+  return true;
 }
 
-async function proposerSolutionsDistribution(dk) {
+// Applique UN ajustement du dictionnaire de sélection à un planning P (réel ou simulé).
+// s = { empId, type:'edge'|'libre', edge:'debut'|'fin', mode:'plus'|'place'|'retrait', min, anchorId, startAbs }
+function appliquerAjustementAssistant(P, d, s) {
+  const dist = getTachesDistribution();
+  if (!dist.length || !(s.min > 0)) return false;
+  const taskDist = dist[0].id;
+  if (s.type === 'libre') return ecrireInstanceAbs(P, d, s.empId, s.startAbs, s.startAbs + s.min, null, taskDist);
+  const loc = localiserInstanceAsst(P, d, s.empId, s.anchorId);
+  if (!loc) return false;
+  const [a, b] = absInst(loc.inst, loc.off);
+  const estDist = dist.some(t => t.id === loc.inst.taskId);
+  const m = Math.min(s.min, s.mode === 'plus' ? s.min : (b - a));
+  if (s.mode === 'plus') {
+    if (s.edge === 'debut') return estDist ? ecrireInstanceAbs(P, d, s.empId, a - m, b, loc, null) : ecrireInstanceAbs(P, d, s.empId, a - m, a, null, taskDist);
+    return estDist ? ecrireInstanceAbs(P, d, s.empId, a, b + m, loc, null) : ecrireInstanceAbs(P, d, s.empId, b, b + m, null, taskDist);
+  }
+  if (s.mode === 'place') { // la Distribution prend la place du début / de la fin d'une autre tâche
+    if (s.edge === 'debut') { const ok = ecrireInstanceAbs(P, d, s.empId, a + m, b, loc, null); return ok && ecrireInstanceAbs(P, d, s.empId, a, a + m, null, taskDist); }
+    const ok = ecrireInstanceAbs(P, d, s.empId, a, b - m, loc, null); return ok && ecrireInstanceAbs(P, d, s.empId, b - m, b, null, taskDist);
+  }
+  if (s.mode === 'retrait') {
+    return s.edge === 'debut' ? ecrireInstanceAbs(P, d, s.empId, a + m, b, loc, null) : ecrireInstanceAbs(P, d, s.empId, a, b - m, loc, null);
+  }
+  return false;
+}
+
+// Copie de travail du planning des employés concernés + application des ajustements (aperçu).
+function construirePlanningSimule(dk, sels) {
+  const d = isoToDate(dk);
+  const P = { ...db.planning };
+  new Set(sels.map(s => s.empId)).forEach(id => {
+    P[id] = { ...(db.planning[id] || {}) };
+    [-2, -1, 0, 1].forEach(delta => {
+      const dkj = dateKey(addDays(d, delta));
+      P[id][dkj] = (db.planning[id]?.[dkj] || []).map(i => ({ ...i }));
+    });
+  });
+  sels.forEach(s => appliquerAjustementAssistant(P, d, s));
+  return P;
+}
+
+// Pause de 30 min dans les services de plus de 6 h sans pause (employés touchés uniquement).
+function ajouterPausesAutoAssistant(P, d, empIds, idsDist) {
+  const seuil = db.params.pointagePauseSeuilMin ?? 40;
+  const ajoutees = [];
+  empIds.forEach(empId => {
+    servicesDepuisTaches(tachesAbsEmploye(P, empId, d, idsDist), seuil).forEach(s => {
+      const travail = s.taches.reduce((sum, t) => sum + (t.b - t.a) - (t.inst.pauseDuree || 0), 0);
+      if (travail <= SEUIL_PAUSE_OBLIGATOIRE_MIN || s.taches.some(t => t.inst.pauseDuree > 0)) return;
+      const t = s.taches.reduce((m, x) => (x.b - x.a) > (m.b - m.a) ? x : m);
+      const dur = t.b - t.a;
+      if (dur < 90) return;
+      t.inst.pauseDuree = 30;
+      t.inst.pauseDebut = Math.max(0, Math.round((dur - 30) / 2 / 15) * 15);
+      ajoutees.push(empId);
+    });
+  });
+  return ajoutees;
+}
+
+// ---- Analyse des candidats ----
+function distanceBlocZone(x, y, w) { return Math.max(0, w[0] - y, x - w[1]); }
+function fenetreZone(z, zone) { return zone === 'chaud' ? [z.debut, z.finChaud] : [z.finChaud, z.fin]; }
+
+function analyserCandidatsAssistant(dk, P, soldes) {
+  const z = getDistribZones(), d = isoToDate(dk), dkPrec = dateKey(addDays(d, -1));
+  const idsDist = new Set(getTachesDistribution().map(t => t.id));
+  const seuil = db.params.pointagePauseSeuilMin ?? 40;
+  const emps = db.employes.filter(e => (e.tauxCase || 0) > 0 && estActifPendant(e, dkPrec, dk) && (e.competences || []).some(id => idsDist.has(id)));
+  return emps.map(emp => {
+    const taches = tachesAbsEmploye(P, emp.id, d, idsDist);
+    const occ = [];
+    [-2, -1, 0, 1].forEach(delta => {
+      const dj = addDays(d, delta), arr = P[emp.id]?.[dateKey(dj)] || [], off = (delta + 1) * 1440;
+      const conge = arr.some(i => db.tasks.find(t => t.id === i.taskId)?.conge);
+      if (conge || (!arr.length && estJourReposHabituel(emp.id, dj.getDay()))) occ.push([off, off + 1440]);
+    });
+    taches.filter(t => !t.conge).forEach(t => occ.push([t.a, t.b]));
+    const travail = taches.filter(t => !t.conge).reduce((s, t) => s + chevauchementMin(t.a, t.b, z.debut, z.fin), 0);
+    const capReste = Math.max(0, DISTRIB_MAX_MIN_JOURNEE - travail);
+    const proches = servicesDepuisTaches(taches, seuil).filter(s => s.b > z.debut - 240 && s.a < z.fin + 240);
+    const edges = [];
+    proches.forEach(s => {
+      [['debut', s.a, s.premiere], ['fin', s.b, s.derniere]].forEach(([edge, abs, t]) => {
+        const borne = edge === 'debut'
+          ? Math.max(z.debut - 360, ...occ.filter(([p, q]) => q <= abs).map(([p, q]) => q))
+          : Math.min(z.fin + 360, ...occ.filter(([p, q]) => p >= abs).map(([p, q]) => p));
+        const libre = Math.max(0, edge === 'debut' ? abs - borne : borne - abs);
+        edges.push({
+          key: `${emp.id}|${edge}|${t.inst.id}`, empId: emp.id, edge, abs, anchor: t, isDist: t.dist, libre, capReste,
+          maxPlus: Math.min(libre, capReste), maxPlace: t.dist ? 0 : (t.b - t.a), maxRetrait: t.dist ? (t.b - t.a) : 0,
+        });
+      });
+    });
+    const tier = edges.some(e => e.isDist) ? 1 : (edges.length ? 2 : 3);
+    return { emp, solde: soldes ? (soldes[emp.id] ?? null) : null, tier, edges, occ, travail, capReste, services: proches };
+  });
+}
+
+// Plage libre (dans la journée de distribution) contenant startAbs : durée max à partir de là.
+function libreDepuis(cand, z, startAbs) {
+  if (startAbs < z.debut || startAbs >= z.fin) return 0;
+  if (cand.occ.some(([p, q]) => p < startAbs + 1 && q > startAbs)) return 0;
+  const next = Math.min(z.fin, ...cand.occ.filter(([p]) => p >= startAbs).map(([p]) => p));
+  return Math.max(0, Math.min(next - startAbs, cand.capReste));
+}
+function premiereHeureLibre(cand, z, zone) {
+  const [wa, wb] = fenetreZone(z, zone);
+  for (let t = wa; t + DISTRIB_PAS_MIN <= wb; t += 30) { if (libreDepuis(cand, z, t) >= DISTRIB_PAS_MIN) return t; }
+  return wa;
+}
+
+// Premier bloc (30 min) possible pour un mode : sert à mesurer la proximité de la zone visée.
+function blocTypeEdge(e, mode, min) {
+  if (mode === 'plus') return e.edge === 'debut' ? [e.abs - min, e.abs] : [e.abs, e.abs + min];
+  return e.edge === 'debut' ? [e.abs, e.abs + min] : [e.abs - min, e.abs]; // place / retrait
+}
+function modesEdge(e, onglet) {
+  if (onglet === 'retrait') return e.isDist && e.maxRetrait > 0 ? ['retrait'] : [];
+  const m = [];
+  if (e.maxPlus > 0) m.push('plus');
+  if (!e.isDist && e.maxPlace > 0) m.push('place');
+  return m;
+}
+
+// ---- Interface de l'assistant ----
+function asstMaxMode(e, mode) { return mode === 'plus' ? e.maxPlus : mode === 'place' ? e.maxPlace : e.maxRetrait; }
+function asstPlage(e, mode) {
+  const m = asstMaxMode(e, mode);
+  if (mode === 'plus') return e.edge === 'debut' ? [e.abs - m, e.abs] : [e.abs, e.abs + m];
+  return e.edge === 'debut' ? [e.abs, e.abs + m] : [e.abs - m, e.abs];
+}
+function asstLibelleMode(e, mode) {
+  if (mode === 'retrait') return 'Retirer de la distribution';
+  if (mode === 'plus') return e.isDist ? 'Prolonger la distribution' : 'Ajouter en heures sup.';
+  return `À la place de « ${e.anchor.nom} »`;
+}
+function asstEdgeLabel(e) { return e.edge === 'debut' ? `à l'embauche (${hhAbs(e.abs)})` : `à la fin (${hhAbs(e.abs)})`; }
+function asstProximite(abs, win) {
+  const dist = distanceBlocZone(abs, abs, win);
+  return dist === 0 ? '<span style="color:var(--success);font-weight:700;">dans la zone</span>' : `<span style="color:var(--warning);font-weight:700;">à ${minToHM(dist)} de la zone</span>`;
+}
+
+async function ouvrirAssistantDistribution(dk) {
   const r = calculerCapaciteDistribution(dk);
-  if (r.erreur) return;
-  const cont = document.getElementById('distrib-sol-content');
+  if (r.erreur) { notify('Aucune tâche « Distribution » dans la Bibliothèque', 'warning'); return; }
   openModal('modal-distrib-solutions');
-  cont.innerHTML = '<div class="hint">Calcul des propositions (lecture du compteur modulation)…</div>';
-  let soldes = _compteurPourPlanning;
-  if (!soldes && fbDb) {
+  const cont = document.getElementById('distrib-sol-content');
+  cont.innerHTML = '<div class="hint">Lecture du compteur modulation à jour…</div>';
+  // Le solde est TOUJOURS relu à l'ouverture (jamais le cache de session) : un pointage corrigé
+  // est pris en compte immédiatement.
+  let soldes = null;
+  if (fbDb) {
     try {
       const { cartes } = await calculerCartesCompteurPures(getCompteurDepuis(), '');
       soldes = {};
       cartes.forEach(c => { soldes[c.emp.id] = c.total; });
-      _compteurPourPlanning = soldes;
-    } catch (e) { console.error('Compteur pour Distribution :', e); soldes = null; }
-  }
-  const plan = construirePlanRenfortDistribution(dk, r, soldes);
-  window._distribPlan = { dk, plan };
-
-  const fmtEx = n => Math.round(n).toLocaleString('fr-FR');
-  const fmtH = min => minToHM(Math.round(min));
-  const hh = abs => minToTime(((Math.round(abs) % 1440) + 1440) % 1440);
-  const DOW = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
-  const d = isoToDate(dk);
-  const badgeSolde = s => soldes ? `<span style="font-family:var(--mono);font-weight:800;color:${s >= 0 ? 'var(--success)' : 'var(--danger)'};">${s >= 0 ? '+' : '−'}${minToHM(Math.abs(Math.round(s)))}</span>` : '<span style="color:var(--text-dim);">n/d</span>';
-
-  const lignesZone = zone => {
-    const props = plan.propositions.map((p, idx) => ({ p, idx })).filter(x => x.p.zone === zone);
-    if (!props.length) return '';
-    return `<div style="font-weight:800;margin:14px 0 6px;">${zone === 'chaud' ? '🔥 À ajouter dans la zone chaud' : '❄️ À ajouter hors zone chaud (froid)'}</div>
-      <table class="pg" style="width:100%;border-collapse:collapse;font-size:13px;">
-      <tr style="background:var(--surface2);"><th style="text-align:left;padding:6px 8px;">Employé</th><th style="text-align:right;padding:6px 8px;">Compteur</th><th style="text-align:left;padding:6px 8px;">Créneau à ajouter</th><th style="text-align:right;padding:6px 8px;">Durée</th><th style="text-align:right;padding:6px 8px;">+ exemplaires</th><th></th></tr>
-      ${props.map(({ p, idx }) => `<tr style="border-top:1px solid var(--border);">
-        <td style="padding:6px 8px;font-weight:600;">${escHtml(p.emp.prenom)} ${escHtml(p.emp.nom)}</td>
-        <td style="padding:6px 8px;text-align:right;">${badgeSolde(p.solde)}</td>
-        <td style="padding:6px 8px;font-family:var(--mono);">${hh(p.a)} → ${hh(p.b)} <span style="color:var(--text-dim);font-size:11px;">(${p.a < 1440 ? 'soir du ' + DOW[addDays(d, -1).getDay()] + ' ' + addDays(d, -1).getDate() : DOW[d.getDay()] + ' ' + d.getDate()})</span></td>
-        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtH(p.min)}</td>
-        <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">+${fmtEx(p.ex)}</td>
-        <td style="padding:6px 8px;text-align:right;"><button class="btn btn-secondary btn-sm" onclick="appliquerRenfortDistribution(${idx})">➕ Ajouter</button></td>
-      </tr>`).join('')}</table>`;
+      _compteurPourPlanning = { ..._compteurPourPlanning, ...soldes };
+      rafraichirBadgesCompteurPlanning();
+    } catch (e) { console.error('Compteur pour assistant :', e); soldes = _compteurPourPlanning; }
+  } else soldes = _compteurPourPlanning;
+  const avantManque = r.manqueChaud > 0 || r.manqueFroid > 0;
+  asst = {
+    dk, soldes, sel: {}, ongletAj: avantManque || !(r.excedent > 0 || r.ecartFroid > 0),
+    zone: r.manqueChaud > 0 ? 'chaud' : (r.manqueFroid > 0 ? 'froid' : (r.ecartChaud > 0 && !(r.ecartFroid > 0) ? 'chaud' : 'froid')),
+    cands: analyserCandidatsAssistant(dk, db.planning, soldes),
   };
+  if (!avantManque && (r.ecartChaud > 0 || r.ecartFroid > 0)) asst.ongletAj = false;
+  rendreAssistant();
+}
 
-  const besoin = [];
-  if (r.manqueChaud > 0) besoin.push(`chaud : manque <b>${fmtEx(r.manqueChaud)}</b> ex. (≈ ${minToHM(Math.round(r.heuresManquantesChaud * 60))})`);
-  if (r.manqueFroid > 0) besoin.push(`froid : manque <b>${fmtEx(r.manqueFroid)}</b> ex. (≈ ${minToHM(Math.round(r.heuresManquantesFroid * 60))})`);
+function asstSelections() {
+  const res = [];
+  asst.cands.forEach(c => {
+    c.edges.forEach(e => {
+      const s = asst.sel[e.key];
+      if (s && s.min > 0) res.push({ empId: c.emp.id, type: 'edge', edge: e.edge, mode: s.mode, min: s.min, anchorId: e.anchor.inst.id });
+    });
+    const l = asst.sel[c.emp.id + '|libre'];
+    if (l && l.min > 0) res.push({ empId: c.emp.id, type: 'libre', mode: 'plus', min: l.min, startAbs: l.startAbs });
+  });
+  return res;
+}
 
-  let html = `<div style="font-size:14px;margin-bottom:8px;"><b>${DOW[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}</b>${besoin.length ? ' — ' + besoin.join(' · ') : ''}</div>
-    <div class="hint" style="margin-bottom:6px;">Classement par <b>compteur modulation croissant</b> (déficit d'heures en premier)${soldes ? '' : ' — <span style="color:var(--warning);">compteur indisponible, classement alphabétique</span>'}. Sont proposées les personnes ${plan.restreintCompetence ? 'ayant la compétence « Distribution »' : 'actives'}, sans congé ni repos, libres sur le créneau et dont la journée ne dépasse pas 10 h. <b>Repos quotidien et durée hebdomadaire maximale ne sont pas vérifiés</b> : contrôle-les avant d'ajouter.</div>`;
+function asstStep(key, delta) {
+  const s = asst.sel[key] || (asst.sel[key] = { mode: asstModeParDefaut(key), min: 0 });
+  const max = asstMaxPourCle(key, s);
+  s.min = Math.max(0, Math.min(max, s.min + delta * DISTRIB_PAS_MIN));
+  rendreAssistant();
+}
+function asstMode(key, mode) {
+  const s = asst.sel[key] || (asst.sel[key] = { mode, min: 0 });
+  s.mode = mode;
+  s.min = Math.min(s.min, asstMaxPourCle(key, s));
+  rendreAssistant();
+}
+function asstDemarrer(key, delta) {
+  const empId = key.split('|')[0], c = asst.cands.find(x => x.emp.id === empId), z = getDistribZones();
+  const s = asst.sel[key] || (asst.sel[key] = { mode: 'plus', min: 0, startAbs: premiereHeureLibre(c, z, asst.zone) });
+  s.startAbs = Math.max(z.debut, Math.min(z.fin - DISTRIB_PAS_MIN, s.startAbs + delta * 30));
+  s.min = Math.min(s.min, libreDepuis(c, z, s.startAbs));
+  rendreAssistant();
+}
+function asstEdgeParCle(key) {
+  for (const c of asst.cands) { const e = c.edges.find(x => x.key === key); if (e) return e; }
+  return null;
+}
+function asstModeParDefaut(key) {
+  if (key.endsWith('|libre')) return 'plus';
+  const e = asstEdgeParCle(key);
+  return e ? (asst.ongletAj ? (e.maxPlus > 0 ? 'plus' : 'place') : 'retrait') : 'plus';
+}
+function asstMaxPourCle(key, s) {
+  if (key.endsWith('|libre')) {
+    const empId = key.split('|')[0], c = asst.cands.find(x => x.emp.id === empId);
+    return libreDepuis(c, getDistribZones(), s.startAbs);
+  }
+  const e = asstEdgeParCle(key);
+  return e ? asstMaxMode(e, s.mode) : 0;
+}
+function asstReset() { asst.sel = {}; rendreAssistant(); }
+function asstOnglet(aj) { asst.ongletAj = aj; rendreAssistant(); }
+function asstZone(z) { asst.zone = z; rendreAssistant(); }
 
-  if (!besoin.length) {
-    html += '<div class="hint" style="color:var(--success);margin:12px 0;font-weight:700;">✅ Plus aucun manque sur cette journée : tous les exemplaires annoncés peuvent être passés.</div>';
-  } else if (!plan.propositions.length) {
-    html += '<div class="hint" style="color:var(--warning);margin:12px 0;">Aucune personne disponible sur ce créneau : tous les candidats sont déjà occupés, en congé ou au repos.</div>';
+function rendreAssistant() {
+  const cont = document.getElementById('distrib-sol-content');
+  if (!cont || !asst) return;
+  const scrollEl = cont.closest('.modal'); const sc = scrollEl ? scrollEl.scrollTop : 0;
+  const { dk, soldes } = asst;
+  const z = getDistribZones(), d = isoToDate(dk);
+  const sels = asstSelections();
+  const rBase = calculerCapaciteDistribution(dk);
+  const Psim = construirePlanningSimule(dk, sels);
+  const idsDist = new Set(getTachesDistribution().map(t => t.id));
+  const pauses = ajouterPausesAutoAssistant(Psim, d, [...new Set(sels.map(s => s.empId))], idsDist);
+  const rSim = calculerCapaciteDistribution(dk, Psim);
+  const win = fenetreZone(z, asst.zone);
+  const zoneLib = asst.zone === 'chaud' ? '🔥 Chaud' : '❄️ Froid';
+  const col = v => v >= 0 ? 'var(--success)' : 'var(--danger)';
+  const sg = v => (v >= 0 ? '+' : '−') + fmtExAsst(Math.abs(v));
+  const carte = (lib, base, sim, hdeb) => `<div style="flex:1;min-width:230px;background:var(--surface2);border-radius:10px;padding:10px 12px;">
+      <div style="font-weight:800;">${lib}</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Annoncé ${fmtExAsst(hdeb)} ex.</div>
+      <div style="font-size:13px;margin-top:4px;">Avant : <b style="color:${col(base)};">${sg(base)}</b> ex. &nbsp;→&nbsp; Après : <b style="font-size:16px;color:${col(sim)};">${sg(sim)}</b> ex. ${sim >= 0 ? '✅' : '⚠️'}</div></div>`;
+  let html = `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Journée du <b>${dk}</b> · solde du compteur relu à l'instant · par pas de 30 min · max ${minToHM(DISTRIB_MAX_MIN_JOURNEE)} de travail par personne dans la journée</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+      ${carte('🔥 Chaud', rBase.ecartChaud, rSim.ecartChaud, rBase.volChaud)}
+      ${carte('❄️ Froid', rBase.ecartFroid, rSim.ecartFroid, rBase.volFroid)}
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+      <button class="btn btn-sm ${asst.ongletAj ? 'btn-primary' : 'btn-secondary'}" onclick="asstOnglet(true)">➕ Ajouter de la distribution</button>
+      <button class="btn btn-sm ${!asst.ongletAj ? 'btn-primary' : 'btn-secondary'}" onclick="asstOnglet(false)">➖ En retirer (trop de capacité)</button>
+      <span style="width:12px;"></span>
+      <button class="btn btn-sm ${asst.zone === 'chaud' ? 'btn-primary' : 'btn-secondary'}" onclick="asstZone('chaud')">🔥 Chaud ${hhAbs(z.debut)}→${hhAbs(z.finChaud)}</button>
+      <button class="btn btn-sm ${asst.zone === 'froid' ? 'btn-primary' : 'btn-secondary'}" onclick="asstZone('froid')">❄️ Froid ${hhAbs(z.finChaud)}→${hhAbs(z.debut)}</button>
+    </div>`;
+
+  // ---- Lignes candidats ----
+  const lignes = [];
+  asst.cands.forEach(c => {
+    c.edges.forEach(e => {
+      const modes = modesEdge(e, asst.ongletAj ? 'ajout' : 'retrait').filter(m => {
+        const [a, b] = asstPlage(e, m);
+        return chevauchementMin(a, b, win[0], win[1]) > 0 || (asst.sel[e.key]?.min > 0 && asst.sel[e.key].mode === m);
+      });
+      if (!modes.length) return;
+      lignes.push({ c, e, modes, tier: c.tier, prox: distanceBlocZone(e.abs, e.abs, win) });
+    });
+  });
+  const tri = (a, b) => a.tier - b.tier || a.prox - b.prox ||
+    (asst.ongletAj ? ((a.c.solde ?? 0) - (b.c.solde ?? 0)) : ((b.c.solde ?? 0) - (a.c.solde ?? 0))) || a.c.emp.nom.localeCompare(b.c.emp.nom, 'fr');
+  lignes.sort(tri);
+
+  const stepper = (key, val, max, fn) => `<span style="display:inline-flex;align-items:center;gap:4px;">
+      <button class="btn btn-secondary btn-sm" style="padding:2px 8px;" ${val <= 0 ? 'disabled' : ''} onclick="asstStep('${key}',-1)">−</button>
+      <b style="font-family:var(--mono);min-width:48px;text-align:center;">${val > 0 ? minToHM(val) : '0h00'}</b>
+      <button class="btn btn-secondary btn-sm" style="padding:2px 8px;" ${val >= max ? 'disabled' : ''} onclick="asstStep('${key}',1)">+</button></span>`;
+  const ligneHtml = l => {
+    const s = asst.sel[l.e.key] || {};
+    const mode = s.mode && l.modes.includes(s.mode) ? s.mode : l.modes[0];
+    const val = s.min || 0, max = asstMaxMode(l.e, mode);
+    const actif = val > 0;
+    const palier = l.tier === 1 ? '<span class="flag-badge" style="background:rgba(46,204,113,.15);color:var(--success);">déjà en distribution</span>' : '<span class="flag-badge" style="background:rgba(243,156,18,.15);color:var(--warning);">service proche</span>';
+    const opts = l.modes.map(m => `<option value="${m}" ${m === mode ? 'selected' : ''}>${escHtml(asstLibelleMode(l.e, m))}</option>`).join('');
+    return `<tr style="border-top:1px solid var(--border);${actif ? 'background:rgba(79,142,247,.08);' : ''}">
+      <td style="padding:6px 8px;font-weight:700;white-space:nowrap;">${escHtml(l.c.emp.prenom)} ${escHtml(l.c.emp.nom)}<div style="font-weight:500;font-size:11px;">${palier}</div></td>
+      <td style="padding:6px 8px;text-align:right;">${badgeSoldeAsst(l.c.solde)}</td>
+      <td style="padding:6px 8px;font-size:12px;">${asstEdgeLabel(l.e)}<br>${asstProximite(l.e.abs, win)}</td>
+      <td style="padding:6px 8px;"><select style="font-size:12px;max-width:190px;" onchange="asstMode('${l.e.key}',this.value)">${opts}</select></td>
+      <td style="padding:6px 8px;white-space:nowrap;">${stepper(l.e.key, val, max)}</td></tr>`;
+  };
+  const entete = `<tr style="background:var(--surface2);font-size:12px;"><th style="text-align:left;padding:6px 8px;">Personne</th><th style="text-align:right;padding:6px 8px;">Compteur</th><th style="text-align:left;padding:6px 8px;">Où</th><th style="text-align:left;padding:6px 8px;">Comment</th><th style="text-align:left;padding:6px 8px;">Durée</th></tr>`;
+  html += `<div style="font-weight:800;margin:4px 0;">${asst.ongletAj ? '➕ Ajouter' : '➖ Retirer'} — ${zoneLib}</div>
+    <div class="hint" style="margin-bottom:6px;">Tri : déjà en distribution d'abord, puis proximité avec la zone, puis compteur (${asst.ongletAj ? 'le plus bas' : 'le plus haut'} en premier).</div>`;
+  html += lignes.length
+    ? `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:600px;">${entete}${lignes.map(ligneHtml).join('')}</table></div>`
+    : `<div class="hint">Aucune personne avec la compétence Distribution n'a de service ${asst.ongletAj ? 'proche de' : 'de distribution dans'} cette zone.</div>`;
+
+  // ---- Dernier recours : personnes libres sans service proche (ajout seulement) ----
+  if (asst.ongletAj) {
+    const libres = asst.cands.filter(c => c.tier === 3 && c.capReste > 0 && !lignes.some(l => l.c === c));
+    const libresSel = asst.cands.filter(c => c.tier === 3 && asst.sel[c.emp.id + '|libre']?.min > 0);
+    const aff = libres.concat(libresSel.filter(c => !libres.includes(c))).filter(c => premiereHeureLibre(c, z, asst.zone) >= 0)
+      .sort((a, b) => (a.solde ?? 0) - (b.solde ?? 0));
+    if (aff.length) {
+      const rows = aff.map(c => {
+        const key = c.emp.id + '|libre';
+        const s = asst.sel[key] || {};
+        const start = s.startAbs ?? premiereHeureLibre(c, z, asst.zone);
+        const max = libreDepuis(c, z, start);
+        const val = Math.min(s.min || 0, max);
+        return `<tr style="border-top:1px solid var(--border);${val > 0 ? 'background:rgba(79,142,247,.08);' : ''}">
+          <td style="padding:6px 8px;font-weight:700;white-space:nowrap;">${escHtml(c.emp.prenom)} ${escHtml(c.emp.nom)}</td>
+          <td style="padding:6px 8px;text-align:right;">${badgeSoldeAsst(c.solde)}</td>
+          <td style="padding:6px 8px;font-size:12px;">Libre — heures supplémentaires<br><span style="color:var(--text-muted);">max ${minToHM(max)} à partir de l'heure choisie</span></td>
+          <td style="padding:6px 8px;white-space:nowrap;"><button class="btn btn-secondary btn-sm" style="padding:2px 8px;" onclick="asstDemarrer('${key}',-1)">−</button> <b style="font-family:var(--mono);">${hhAbs(start)}</b> <button class="btn btn-secondary btn-sm" style="padding:2px 8px;" onclick="asstDemarrer('${key}',1)">+</button></td>
+          <td style="padding:6px 8px;white-space:nowrap;">${stepper(key, val, max)}</td></tr>`;
+      }).join('');
+      html += `<details style="margin-top:14px;" ${libresSel.length ? 'open' : ''}><summary style="cursor:pointer;font-weight:700;">Dernier recours : personnes disponibles sans service proche (${aff.length})</summary>
+        <div class="hint" style="margin:6px 0;">Distribution ajoutée en heures supplémentaires sur une plage libre (choisis l'heure de début).</div>
+        <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:600px;">${entete.replace('Comment', 'Début')}${rows}</table></div></details>`;
+    }
+  }
+
+  // ---- Récapitulatif des ajustements retenus ----
+  if (sels.length) {
+    const lib = s => {
+      const emp = db.employes.find(e => e.id === s.empId); const nom = `${emp.prenom} ${emp.nom}`;
+      if (s.type === 'libre') return `${nom} : +${minToHM(s.min)} de distribution en heures sup. (${hhAbs(s.startAbs)} → ${hhAbs(s.startAbs + s.min)})`;
+      const e = asst.cands.find(c => c.emp.id === s.empId).edges.find(x => x.anchor.inst.id === s.anchorId && x.edge === s.edge);
+      return `${nom} : ${s.mode === 'retrait' ? '−' : '+'}${minToHM(s.min)} ${s.mode === 'retrait' ? 'de distribution' : 'de distribution'} ${asstEdgeLabel(e)} — ${asstLibelleMode(e, s.mode)}`;
+    };
+    html += `<div style="margin-top:16px;background:var(--surface2);border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.7;">
+      <b>Ajustements retenus</b><br>${sels.map(s => '• ' + escHtml(lib(s))).join('<br>')}
+      ${pauses.length ? `<br><span style="color:var(--warning);">⏸ Une pause de 30 min sera ajoutée automatiquement pour ${[...new Set(pauses)].map(id => escHtml(db.employes.find(e => e.id === id).prenom)).join(', ')} (service de plus de 6 h).</span>` : ''}
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="appliquerAssistantDistribution()">✅ Appliquer au planning</button>
+        <button class="btn btn-secondary" onclick="asstReset()">Tout annuler</button></div></div>`;
   } else {
-    html += lignesZone('chaud') + lignesZone('froid');
-    html += `<div style="margin-top:14px;"><button class="btn btn-primary btn-sm" onclick="appliquerRenfortDistribution(-1)">➕ Tout ajouter au planning</button></div>`;
-  }
-  if (plan.resteChaud > 0 || plan.resteFroid > 0) {
-    html += `<div class="hint" style="margin-top:12px;color:var(--warning);">⚠️ Même avec ces ajouts, il manquerait encore ${plan.resteChaud > 0 ? fmtEx(plan.resteChaud) + ' ex. en chaud ' : ''}${plan.resteFroid > 0 ? fmtEx(plan.resteFroid) + ' ex. en froid' : ''} : pas assez de personnel disponible — il faudra étendre des horaires existants, faire appel à des renforts ou réduire le volume.</div>`;
-  } else if (plan.propositions.length) {
-    html += `<div class="hint" style="margin-top:12px;color:var(--success);">✅ Avec ces ajouts, tous les exemplaires annoncés peuvent être passés.</div>`;
-  }
-  if (besoin.length && plan.disponibles.length) {
-    html += `<div style="font-weight:700;margin:16px 0 4px;font-size:13px;">Autres personnes disponibles (non retenues)</div>
-      <div style="font-size:12px;color:var(--text-muted);line-height:1.7;">${plan.disponibles.map(i => `${escHtml(i.emp.prenom)} ${escHtml(i.emp.nom)} (${soldes ? (i.solde >= 0 ? '+' : '−') + minToHM(Math.abs(Math.round(i.solde))) : 'n/d'}) — libre ${i.libreChaud ? fmtH(i.libreChaud) + ' en chaud' : ''}${i.libreChaud && i.libreFroid ? ' · ' : ''}${i.libreFroid ? fmtH(i.libreFroid) + ' en froid' : ''}`).join('<br>')}</div>`;
+    html += `<div class="hint" style="margin-top:14px;">Choisis les personnes et la durée (boutons + / −) : l'effet sur les exemplaires s'affiche en direct, le planning n'est modifié qu'au clic sur « Appliquer ».</div>`;
   }
   cont.innerHTML = html;
+  if (scrollEl) scrollEl.scrollTop = sc;
 }
 
-// Pose une proposition dans le planning (idx = -1 : toutes). Une proposition à cheval sur minuit
-// devient une tâche « se termine le lendemain », comme n'importe quelle tâche du planning.
-function poserTacheDistribution(empId, a, b, dk) {
-  const taches = getTachesDistribution();
-  if (!taches.length) return false;
-  const d = isoToDate(dk);
-  const dayIdx = Math.floor(a / 1440); // 0 = veille de D, 1 = jour D
-  const dkJour = dateKey(addDays(d, dayIdx - 1));
-  if (!verifierSemaineModifiable(dkJour)) return false;
-  const debut = a - dayIdx * 1440;
-  const crosse = b > (dayIdx + 1) * 1440;
-  const fin = crosse ? b - (dayIdx + 1) * 1440 : b - dayIdx * 1440;
-  if (!db.planning[empId]) db.planning[empId] = {};
-  if (!db.planning[empId][dkJour]) db.planning[empId][dkJour] = [];
-  db.planning[empId][dkJour].push({ id: uid(), taskId: taches[0].id, debut, fin, crosseMinuit: crosse });
-  return true;
-}
-function appliquerRenfortDistribution(idx) {
-  const ctx = window._distribPlan;
-  if (!ctx) return;
-  const liste = idx === -1 ? ctx.plan.propositions : [ctx.plan.propositions[idx]];
-  let n = 0;
-  liste.forEach(p => {
-    if (!p) return;
-    if (poserTacheDistribution(p.emp.id, p.a, p.b, ctx.dk)) {
-      n++;
-      logAudit('Distribution : renfort ajouté', `${p.emp.prenom} ${p.emp.nom} — journée du ${ctx.dk} — ${minToTime(((p.a % 1440) + 1440) % 1440)} → ${minToTime(((p.b % 1440) + 1440) % 1440)} (${p.zone})`);
-    }
+function appliquerAssistantDistribution() {
+  if (!asst) return;
+  const sels = asstSelections();
+  if (!sels.length) return;
+  const d = isoToDate(asst.dk);
+  for (const delta of [-2, -1, 0, 1]) if (!verifierSemaineModifiable(dateKey(addDays(d, delta)))) return;
+  const idsDist = new Set(getTachesDistribution().map(t => t.id));
+  let ok = 0;
+  sels.forEach(s => { if (appliquerAjustementAssistant(db.planning, d, s)) ok++; });
+  const pauses = ajouterPausesAutoAssistant(db.planning, d, [...new Set(sels.map(s => s.empId))], idsDist);
+  sels.forEach(s => {
+    const emp = db.employes.find(e => e.id === s.empId);
+    logAudit('Distribution : assistant de planification', `${emp.prenom} ${emp.nom} — journée du ${asst.dk} — ${s.type === 'libre' ? 'heures sup.' : s.mode + ' ' + s.edge} ${minToHM(s.min)}`);
   });
-  if (!n) return;
   saveDB();
+  closeModal('modal-distrib-solutions');
   renderDistribution();
   if (document.getElementById('view-planning')?.classList.contains('active')) renderPlanning();
-  notify(n > 1 ? `${n} créneaux de distribution ajoutés au planning` : 'Créneau de distribution ajouté au planning');
-  if (idx === -1) closeModal('modal-distrib-solutions');
-  else proposerSolutionsDistribution(ctx.dk); // recalcule : le besoin et les disponibilités ont changé
+  notify(`${ok} ajustement(s) appliqué(s) au planning${pauses.length ? ' · pause(s) ajoutée(s)' : ''}`);
+  asst = null;
 }
 
 function logAudit(action, details) {
