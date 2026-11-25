@@ -927,8 +927,9 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
           <button class="btn btn-secondary btn-sm" onclick="changeDistribWeek(1)">▶</button>
           <button class="btn btn-secondary btn-sm" onclick="goDistribToday()">Aujourd'hui</button>
         </div>
-        <div class="hint" style="margin:10px 0;">Capacité de mise en case calculée à partir des tâches "Distribution" planifiées (taux de chaque employé × heures), comparée aux volumes annoncés par les messageries. Saisis le volume chaud et froid de chaque jour, puis clique sur une ligne pour voir le détail.</div>
+        <div class="hint" style="margin:10px 0;">Capacité de mise en case calculée à partir des tâches "Distribution" planifiées (taux de chaque employé × heures), comparée aux volumes annoncés par les messageries. Saisis le volume chaud et froid de chaque jour, puis clique sur une ligne pour voir le détail (c'est aussi là que tu peux ajouter des sous-traitants). Les taux de mise en case se saisissent dans la table en bas de page.</div>
         <div id="distrib-wrap"></div>
+        <div id="distrib-taux-wrap" style="margin-top:24px;"></div>
       </div>
 
       <!-- ===== VUE COMPÉTENCES ===== -->
@@ -2318,7 +2319,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.18.0';
+const APP_VERSION = '2.19.0';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2349,6 +2350,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.19.0', items: [
+    'Distribution : sous-traitants — dans le détail de chaque jour, ajoute les personnes extérieures (prénom, nom, taux en ex./h, heure de début et de fin). Leurs exemplaires sont comptés en chaud ou en froid selon leurs horaires, donc l\'assistant de planification n\'est plus faussé.',
+    'Distribution : table des taux de mise en case en bas de la page (saisie rapide sans passer par la fiche employé, Entrée pour passer au suivant) avec classement et impression du classement du plus productif au moins productif.',
+  ] },
   { v: '2.18.0', items: [
     'Distribution — nouvel « 🧭 Assistant de planification » (remplace « Proposer des solutions ») : tu choisis QUI ajuster, de COMBIEN (pas de 30 min, 10 h max par personne) et où (à l\'embauche ou à la fin du service), avec l\'effet sur les exemplaires en direct avant d\'appliquer.',
     'Assistant : seules les personnes ayant la compétence Distribution sont proposées — d\'abord celles déjà en distribution à l\'embauche/à la fin, puis celles dont le service est proche, puis (dernier recours) les personnes libres (heures sup.). Tri : proximité, puis compteur (le plus bas pour un ajout, le plus haut pour un retrait).',
@@ -3068,6 +3073,7 @@ function loadDB() {
   if (db.params.appNoteVersion === undefined) db.params.appNoteVersion = null;
   if (db.params.appNoteText === undefined) db.params.appNoteText = '';
   if (!db.distribVolumes) db.distribVolumes = {};
+  if (!db.distribSousTraitants) db.distribSousTraitants = {};
   if (!db.vacancesScolaires) db.vacancesScolaires = { A: [], B: [], C: [] };
   if (db.params.nuitDebut === undefined) db.params.nuitDebut = '21:00';
   if (db.params.inactiviteTimeoutMin === undefined) db.params.inactiviteTimeoutMin = 30;
@@ -3212,6 +3218,7 @@ function syncToFirebase() {
       fbDb.ref('data/vacancesScolaires').set(db.vacancesScolaires || {}).catch(e => console.error('Sync vacances:', e));
       fbDb.ref('data/semaineType').set(db.semaineType || {}).catch(e => console.error('Sync semaineType:', e));
       fbDb.ref('data/distribVolumes').set(db.distribVolumes || {}).catch(e => console.error('Sync distribVolumes:', e));
+      fbDb.ref('data/distribSousTraitants').set(db.distribSousTraitants || {}).catch(e => console.error('Sync distribSousTraitants:', e));
 
       // Miroir léger pour la Pointeuse — lecture seule de son côté, pas concerné par les conflits d'édition.
       fbDb.ref('sync/employes').set(db.employes || []).catch(e => console.error('Sync employes:', e));
@@ -3282,6 +3289,7 @@ function loadFromFirebaseThenListen() {
       if (migrerCrosseMinuitFrontiere(db.planning)) setTimeout(() => saveDB(), 500);
       if (remote.semaineType) db.semaineType = remote.semaineType;
       if (remote.distribVolumes) db.distribVolumes = remote.distribVolumes;
+      db.distribSousTraitants = remote.distribSousTraitants || {};
       if (remote.params) {
         const { brevo: _b, github: _g, ...remoteParams } = remote.params;
         db.params = { ...db.params, ...remoteParams };
@@ -3410,6 +3418,14 @@ function listenRemoteChanges() {
     localStorage.setItem(DB_KEY, JSON.stringify(db));
     _applyingRemoteUpdate = false;
     if (pgMode === 'semainetype') renderSemaineType();
+  });
+  fbDb.ref('data/distribSousTraitants').on('value', snap => {
+    if (_hasPendingSync) return;
+    _applyingRemoteUpdate = true;
+    db.distribSousTraitants = snap.val() || {};
+    localStorage.setItem(DB_KEY, JSON.stringify(db));
+    _applyingRemoteUpdate = false;
+    if (document.querySelector('.view.active')?.id === 'view-distribution') renderDistribution({ sansTaux: true });
   });
   fbDb.ref('data/distribVolumes').on('value', snap => {
     if (_hasPendingSync) return;
@@ -15610,6 +15626,19 @@ function calculerCapaciteDistribution(dk, P) {
     }
   });
 
+  // Sous-traitants du jour (hors planning)
+  (db.distribSousTraitants?.[dk] || []).forEach(st => {
+    const iv = stIntervalleAbs(st, z);
+    if (!iv || !(st.taux > 0)) return;
+    const c = chevauchementMin(iv[0], iv[1], z.debut, z.finChaud), f = chevauchementMin(iv[0], iv[1], z.finChaud, z.fin);
+    if (c + f <= 0) return;
+    parEmploye.push({
+      emp: { id: st.id, prenom: st.prenom, nom: st.nom }, soustraitant: true, taux: st.taux, chaudMin: c, froidMin: f,
+      plages: [{ a: Math.max(iv[0], z.debut), b: Math.min(iv[1], z.fin), chaud: c, froid: f }],
+      chaudEx: c / 60 * st.taux, froidEx: f / 60 * st.taux,
+    });
+  });
+
   const heuresChaud = parEmploye.reduce((s, e) => s + e.chaudMin, 0) / 60;
   const heuresFroid = parEmploye.reduce((s, e) => s + e.froidMin, 0) / 60;
   const capChaud = parEmploye.reduce((s, e) => s + e.chaudEx, 0);
@@ -15714,7 +15743,153 @@ function toggleCompetence(empId, taskId, checked) {
   saveDB();
 }
 
-function renderDistribution() {
+// ---------------------------------------------------------------------------------------------
+// SOUS-TRAITANTS : personnes extérieures qui aident à la distribution sans figurer au planning.
+// Saisis par jour (nom, prénom, taux en ex./h, heure de début et de fin) ; leurs exemplaires
+// comptent dans la capacité chaud/froid, donc l'assistant de planification n'est pas faussé.
+// ---------------------------------------------------------------------------------------------
+function stIntervalleAbs(st, z) {
+  const s = timeToMin(st.debut), e = timeToMin(st.fin);
+  if (s === null || e === null) return null;
+  const a = s >= z.debut ? s : s + 1440;
+  let b = e >= z.debut ? e : e + 1440;
+  if (b <= a) b += 1440;
+  return [a, Math.min(b, z.fin)];
+}
+function blocSousTraitantsDistribution(dk, z) {
+  const liste = db.distribSousTraitants?.[dk] || [];
+  const th = 'padding:5px 8px;text-align:left;';
+  const lignes = liste.map(st => {
+    const iv = stIntervalleAbs(st, z);
+    const c = iv ? chevauchementMin(iv[0], iv[1], z.debut, z.finChaud) : 0;
+    const f = iv ? chevauchementMin(iv[0], iv[1], z.finChaud, z.fin) : 0;
+    const ex = (c + f) / 60 * (st.taux || 0);
+    return `<tr style="border-top:1px solid var(--border);">
+      <td style="padding:5px 8px;font-weight:600;">${escHtml(st.prenom)} ${escHtml(st.nom)}</td>
+      <td style="padding:5px 8px;font-family:var(--mono);">${escHtml(st.debut)} → ${escHtml(st.fin)}</td>
+      <td style="padding:5px 8px;text-align:right;font-family:var(--mono);">${fmtExAsst(st.taux || 0)}</td>
+      <td style="padding:5px 8px;text-align:right;font-family:var(--mono);">${minToHM(c)}</td>
+      <td style="padding:5px 8px;text-align:right;font-family:var(--mono);">${minToHM(f)}</td>
+      <td style="padding:5px 8px;text-align:right;font-family:var(--mono);font-weight:700;">${fmtExAsst(ex)}</td>
+      <td style="padding:5px 8px;text-align:right;"><button class="btn btn-secondary btn-sm" title="Supprimer" onclick="supprimerSousTraitantDistribution('${dk}','${st.id}')">🗑</button></td></tr>`;
+  }).join('');
+  const champ = (id, ph, type, w) => `<input id="st-${id}-${dk}" type="${type}" placeholder="${ph}" style="width:${w}px;box-sizing:border-box;" ${type === 'number' ? 'min="0" step="50"' : ''}>`;
+  return `<div style="margin-top:16px;">
+    <div style="font-weight:800;">👷 Sous-traitants <span style="font-weight:500;color:var(--text-dim);font-size:12px;">— hors planning, leurs exemplaires sont comptés (chaud/froid selon leurs horaires)</span></div>
+    ${liste.length ? `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:560px;margin-top:6px;">
+      <tr style="background:var(--surface2);font-size:12px;"><th style="${th}">Personne</th><th style="${th}">Horaires</th><th style="${th}text-align:right;">Taux (ex./h)</th><th style="${th}text-align:right;">H chaud</th><th style="${th}text-align:right;">H froid</th><th style="${th}text-align:right;">Exemplaires</th><th></th></tr>${lignes}</table></div>` : '<div class="hint" style="margin-top:4px;">Aucun sous-traitant ce jour-là.</div>'}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
+      ${champ('prenom', 'Prénom', 'text', 110)}${champ('nom', 'Nom', 'text', 110)}${champ('taux', 'Taux ex./h', 'number', 100)}
+      <label style="font-size:12px;">de ${champ('debut', '', 'time', 90)}</label><label style="font-size:12px;">à ${champ('fin', '', 'time', 90)}</label>
+      <button class="btn btn-primary btn-sm" onclick="ajouterSousTraitantDistribution('${dk}')">➕ Ajouter</button></div></div>`;
+}
+function ajouterSousTraitantDistribution(dk) {
+  const v = id => (document.getElementById(`st-${id}-${dk}`)?.value || '').trim();
+  const prenom = v('prenom'), nom = v('nom'), taux = parseFloat(v('taux')) || 0, debut = v('debut'), fin = v('fin');
+  if (!prenom && !nom) { notify('Renseigne un nom ou un prénom', 'warning'); return; }
+  if (!(taux > 0)) { notify('Renseigne le taux (exemplaires par heure)', 'warning'); return; }
+  if (!debut || !fin || debut === fin) { notify('Renseigne l\'heure de début et l\'heure de fin', 'warning'); return; }
+  if (!db.distribSousTraitants) db.distribSousTraitants = {};
+  if (!db.distribSousTraitants[dk]) db.distribSousTraitants[dk] = [];
+  db.distribSousTraitants[dk].push({ id: uid(), prenom, nom, taux, debut, fin });
+  logAudit('Distribution : sous-traitant ajouté', `${prenom} ${nom} — journée du ${dk} — ${debut} → ${fin} à ${taux} ex./h`);
+  distribOuverts.add(dk); distribOuvertsInit = true;
+  saveDB();
+  renderDistribution();
+}
+function supprimerSousTraitantDistribution(dk, id) {
+  const l = db.distribSousTraitants?.[dk];
+  if (!l) return;
+  const st = l.find(x => x.id === id);
+  if (!st || !confirm(`Supprimer ${st.prenom} ${st.nom} de cette journée ?`)) return;
+  db.distribSousTraitants[dk] = l.filter(x => x.id !== id);
+  if (!db.distribSousTraitants[dk].length) delete db.distribSousTraitants[dk];
+  logAudit('Distribution : sous-traitant supprimé', `${st.prenom} ${st.nom} — journée du ${dk}`);
+  distribOuverts.add(dk); distribOuvertsInit = true;
+  saveDB();
+  renderDistribution();
+}
+
+// ---------------------------------------------------------------------------------------------
+// TABLE DES TAUX DE MISE EN CASE (saisie rapide + classement imprimable)
+// ---------------------------------------------------------------------------------------------
+let distribTauxTous = false;
+let distribTauxTriRang = false;
+function employesTauxDistribution(tous) {
+  const ids = new Set(getTachesDistribution().map(t => t.id));
+  const auj = dateKey(new Date());
+  return db.employes.filter(e => estActifPendant(e, auj, auj) && (tous || (e.competences || []).some(id => ids.has(id))));
+}
+function rangsTauxDistribution(liste) {
+  const tries = [...liste].filter(e => (e.tauxCase || 0) > 0).sort((a, b) => (b.tauxCase || 0) - (a.tauxCase || 0) || `${a.nom}`.localeCompare(`${b.nom}`, 'fr'));
+  const rangs = {}; let r = 0, prev = null;
+  tries.forEach((e, i) => { if (e.tauxCase !== prev) { r = i + 1; prev = e.tauxCase; } rangs[e.id] = r; }); // ex æquo = même rang
+  return rangs;
+}
+function renderDistribTaux() {
+  const el = document.getElementById('distrib-taux-wrap');
+  if (!el) return;
+  const liste = employesTauxDistribution(distribTauxTous);
+  const rangs = rangsTauxDistribution(liste);
+  const ordre = [...liste].sort(distribTauxTriRang
+    ? (a, b) => (b.tauxCase || 0) - (a.tauxCase || 0) || `${a.nom}`.localeCompare(`${b.nom}`, 'fr')
+    : (a, b) => `${a.nom} ${a.prenom}`.localeCompare(`${b.nom} ${b.prenom}`, 'fr'));
+  const ids = new Set(getTachesDistribution().map(t => t.id));
+  const lignes = ordre.map((e, i) => `<tr style="border-top:1px solid var(--border);">
+      <td data-rang="${e.id}" style="padding:5px 10px;text-align:center;font-family:var(--mono);font-weight:800;">${rangs[e.id] ? rangs[e.id] : '—'}</td>
+      <td style="padding:5px 10px;font-weight:600;">${escHtml(e.prenom)} ${escHtml(e.nom)}${(e.competences || []).some(id => ids.has(id)) ? '' : ' <span style="font-size:11px;color:var(--text-dim);">(sans compétence Distribution)</span>'}</td>
+      <td style="padding:5px 10px;text-align:right;"><input type="number" min="0" step="10" value="${e.tauxCase ?? ''}" data-emp="${e.id}" class="distrib-taux-input" style="width:100px;text-align:right;box-sizing:border-box;" onchange="saveTauxCaseDistribution(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();toucheEntreeTaux(this);}"></td></tr>`).join('');
+  el.innerHTML = `<div class="task-card" style="cursor:default;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="font-weight:800;font-size:15px;">⚡ Taux de mise en case (exemplaires / heure)</div>
+      <label style="font-size:12px;margin-left:auto;"><input type="checkbox" ${distribTauxTous ? 'checked' : ''} onchange="distribTauxTous=this.checked;renderDistribTaux();"> Afficher aussi les employés sans compétence Distribution</label>
+      <label style="font-size:12px;"><input type="checkbox" ${distribTauxTriRang ? 'checked' : ''} onchange="distribTauxTriRang=this.checked;renderDistribTaux();"> Trier par classement</label>
+      <button class="btn btn-secondary btn-sm" onclick="imprimerClassementTaux()">🖨️ Imprimer le classement</button></div>
+    <div class="hint" style="margin:6px 0;">Saisie directe (valeur enregistrée dès que tu valides avec Entrée ou Tab) — identique au champ de la fiche employé. Le classement va du taux le plus élevé au plus faible.</div>
+    <div style="overflow-x:auto;"><table style="border-collapse:collapse;font-size:13px;min-width:420px;">
+      <tr style="background:var(--surface2);font-size:12px;"><th style="padding:5px 10px;">Rang</th><th style="padding:5px 10px;text-align:left;">Employé</th><th style="padding:5px 10px;text-align:right;">Taux ex./h</th></tr>
+      ${lignes || '<tr><td colspan="3" class="hint" style="padding:10px;">Aucun employé.</td></tr>'}</table></div></div>`;
+}
+function saveTauxCaseDistribution(input) {
+  const e = db.employes.find(x => x.id === input.dataset.emp);
+  if (!e) return;
+  const v = Math.max(0, parseFloat(input.value) || 0);
+  if (v === (e.tauxCase || 0)) return;
+  e.tauxCase = v;
+  logAudit('Employé : taux de mise en case modifié', `${e.prenom} ${e.nom} — ${v} ex./h`);
+  saveDB();
+  // met à jour classement et capacités SANS reconstruire la table (le focus reste dans la saisie)
+  const rangs = rangsTauxDistribution(employesTauxDistribution(distribTauxTous));
+  document.querySelectorAll('#distrib-taux-wrap [data-rang]').forEach(td => { td.textContent = rangs[td.dataset.rang] || '—'; });
+  renderDistribution({ sansTaux: true });
+}
+function toucheEntreeTaux(input) {
+  const inputs = [...document.querySelectorAll('#distrib-taux-wrap .distrib-taux-input')];
+  const i = inputs.indexOf(input);
+  const suiv = inputs[i + 1];
+  input.blur();
+  if (suiv) { suiv.focus(); suiv.select(); }
+}
+function imprimerClassementTaux() {
+  const liste = employesTauxDistribution(distribTauxTous).filter(e => (e.tauxCase || 0) > 0)
+    .sort((a, b) => (b.tauxCase || 0) - (a.tauxCase || 0) || `${a.nom}`.localeCompare(`${b.nom}`, 'fr'));
+  if (!liste.length) { notify('Aucun taux renseigné à imprimer', 'warning'); return; }
+  const rangs = rangsTauxDistribution(liste);
+  const moy = liste.reduce((s, e) => s + e.tauxCase, 0) / liste.length;
+  const lignes = liste.map(e => `<tr><td style="text-align:center;font-weight:700;">${rangs[e.id]}</td><td>${escHtml(e.prenom)} ${escHtml(e.nom)}</td><td style="text-align:right;">${Math.round(e.tauxCase).toLocaleString('fr-FR')}</td></tr>`).join('');
+  const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Classement taux de mise en case</title>
+<style>body{font-family:Arial,sans-serif;margin:30px;color:#222}h1{font-size:20px;margin:0 0 4px}.sub{color:#666;font-size:12px;margin-bottom:16px}table{border-collapse:collapse;width:100%;font-size:14px}th{background:#eee;text-align:left}th,td{border:1px solid #bbb;padding:6px 10px}</style></head>
+<body><h1>Classement — taux de mise en case</h1>
+<div class="sub">Édité le ${new Date().toLocaleDateString('fr-FR')} · ${liste.length} personne${liste.length > 1 ? 's' : ''} · taux moyen ${Math.round(moy).toLocaleString('fr-FR')} ex./h</div>
+<table><tr><th style="width:60px;text-align:center;">Rang</th><th>Employé</th><th style="width:140px;text-align:right;">Taux (ex./h)</th></tr>${lignes}</table>
+<script>window.onload = () => window.print();<\/script></body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { notify('Autorise les pop-ups pour imprimer', 'warning'); return; }
+  w.document.write(html);
+  w.document.close();
+}
+
+function renderDistribution(opts) {
   document.getElementById('distrib-week-label').textContent = formatWeekLabel(distribWeekMonday);
 
   const alerteEl = document.getElementById('distrib-alerte-tache');
@@ -15761,7 +15936,7 @@ function renderDistribution() {
     const manque = r.manqueChaud > 0 || r.manqueFroid > 0;
     const alerteHorsZones = '';
     synth.push(`<tr style="border-top:1px solid var(--border);cursor:pointer;" onclick="ouvrirFicheDistribution('${dk}')">
-      <td style="padding:8px 10px;font-weight:700;white-space:nowrap;">${libelle}${alerteHorsZones}</td>
+      <td style="padding:8px 10px;font-weight:700;white-space:nowrap;">${libelle}${alerteHorsZones}${(db.distribSousTraitants?.[dk] || []).length ? ` <span title="Sous-traitants" style="font-size:12px;">👷${db.distribSousTraitants[dk].length}</span>` : ''}</td>
       ${inputs.replace(/<td /g, '<td onclick="event.stopPropagation()" ')}
       <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:var(--text-muted);">${fmtH(r.heuresChaud)}</td>
       <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${fmtEx(r.capChaud)}</td>
@@ -15771,8 +15946,6 @@ function renderDistribution() {
       <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-weight:700;color:${colEcart(r.ecartFroid)};">${fmtEcart(r.ecartFroid)}</td>
       <td style="padding:8px 10px;text-align:center;">${!aDonnees ? '—' : manque ? '<span class="flag-badge" style="background:rgba(255,77,106,.15);color:var(--danger);">⚠️ Manque</span>' : '<span class="flag-badge" style="background:rgba(46,204,113,.15);color:var(--success);">✅ OK</span>'}</td>
     </tr>`);
-
-    if (!aDonnees) return;
 
     // ---- Fiche détaillée du jour ----
     const blocChaud = `<div style="flex:1;min-width:300px;">
@@ -15806,7 +15979,7 @@ function renderDistribution() {
       e.plages.forEach(p => { const l = fus[fus.length - 1]; if (l && Math.abs(p.a - l.b) < 1) l.b = p.b; else fus.push({ a: p.a, b: p.b }); });
       const plagesTxt = fus.map(p => `${hh(p.a)} → ${hh(p.b)}`).join(' · ');
       return `<tr style="border-top:1px solid var(--border);">
-        <td style="padding:6px 8px;font-weight:600;white-space:nowrap;">${escHtml(e.emp.prenom)} ${escHtml(e.emp.nom)}</td>
+        <td style="padding:6px 8px;font-weight:600;white-space:nowrap;">${e.soustraitant ? '👷 ' : ''}${escHtml(e.emp.prenom)} ${escHtml(e.emp.nom)}${e.soustraitant ? ' <span style="font-size:11px;color:var(--text-dim);">(sous-traitant)</span>' : ''}</td>
         <td style="padding:6px 8px;font-family:var(--mono);font-size:12px;white-space:nowrap;">${plagesTxt}</td>
         <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${fmtEx(e.taux)}${e.taux ? '' : ' <span title="Taux non renseigné (fiche employé)" style="color:var(--warning);">⚠️</span>'}</td>
         <td style="padding:6px 8px;text-align:right;font-family:var(--mono);">${minToHM(Math.round(e.chaudMin))}</td>
@@ -15830,7 +16003,7 @@ function renderDistribution() {
     fiches.push(`<details class="task-card" id="distrib-fiche-${dk}" style="cursor:default;margin-top:10px;" ${ouvert ? 'open' : ''} ontoggle="distribOuverts[this.open ? 'add' : 'delete']('${dk}');distribOuvertsInit=true;">
       <summary style="cursor:pointer;font-weight:800;font-size:15px;">${libelle} — détail du calcul ${manque ? '<span style="color:var(--danger);font-size:12px;margin-left:8px;">⚠️ manque</span>' : '<span style="color:var(--success);font-size:12px;margin-left:8px;">✅</span>'}</summary>
       <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:12px;">${blocChaud}${blocFroid}</div>
-      ${tableEmp}${boutonSol}
+      ${tableEmp}${blocSousTraitantsDistribution(dk, z)}${boutonSol}
     </details>`);
   });
 
@@ -15853,6 +16026,7 @@ function renderDistribution() {
   </div>
   <div class="hint" style="margin-top:10px;">Zone chaud : <b>${hh(z.debut)} → ${hh(z.finChaud)}</b> (la veille au soir jusqu'au matin) — hors de cette zone, seul le froid peut être traité. Capacité = heures de tâche « Distribution » × taux de mise en case de chaque employé. L'<b>excédent chaud</b> (↷) s'ajoute à la capacité froid avant la comparaison avec le froid annoncé. Clique sur une ligne pour ouvrir le détail du jour.</div>
   ${fiches.join('')}`;
+  if (!opts?.sansTaux) renderDistribTaux();
 }
 let distribOuverts = new Set();
 let distribOuvertsInit = false;
