@@ -921,15 +921,15 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
       <!-- ===== VUE DISTRIBUTION ===== -->
       <div class="view" id="view-distribution">
         <div id="distrib-alerte-tache"></div>
+        <div id="distrib-taux-wrap" style="margin-bottom:14px;"></div>
         <div class="week-nav">
           <button class="btn btn-secondary btn-sm" onclick="changeDistribWeek(-1)">◀</button>
           <div class="label" id="distrib-week-label"></div>
           <button class="btn btn-secondary btn-sm" onclick="changeDistribWeek(1)">▶</button>
           <button class="btn btn-secondary btn-sm" onclick="goDistribToday()">Aujourd'hui</button>
         </div>
-        <div class="hint" style="margin:10px 0;">Capacité de mise en case calculée à partir des tâches "Distribution" planifiées (taux de chaque employé × heures), comparée aux volumes annoncés par les messageries. Saisis le volume chaud et froid de chaque jour, puis clique sur une ligne pour voir le détail (c'est aussi là que tu peux ajouter des sous-traitants). Les taux de mise en case se saisissent dans la table en bas de page.</div>
+        <div class="hint" style="margin:10px 0;">Capacité de mise en case calculée à partir des tâches "Distribution" planifiées (taux de chaque employé × heures), comparée aux volumes annoncés par les messageries. Saisis le volume chaud et froid de chaque jour, puis clique sur une ligne pour voir le détail (c'est aussi là que tu peux ajouter des sous-traitants). Les taux de mise en case se saisissent dans la vue déroulante en haut de page.</div>
         <div id="distrib-wrap"></div>
-        <div id="distrib-taux-wrap" style="margin-top:24px;"></div>
       </div>
 
       <!-- ===== VUE COMPÉTENCES ===== -->
@@ -2319,7 +2319,7 @@ table.pg td { border: 1px solid var(--border); padding: 0; vertical-align: top; 
 const DB_KEY = 'planningnova_data';
 // Version de l'appli — format AAAA-MM-JJ-NN, à incrémenter à chaque nouveau déploiement sur
 // GitHub Pages. Sert uniquement à détecter/annoncer les mises à jour, aucun impact sur les données.
-const APP_VERSION = '2.19.0';
+const APP_VERSION = '2.19.1';
 // Panier mensualisé (règle 4) : un taux HEBDOMADAIRE (5/semaine) lissé sur l'année puis divisé par
 // 12 — jamais "5 × nombre de semaines calendaires du mois affiché" (qui varie entre 4 et 5 selon
 // les mois et fausserait le total). 5 × 52 semaines ÷ 12 mois ≈ 21,67/mois, arrondi à 2 décimales.
@@ -2350,6 +2350,10 @@ function compareVersions(a, b) {
 // Historique des mises à jour — mis à jour à chaque nouvelle version livrée, un item par version
 // (la plus récente en premier). Affiché dans Paramètres > Nouveautés.
 const CHANGELOG = [
+  { v: '2.19.1', items: [
+    'Distribution : la table des taux de mise en case passe en haut de la page, dans une vue déroulante (masquée par défaut, s\'ouvre au clic).',
+    'Assistant de planification : aperçu visuel du planning avant validation — pour chaque personne touchée, ligne « Avant » et ligne « Après » aux couleurs du planning, tâches modifiées entourées en orange, zone chaud et pauses visibles.',
+  ] },
   { v: '2.19.0', items: [
     'Distribution : sous-traitants — dans le détail de chaque jour, ajoute les personnes extérieures (prénom, nom, taux en ex./h, heure de début et de fin). Leurs exemplaires sont comptés en chaud ou en froid selon leurs horaires, donc l\'assistant de planification n\'est plus faussé.',
     'Distribution : table des taux de mise en case en bas de la page (saisie rapide sans passer par la fiche employé, Entrée pour passer au suivant) avec classement et impression du classement du plus productif au moins productif.',
@@ -15780,7 +15784,7 @@ function blocSousTraitantsDistribution(dk, z) {
       <tr style="background:var(--surface2);font-size:12px;"><th style="${th}">Personne</th><th style="${th}">Horaires</th><th style="${th}text-align:right;">Taux (ex./h)</th><th style="${th}text-align:right;">H chaud</th><th style="${th}text-align:right;">H froid</th><th style="${th}text-align:right;">Exemplaires</th><th></th></tr>${lignes}</table></div>` : '<div class="hint" style="margin-top:4px;">Aucun sous-traitant ce jour-là.</div>'}
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
       ${champ('prenom', 'Prénom', 'text', 110)}${champ('nom', 'Nom', 'text', 110)}${champ('taux', 'Taux ex./h', 'number', 100)}
-      <label style="font-size:12px;">de ${champ('debut', '', 'time', 90)}</label><label style="font-size:12px;">à ${champ('fin', '', 'time', 90)}</label>
+      <span style="font-size:12px;">de ${champ('debut', '', 'time', 90)}</span><span style="font-size:12px;">à ${champ('fin', '', 'time', 90)}</span>
       <button class="btn btn-primary btn-sm" onclick="ajouterSousTraitantDistribution('${dk}')">➕ Ajouter</button></div></div>`;
 }
 function ajouterSousTraitantDistribution(dk) {
@@ -15814,6 +15818,7 @@ function supprimerSousTraitantDistribution(dk, id) {
 // TABLE DES TAUX DE MISE EN CASE (saisie rapide + classement imprimable)
 // ---------------------------------------------------------------------------------------------
 let distribTauxTous = false;
+let distribTauxOuvert = false;
 let distribTauxTriRang = false;
 function employesTauxDistribution(tous) {
   const ids = new Set(getTachesDistribution().map(t => t.id));
@@ -15839,16 +15844,16 @@ function renderDistribTaux() {
       <td data-rang="${e.id}" style="padding:5px 10px;text-align:center;font-family:var(--mono);font-weight:800;">${rangs[e.id] ? rangs[e.id] : '—'}</td>
       <td style="padding:5px 10px;font-weight:600;">${escHtml(e.prenom)} ${escHtml(e.nom)}${(e.competences || []).some(id => ids.has(id)) ? '' : ' <span style="font-size:11px;color:var(--text-dim);">(sans compétence Distribution)</span>'}</td>
       <td style="padding:5px 10px;text-align:right;"><input type="number" min="0" step="10" value="${e.tauxCase ?? ''}" data-emp="${e.id}" class="distrib-taux-input" style="width:100px;text-align:right;box-sizing:border-box;" onchange="saveTauxCaseDistribution(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();toucheEntreeTaux(this);}"></td></tr>`).join('');
-  el.innerHTML = `<div class="task-card" style="cursor:default;">
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <div style="font-weight:800;font-size:15px;">⚡ Taux de mise en case (exemplaires / heure)</div>
-      <label style="font-size:12px;margin-left:auto;"><input type="checkbox" ${distribTauxTous ? 'checked' : ''} onchange="distribTauxTous=this.checked;renderDistribTaux();"> Afficher aussi les employés sans compétence Distribution</label>
-      <label style="font-size:12px;"><input type="checkbox" ${distribTauxTriRang ? 'checked' : ''} onchange="distribTauxTriRang=this.checked;renderDistribTaux();"> Trier par classement</label>
+  el.innerHTML = `<details class="task-card" style="cursor:default;" ${distribTauxOuvert ? 'open' : ''} ontoggle="distribTauxOuvert=this.open;">
+    <summary style="cursor:pointer;font-weight:800;font-size:15px;">⚡ Taux de mise en case (exemplaires / heure) <span style="font-weight:500;color:var(--text-dim);font-size:12px;">— cliquer pour afficher / masquer</span></summary>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;">
+      <label class="checkbox-row" style="margin-left:auto;"><input type="checkbox" ${distribTauxTous ? 'checked' : ''} onchange="distribTauxTous=this.checked;renderDistribTaux();"><span>Afficher aussi les employés sans compétence Distribution</span></label>
+      <label class="checkbox-row"><input type="checkbox" ${distribTauxTriRang ? 'checked' : ''} onchange="distribTauxTriRang=this.checked;renderDistribTaux();"><span>Trier par classement</span></label>
       <button class="btn btn-secondary btn-sm" onclick="imprimerClassementTaux()">🖨️ Imprimer le classement</button></div>
     <div class="hint" style="margin:6px 0;">Saisie directe (valeur enregistrée dès que tu valides avec Entrée ou Tab) — identique au champ de la fiche employé. Le classement va du taux le plus élevé au plus faible.</div>
     <div style="overflow-x:auto;"><table style="border-collapse:collapse;font-size:13px;min-width:420px;">
       <tr style="background:var(--surface2);font-size:12px;"><th style="padding:5px 10px;">Rang</th><th style="padding:5px 10px;text-align:left;">Employé</th><th style="padding:5px 10px;text-align:right;">Taux ex./h</th></tr>
-      ${lignes || '<tr><td colspan="3" class="hint" style="padding:10px;">Aucun employé.</td></tr>'}</table></div></div>`;
+      ${lignes || '<tr><td colspan="3" class="hint" style="padding:10px;">Aucun employé.</td></tr>'}</table></div></details>`;
 }
 function saveTauxCaseDistribution(input) {
   const e = db.employes.find(x => x.id === input.dataset.emp);
@@ -16356,6 +16361,57 @@ function asstReset() { asst.sel = {}; rendreAssistant(); }
 function asstOnglet(aj) { asst.ongletAj = aj; rendreAssistant(); }
 function asstZone(z) { asst.zone = z; rendreAssistant(); }
 
+// Aperçu visuel avant → après des plannings touchés (mêmes couleurs que le planning).
+function apercuPlanningAssistant(sels, Psim, z, d, idsDist) {
+  const ids = [...new Set(sels.map(s => s.empId))];
+  if (!ids.length) return '';
+  const jeu = ids.map(id => ({
+    id, emp: db.employes.find(e => e.id === id),
+    av: tachesAbsEmploye(db.planning, id, d, idsDist).filter(t => !t.conge),
+    ap: tachesAbsEmploye(Psim, id, d, idsDist).filter(t => !t.conge),
+  }));
+  const LO = z.debut - 360, HI = z.fin + 360;
+  let lo = Infinity, hi = -Infinity;
+  jeu.forEach(j => [...j.av, ...j.ap].forEach(t => {
+    if (t.b <= LO || t.a >= HI) return;
+    lo = Math.min(lo, Math.max(t.a, LO)); hi = Math.max(hi, Math.min(t.b, HI));
+  }));
+  if (!isFinite(lo)) { lo = z.debut; hi = z.debut + 600; }
+  lo = Math.floor((lo - 30) / 60) * 60; hi = Math.ceil((hi + 30) / 60) * 60;
+  const span = hi - lo, pct = v => (v - lo) / span * 100;
+  const pas = span > 720 ? 120 : 60;
+  const ticks = [];
+  for (let t = Math.ceil(lo / pas) * pas; t <= hi; t += pas) ticks.push(t);
+  const bandeChaud = (() => {
+    const a = Math.max(lo, z.debut), b = Math.min(hi, z.finChaud);
+    return b > a ? `<div title="Zone chaud" style="position:absolute;left:${pct(a)}%;width:${pct(b) - pct(a)}%;top:0;bottom:0;background:rgba(243,156,18,.13);"></div>` : '';
+  })();
+  const barre = (taches, autres, marquer) => {
+    const cle = new Set(autres.map(t => t.inst.id + '|' + t.a + '|' + t.b));
+    const blocs = taches.filter(t => t.b > lo && t.a < hi).map(t => {
+      const a = Math.max(t.a, lo), b = Math.min(t.b, hi);
+      const task = db.tasks.find(x => x.id === t.inst.taskId);
+      const chg = marquer && !cle.has(t.inst.id + '|' + t.a + '|' + t.b);
+      let pause = '';
+      if (t.inst.pauseDuree > 0) {
+        const pa = t.off + t.inst.debut + (t.inst.pauseDebut || 0);
+        pause = `<div title="Pause ${t.inst.pauseDuree} min" style="position:absolute;left:${pct(pa)}%;width:${pct(pa + t.inst.pauseDuree) - pct(pa)}%;top:2px;bottom:2px;background:repeating-linear-gradient(45deg,rgba(255,255,255,.55) 0 3px,rgba(0,0,0,.45) 3px 6px);"></div>`;
+      }
+      return `<div title="${escHtml(t.nom)} ${hhAbs(t.a)} → ${hhAbs(t.b)}${chg ? ' (modifié)' : ''}" style="position:absolute;left:${pct(a)}%;width:${pct(b) - pct(a)}%;top:2px;bottom:2px;background:${task?.color || '#667'};color:${getTextColor(task)};border-radius:5px;font-size:10px;line-height:24px;padding:0 4px;overflow:hidden;white-space:nowrap;box-sizing:border-box;${chg ? 'outline:2px solid var(--warning);outline-offset:1px;z-index:2;font-weight:800;' : ''}">${escHtml(t.nom)} ${hhAbs(t.a)}–${hhAbs(t.b)}</div>${pause}`;
+    }).join('');
+    return `<div style="position:relative;height:30px;background:var(--surface2);border-radius:6px;overflow:visible;">${bandeChaud}${blocs}</div>`;
+  };
+  const axe = `<div style="position:relative;height:16px;margin-left:66px;">${ticks.map(t => `<span style="position:absolute;left:${pct(t)}%;transform:translateX(-50%);font-size:10px;color:var(--text-dim);font-family:var(--mono);">${hhAbs(t)}</span>`).join('')}</div>`;
+  const lignes = jeu.map(j => `<div style="margin-top:10px;">
+      <div style="font-weight:700;font-size:13px;margin-bottom:3px;">${escHtml(j.emp.prenom)} ${escHtml(j.emp.nom)}</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;"><span style="width:60px;font-size:11px;color:var(--text-dim);">Avant</span><div style="flex:1;">${barre(j.av, j.ap, false)}</div></div>
+      <div style="display:flex;align-items:center;gap:6px;"><span style="width:60px;font-size:11px;font-weight:700;">Après</span><div style="flex:1;">${barre(j.ap, j.av, true)}</div></div></div>`).join('');
+  return `<div style="margin-top:16px;">
+    <div style="font-weight:800;">👁 Aperçu du planning (avant → après)</div>
+    <div class="hint" style="margin:2px 0 4px;">Couleurs du planning · <span style="outline:2px solid var(--warning);padding:0 4px;border-radius:3px;">contour orange</span> = tâche ajoutée ou modifiée · fond orangé = zone chaud · hachuré = pause.</div>
+    ${axe}${lignes}</div>`;
+}
+
 function rendreAssistant() {
   const cont = document.getElementById('distrib-sol-content');
   if (!cont || !asst) return;
@@ -16458,6 +16514,7 @@ function rendreAssistant() {
 
   // ---- Récapitulatif des ajustements retenus ----
   if (sels.length) {
+    html += apercuPlanningAssistant(sels, Psim, z, d, idsDist);
     const lib = s => {
       const emp = db.employes.find(e => e.id === s.empId); const nom = `${emp.prenom} ${emp.nom}`;
       if (s.type === 'libre') return `${nom} : +${minToHM(s.min)} de distribution en heures sup. (${hhAbs(s.startAbs)} → ${hhAbs(s.startAbs + s.min)})`;
